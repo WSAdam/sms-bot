@@ -1,21 +1,38 @@
-// Wrapper around the npm:postmark ServerClient. Lazy-instantiated.
+// Wrapper around the npm:postmark ServerClient. Both the import and the
+// instantiation are deferred so postmark's CJS-internals never load until a
+// route actually calls sendReport(). Without this, Vite's SSR bundle pulls
+// postmark eagerly and Deno Deploy 500s every API route with
+// "module is not defined".
+//
 // Tests should mock this module entirely (do not call real Postmark).
 
-import { ServerClient } from "postmark";
 import {
   POSTMARK_DEFAULT_TO,
   POSTMARK_FROM_ADDRESS,
 } from "@shared/config/constants.ts";
 import { loadEnv } from "@shared/config/env.ts";
 
-let client: ServerClient | null = null;
+// See shared/firestore/client.ts for the full why — short version: building
+// the import call via `new Function` keeps Vite from inlining postmark's CJS
+// into the SSR bundle, which would otherwise 500 every API route on Deno
+// Deploy with "module is not defined".
+// deno-lint-ignore no-explicit-any
+const dynamicImport: (specifier: string) => Promise<any> = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<unknown> as (specifier: string) => Promise<unknown>;
 
-function getPostmarkClient(): ServerClient {
+// deno-lint-ignore no-explicit-any
+let client: any = null;
+
+// deno-lint-ignore no-explicit-any
+async function getPostmarkClient(): Promise<any> {
   if (client) return client;
   const env = loadEnv();
   if (!env.postmarkServer) {
     throw new Error("Missing POSTMARK_SERVER — required for nightly report.");
   }
+  const { ServerClient } = await dynamicImport("postmark");
   client = new ServerClient(env.postmarkServer);
   return client;
 }
@@ -33,7 +50,8 @@ export interface SendReportParams {
 }
 
 export async function sendReport(p: SendReportParams): Promise<void> {
-  await getPostmarkClient().sendEmail({
+  const c = await getPostmarkClient();
+  await c.sendEmail({
     From: POSTMARK_FROM_ADDRESS,
     To: p.to ?? POSTMARK_DEFAULT_TO,
     Subject: p.subject,
@@ -43,6 +61,7 @@ export async function sendReport(p: SendReportParams): Promise<void> {
   });
 }
 
-export function setPostmarkClientForTests(c: ServerClient | null): void {
+// deno-lint-ignore no-explicit-any
+export function setPostmarkClientForTests(c: any): void {
   client = c;
 }
