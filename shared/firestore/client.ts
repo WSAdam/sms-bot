@@ -66,6 +66,12 @@ export async function getDb(): Promise<any> {
   const adminApp = await ensureApp();
   const adminFs = await dynamicImport("firebase-admin/firestore");
   db = adminFs.getFirestore(adminApp);
+  // Force REST transport. Deno Deploy doesn't reliably support the long-lived
+  // HTTP/2 gRPC streams the Firestore SDK uses by default — without this every
+  // call 500s after ~50s with "14 UNAVAILABLE: No connection established".
+  // Must be called before any other Firestore op; we cache `db` so this
+  // only runs once.
+  db.settings({ preferRest: true });
   return db;
 }
 
