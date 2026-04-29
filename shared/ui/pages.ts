@@ -2655,6 +2655,7 @@ loadReview();
 </body>
 </html>`;
 
+
 export const testPageHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2704,7 +2705,9 @@ ${sharedThemeCss}
 .endpoint-card code.path{color:var(--accentHi);font-family:ui-monospace,monospace;font-size:.82rem;display:block;margin-bottom:10px;word-break:break-all}
 .endpoint-card .params{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .endpoint-card .params label{font-size:.78rem;color:var(--muted)}
-.endpoint-card .params input,.endpoint-card .params select{padding:8px 10px;font-size:.9rem}
+.endpoint-card .params input,.endpoint-card .params select,.endpoint-card .params textarea{padding:8px 10px;font-size:.9rem}
+.endpoint-card .params textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:rgba(11,18,16,.75);color:var(--text);border:1px solid rgba(42,59,54,.95);border-radius:10px;resize:vertical;min-height:64px}
+.endpoint-card .params input.phone-input{background:rgba(11,18,16,.6)}
 .endpoint-card .actions{display:flex;gap:8px;align-items:center}
 .endpoint-card .actions button{height:36px;padding:0 18px;font-size:.9rem}
 .endpoint-card .actions .status{font-family:ui-monospace,monospace;font-size:.85rem}
@@ -2738,15 +2741,15 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
   <div class="sticky-bar">
     <div class="row">
       <div class="filter-group">
-        <label>📱 Phone (any format — normalized to 10 digits)</label>
-        <input type="text" id="testPhone" placeholder="(555) 123-4567 or 5551234567" />
+        <label>📱 Set ALL phone fields below (any format — normalized to 10 digits)</label>
+        <input type="text" id="globalPhone" placeholder="8432222986" />
       </div>
       <button class="secondary" onclick="clearAllResponses()" title="Clear all response panels">Clear all</button>
     </div>
   </div>
 
   <h1 style="margin-top:0">🧪 Endpoint Test Console</h1>
-  <p class="subtitle">Fire any endpoint with one click. Responses render inline.</p>
+  <p class="subtitle">Each card has its own phone field — type once at the top to set them all, or override per card.</p>
 
   <div class="nav-links">
     <a href="/dashboard">Dashboard</a>
@@ -2784,23 +2787,51 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
       <div class="endpoint-card" data-id="trigger-manual">
         <div class="ep-head">
           <div>
-            <div class="ep-title">Manual trigger (override=true)</div>
-            <div class="ep-desc">Bypasses every gatekeeper. Sends one Bland SMS.</div>
+            <div class="ep-title">Manual trigger</div>
+            <div class="ep-desc">Sends one Bland SMS via the configured pathway. Check "override" to bypass every gatekeeper (and use a stub guest if Quickbase isn't wired).</div>
           </div>
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/trigger/manual</code>
         <div class="params">
-          <label>resID (any number — passes through to Bland)</label>
-          <input type="text" data-param="resID" value="123456" />
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+          <label>resID (passes through to the Bland pathway)</label>
+          <input type="text" data-param="resID" placeholder="282383" />
           <label>domain</label>
           <select data-param="domain">
             <option>monsterrg</option><option>monsterodr</option><option>monsteract</option>
             <option>monsterods</option><option>monsterds</option>
           </select>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" data-param="override" />
+            <span>override=true (bypass attempts, DNC, rate limit, opt-out, CRM)</span>
+          </label>
         </div>
         <div class="actions">
-          <button onclick="runTriggerManual(this)">Send SMS</button>
+          <button onclick="runTriggerManual(this)">Send pathway SMS</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="custom-sms">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Custom SMS (you write the body) <span class="tag">NEW</span></div>
+            <div class="ep-desc">Bypasses the pathway entirely. Sends exactly the text you type via Bland's /v1/sms/send.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/trigger/test-sms</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+          <label>message text</label>
+          <textarea data-param="message" rows="3" placeholder="Hey from sms-bot test console! 🧪">Hey from sms-bot test console! 🧪</textarea>
+        </div>
+        <div class="actions">
+          <button onclick="runCustomSms(this)">Send custom SMS</button>
           <span class="status muted"></span>
         </div>
         <div class="resp"><pre></pre></div>
@@ -2810,21 +2841,27 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="ep-head">
           <div>
             <div class="ep-title">ReadyMode webhook</div>
-            <div class="ep-desc">Full gatekeeper path. Won't send unless attempts ≥ 40 and DNC clear.</div>
+            <div class="ep-desc">Full gatekeeper path. Won't send unless attempts ≥ 40 and DNC clear. Check "override" to bypass.</div>
           </div>
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/trigger/readymode</code>
         <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
           <label>attempts</label>
           <input type="number" data-param="attempts" value="45" />
           <label>resID</label>
-          <input type="text" data-param="resID" value="123456" />
+          <input type="text" data-param="resID" placeholder="282383" />
           <label>domain</label>
           <select data-param="domain">
             <option>monsterrg</option><option>monsterodr</option><option>monsteract</option>
             <option>monsterods</option><option>monsterds</option>
           </select>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" data-param="override" />
+            <span>override=true (bypass all gatekeepers)</span>
+          </label>
         </div>
         <div class="actions">
           <button onclick="runTriggerReadymode(this)">Send</button>
@@ -2851,6 +2888,8 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         </div>
         <code class="path">/sms-callback/appointment-booked</code>
         <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
           <label>event_time (ISO)</label>
           <input type="datetime-local" data-param="event_time" />
         </div>
@@ -2870,6 +2909,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-GET">GET</span>
         </div>
         <code class="path">/api/cron/trigger-single?phone=…</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runCronTriggerSingle(this)">Fire</button>
           <span class="status muted"></span>
@@ -2887,6 +2930,8 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         </div>
         <code class="path">/api/injection/schedule</code>
         <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
           <label>eventTime</label>
           <input type="datetime-local" data-param="eventTime" />
           <label>isTest</label>
@@ -2917,6 +2962,8 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         </div>
         <code class="path">/sms-callback/disposition</code>
         <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
           <label>disposition</label>
           <select data-param="disposition">
             <option>Not Interested</option><option>No Answer</option>
@@ -2941,6 +2988,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/sms-callback/bland/talk-now</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runTalkNow(this)">Fire</button>
           <span class="status muted"></span>
@@ -2957,6 +3008,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/sms-callback/return-to-source</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runReturnToSource(this)">Fire</button>
           <span class="status muted"></span>
@@ -2980,6 +3035,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/sms-callback/stop</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runStop(this)">Send STOP</button>
           <span class="status muted"></span>
@@ -3003,6 +3062,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-GET">GET</span>
         </div>
         <code class="path">/api/conversations/search2?phone=…</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runConvoSearch(this)">Fetch</button>
           <span class="status muted"></span>
@@ -3019,6 +3082,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-GET">GET</span>
         </div>
         <code class="path">/sms-flow/orchestrator/pointer/{phone}</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runPointer(this)">Fetch</button>
           <span class="status muted"></span>
@@ -3035,6 +3102,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-GET">GET</span>
         </div>
         <code class="path">/sms-flow/orchestrator/events/{phone}</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runEvents(this)">Fetch</button>
           <span class="status muted"></span>
@@ -3046,7 +3117,7 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="ep-head">
           <div>
             <div class="ep-title">Config state</div>
-            <div class="ep-desc">sms-bot/config/settings/state doc.</div>
+            <div class="ep-desc">sms-bot/config/settings/state doc. (no phone)</div>
           </div>
           <span class="ep-method method-GET">GET</span>
         </div>
@@ -3075,6 +3146,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/api/guests/answered</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runAnswered(this)">Mark answered</button>
           <span class="status muted"></span>
@@ -3091,6 +3166,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/api/sales/record</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runSalesRecord(this)">Match</button>
           <span class="status muted"></span>
@@ -3204,6 +3283,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-DELETE">DELETE</span>
         </div>
         <code class="path">/sms-callback/cleanup</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runCleanup(this)">Wipe everything</button>
           <span class="status muted"></span>
@@ -3220,6 +3303,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-DELETE">DELETE</span>
         </div>
         <code class="path">/sms-callback/conversation-history</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runDeleteHistory(this)">Delete</button>
           <span class="status muted"></span>
@@ -3236,6 +3323,10 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <span class="ep-method method-DELETE">DELETE</span>
         </div>
         <code class="path">/api/injection/cancel?phone=…</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+        </div>
         <div class="actions">
           <button onclick="runCancelInjection(this)">Cancel</button>
           <span class="status muted"></span>
@@ -3257,15 +3348,21 @@ function normPhone(raw){
   if(d.length === 11 && d.startsWith("1")) return d.slice(1);
   return null;
 }
-function getPhone(){
-  const raw = document.getElementById("testPhone").value;
+// Read phone from a card's own input. Falls back to the global phone if the
+// card field is blank. Alerts on invalid input.
+function getCardPhone(card){
+  const cardInput = card.querySelector('[data-param="phone"]');
+  const raw = (cardInput && cardInput.value) || document.getElementById("globalPhone").value;
   const p = normPhone(raw);
-  if(!p){ alert("Enter a valid 10-digit phone in the top bar first."); return null; }
+  if(!p){ alert("Enter a valid 10-digit phone in this card or in the top bar."); return null; }
   return p;
 }
 function param(card, name){
   const el = card.querySelector('[data-param="'+name+'"]');
-  return el ? el.value : null;
+  if(!el) return null;
+  let v = el.value;
+  if(!v && el.placeholder) v = el.placeholder; // fall back to placeholder so resID etc. default
+  return v;
 }
 function showResp(card, status, ms, body){
   const resp = card.querySelector(".resp");
@@ -3326,19 +3423,36 @@ function clearAllResponses(){
   });
 }
 
-// Token persistence
+// ===================== Persistence =====================
 const TOKEN_KEYS = ["cronInternalToken", "cronSharedSecret", "smsCountToken"];
 TOKEN_KEYS.forEach(k => {
   const el = document.getElementById(k);
   el.value = localStorage.getItem("test." + k) || "";
   el.addEventListener("input", () => localStorage.setItem("test." + k, el.value));
 });
-// Phone persistence
-const phoneEl = document.getElementById("testPhone");
-phoneEl.value = localStorage.getItem("test.phone") || "";
-phoneEl.addEventListener("input", () => localStorage.setItem("test.phone", phoneEl.value));
-
 function getToken(k){ return document.getElementById(k).value; }
+
+// Global "fill all" phone input. Typing here populates every card's phone.
+const globalPhoneEl = document.getElementById("globalPhone");
+globalPhoneEl.value = localStorage.getItem("test.globalPhone") || "";
+globalPhoneEl.addEventListener("input", () => {
+  localStorage.setItem("test.globalPhone", globalPhoneEl.value);
+  document.querySelectorAll('.endpoint-card [data-param="phone"]').forEach(el => {
+    el.value = globalPhoneEl.value;
+    const cardId = el.closest(".endpoint-card").dataset.id;
+    localStorage.setItem("test.phone." + cardId, globalPhoneEl.value);
+  });
+});
+
+// Per-card phone persistence: hydrate from localStorage (or global), write on edit.
+document.querySelectorAll('.endpoint-card [data-param="phone"]').forEach(el => {
+  const cardId = el.closest(".endpoint-card").dataset.id;
+  el.value = localStorage.getItem("test.phone." + cardId) ||
+             localStorage.getItem("test.globalPhone") || "";
+  el.addEventListener("input", () => {
+    localStorage.setItem("test.phone." + cardId, el.value);
+  });
+});
 
 // Default datetime-local values to "now + 2 minutes" so scheduling works out of the box
 function defaultDateTimeLocal(plusMinutes){
@@ -3352,31 +3466,67 @@ document.querySelectorAll('input[type="datetime-local"]').forEach(el => {
 });
 
 // ===================== Section 1: Trigger =====================
+function getCheckbox(card, name){
+  const el = card.querySelector('[data-param="'+name+'"]');
+  return !!(el && el.checked);
+}
 async function runTriggerManual(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
-  if(!confirm("This will SEND A REAL SMS to " + phone + " via Bland. Continue?")) return;
+  const phone = getCardPhone(card); if(!phone) return;
+  const override = getCheckbox(card, "override");
+  const msg = override
+    ? "OVERRIDE=true: this BYPASSES every gatekeeper and uses a stub guest if Quickbase isn't wired. Real SMS to " + phone + ". Continue?"
+    : "This goes through the normal gatekeepers (CRM lookup required). Real SMS to " + phone + " if all gates pass. Continue?";
+  if(!confirm(msg)) return;
   await runRequest(card, {
     method: "POST", url: "/trigger/manual",
     headers: { "content-type": "application/json" },
-    body: { phone, resID: param(card,"resID"), domain: param(card,"domain"), attempts: 99 },
+    body: {
+      phone,
+      resID: param(card,"resID"),
+      domain: param(card,"domain"),
+      attempts: 99,
+      override,
+    },
+  });
+}
+async function runCustomSms(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getCardPhone(card); if(!phone) return;
+  const message = param(card, "message");
+  if(!message || !message.trim()){ alert("Type a message body first."); return; }
+  if(!confirm("Send this exact text to " + phone + "?\\n\\n" + message)) return;
+  await runRequest(card, {
+    method: "POST", url: "/trigger/test-sms",
+    headers: { "content-type": "application/json" },
+    body: { phone, message },
   });
 }
 async function runTriggerReadymode(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
-  if(!confirm("This will go through the FULL gatekeeper path. If attempts ≥ 40 and DNC is clear, a real SMS will fire. Continue?")) return;
+  const phone = getCardPhone(card); if(!phone) return;
+  const override = getCheckbox(card, "override");
+  const msg = override
+    ? "OVERRIDE=true: bypasses every gatekeeper. Real SMS to " + phone + ". Continue?"
+    : "FULL gatekeeper path: needs attempts ≥ 40, DNC clear, CRM lookup. Real SMS to " + phone + " if all gates pass. Continue?";
+  if(!confirm(msg)) return;
   await runRequest(card, {
     method: "POST", url: "/trigger/readymode",
     headers: { "content-type": "application/json" },
-    body: { phone, resID: param(card,"resID"), domain: param(card,"domain"), attempts: Number(param(card,"attempts")) },
+    body: {
+      phone,
+      resID: param(card,"resID"),
+      domain: param(card,"domain"),
+      attempts: Number(param(card,"attempts")),
+      override,
+    },
   });
 }
 
 // ===================== Section 2: Appointment =====================
 async function runApptBooked(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   const local = param(card, "event_time");
   const event_time = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
   await runRequest(card, {
@@ -3387,12 +3537,12 @@ async function runApptBooked(btn){
 }
 async function runCronTriggerSingle(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, { method: "GET", url: "/api/cron/trigger-single?phone=" + encodeURIComponent(phone) });
 }
 async function runInjectionSchedule(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   const local = param(card, "eventTime");
   const eventTime = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
   await runRequest(card, {
@@ -3405,7 +3555,7 @@ async function runInjectionSchedule(btn){
 // ===================== Section 3: Disposition / Hot-path =====================
 async function runDispo(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, {
     method: "POST", url: "/sms-callback/disposition",
     headers: { "content-type": "application/json" },
@@ -3414,7 +3564,7 @@ async function runDispo(btn){
 }
 async function runTalkNow(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   if(!confirm("This will inject " + phone + " into ODR Appointments NOW. Continue?")) return;
   await runRequest(card, {
     method: "POST", url: "/sms-callback/bland/talk-now",
@@ -3424,7 +3574,7 @@ async function runTalkNow(btn){
 }
 async function runReturnToSource(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, {
     method: "POST", url: "/sms-callback/return-to-source",
     headers: { "content-type": "application/json" },
@@ -3435,7 +3585,7 @@ async function runReturnToSource(btn){
 // ===================== Section 4: STOP =====================
 async function runStop(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   if(!confirm("This will mark " + phone + " as DNC across all 5 ReadyMode domains. Continue?")) return;
   await runRequest(card, {
     method: "POST", url: "/sms-callback/stop",
@@ -3447,17 +3597,17 @@ async function runStop(btn){
 // ===================== Section 5: Inspect =====================
 async function runConvoSearch(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, { method: "GET", url: "/api/conversations/search2?phone=" + encodeURIComponent(phone) });
 }
 async function runPointer(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, { method: "GET", url: "/sms-flow/orchestrator/pointer/" + encodeURIComponent(phone) });
 }
 async function runEvents(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, { method: "GET", url: "/sms-flow/orchestrator/events/" + encodeURIComponent(phone) });
 }
 async function runState(btn){
@@ -3468,7 +3618,7 @@ async function runState(btn){
 // ===================== Section 6: Misc =====================
 async function runAnswered(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, {
     method: "POST", url: "/api/guests/answered",
     headers: { "content-type": "application/json" },
@@ -3477,7 +3627,7 @@ async function runAnswered(btn){
 }
 async function runSalesRecord(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, {
     method: "POST", url: "/api/sales/record",
     headers: { "content-type": "application/json" },
@@ -3522,7 +3672,7 @@ async function runSmsCount(btn){
 // ===================== Section 8: Cleanup =====================
 async function runCleanup(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   if(!confirm("⚠️ IRREVERSIBLE: this will delete EVERY Firestore record for " + phone + " and scrub ODR. Continue?")) return;
   await runRequest(card, {
     method: "DELETE", url: "/sms-callback/cleanup",
@@ -3532,7 +3682,7 @@ async function runCleanup(btn){
 }
 async function runDeleteHistory(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   if(!confirm("Delete ALL conversation history for " + phone + "?")) return;
   await runRequest(card, {
     method: "DELETE", url: "/sms-callback/conversation-history",
@@ -3542,7 +3692,7 @@ async function runDeleteHistory(btn){
 }
 async function runCancelInjection(btn){
   const card = btn.closest(".endpoint-card");
-  const phone = getPhone(); if(!phone) return;
+  const phone = getCardPhone(card); if(!phone) return;
   await runRequest(card, {
     method: "DELETE", url: "/api/injection/cancel?phone=" + encodeURIComponent(phone),
   });

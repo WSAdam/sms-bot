@@ -137,13 +137,33 @@ export async function processInboundLead(
     }
   }
 
-  // CRM enrichment
-  const guest = await findGuestByResId(Number(resIdString));
+  // CRM enrichment. Real Quickbase lookup populates name/email/DNC. With the
+  // stub client (or any time CRM returns nothing) we either skip the lead OR,
+  // if override=true, fall through with a placeholder guest so the QA test
+  // path can exercise the full Bland flow without Quickbase being wired up.
+  let guest = await findGuestByResId(Number(resIdString));
   if (!guest) {
-    console.warn(`[trigger] guest not found for ResID ${resIdString} — skipping`);
-    return { status: "skipped", reason: "Guest Not Found" };
+    if (!isOverride) {
+      console.warn(`[trigger] guest not found for ResID ${resIdString} — skipping`);
+      return { status: "skipped", reason: "Guest Not Found" };
+    }
+    console.warn(
+      `[trigger] guest not found for ResID ${resIdString} — using stub (override=true)`,
+    );
+    guest = {
+      ReservationId: Number(resIdString) || 0,
+      GuestFullName: "Test Guest",
+      SpouseFullName: "",
+      SpouseName: "",
+      AskTcpaVerbiage: "",
+      EmailAddress: "test@example.com",
+      Dnc: false,
+      MostRecentPackageIdDateOfBooking: "",
+      MostRecentPackageIdCreditCardType: "",
+      MostRecentPackageIdLast4OfCreditCardOnly: "",
+    };
   }
-  if (guest.Dnc) {
+  if (guest.Dnc && !isOverride) {
     return { status: "skipped", reason: "DNC" };
   }
 

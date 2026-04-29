@@ -40,6 +40,31 @@ export async function createConversation(
   return await res.json() as CreateConversationResult;
 }
 
+// Plain SMS send — bypasses any pathway, sends `agent_message` verbatim.
+// Used by the /trigger/test-sms QA endpoint so we can preview specific text
+// to a real phone without authoring a Bland pathway.
+// Endpoint: https://api.bland.ai/v1/sms/send
+export interface SendSmsParams {
+  user_number: string;     // E.164 destination
+  agent_number: string;    // E.164 sender (must be a number on your Bland account)
+  agent_message: string;   // raw message text
+  new_conversation?: boolean;
+  request_data?: Record<string, unknown>;
+}
+
+export async function sendSms(
+  params: SendSmsParams,
+): Promise<{ status: number; ok: boolean; json: unknown }> {
+  const url = BLAND_API_BASE.replace(/\/conversations$/, "/send");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...authHeader(), "content-type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  const json = await res.json();
+  return { status: res.status, ok: res.ok, json };
+}
+
 export interface BlandConvoResponse {
   data?: {
     user_number?: string;
