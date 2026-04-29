@@ -67,13 +67,6 @@ export function loadEnv(): AppEnv {
     isDeploy,
   };
 
-  if (cached.quickbaseFailOpen) {
-    console.warn(
-      "⚠️  QUICKBASE_FAIL_OPEN=true — DNC checks will soft-fail. " +
-        "Flip to false before production cutover.",
-    );
-  }
-
   return cached;
 }
 
