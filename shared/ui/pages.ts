@@ -2760,24 +2760,6 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
     <a href="/test">🧪 Test</a>
   </div>
 
-  <details class="auth">
-    <summary>🔐 Auth tokens (saved to localStorage)</summary>
-    <div class="auth-row">
-      <div class="filter-group">
-        <label>X-Cron-Internal-Token (for /api/cron/trigger)</label>
-        <input type="text" id="cronInternalToken" placeholder="paste token..." />
-      </div>
-      <div class="filter-group">
-        <label>X-Cron-Secret (for /api/guests/activate-from-report)</label>
-        <input type="text" id="cronSharedSecret" placeholder="paste secret..." />
-      </div>
-      <div class="filter-group">
-        <label>SMS_COUNT_TOKEN (for /api/sms/count)</label>
-        <input type="text" id="smsCountToken" placeholder="paste token..." />
-      </div>
-    </div>
-  </details>
-
   <!-- ============ 1. TRIGGER INBOUND SMS ============ -->
   <div class="section">
     <h2>🚀 Trigger inbound SMS <span class="tag">REAL BLAND SEND</span></h2>
@@ -3424,14 +3406,6 @@ function clearAllResponses(){
 }
 
 // ===================== Persistence =====================
-const TOKEN_KEYS = ["cronInternalToken", "cronSharedSecret", "smsCountToken"];
-TOKEN_KEYS.forEach(k => {
-  const el = document.getElementById(k);
-  el.value = localStorage.getItem("test." + k) || "";
-  el.addEventListener("input", () => localStorage.setItem("test." + k, el.value));
-});
-function getToken(k){ return document.getElementById(k).value; }
-
 // Global "fill all" phone input. Typing here populates every card's phone.
 const globalPhoneEl = document.getElementById("globalPhone");
 globalPhoneEl.value = localStorage.getItem("test.globalPhone") || "";
@@ -3638,17 +3612,14 @@ async function runSalesRecord(btn){
 // ===================== Section 7: Cron / Batch =====================
 async function runCronSweep(btn){
   const card = btn.closest(".endpoint-card");
-  await runRequest(card, {
-    method: "GET", url: "/api/cron/trigger",
-    headers: { "X-Cron-Internal-Token": getToken("cronInternalToken") },
-  });
+  await runRequest(card, { method: "GET", url: "/api/cron/trigger" });
 }
 async function runActivateFromReport(btn){
   const card = btn.closest(".endpoint-card");
   if(!confirm("This pulls today's bookings from Quickbase and writes saleswithin7d markers. Continue?")) return;
   await runRequest(card, {
     method: "POST", url: "/api/guests/activate-from-report",
-    headers: { "content-type": "application/json", "X-Cron-Secret": getToken("cronSharedSecret") },
+    headers: { "content-type": "application/json" },
     body: {},
   });
 }
@@ -3665,7 +3636,7 @@ async function runSmsCount(btn){
   await runRequest(card, {
     method: "POST", url: "/api/sms/count",
     headers: { "content-type": "application/json" },
-    body: { test: getToken("smsCountToken") },
+    body: {},
   });
 }
 

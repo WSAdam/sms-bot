@@ -1,10 +1,11 @@
-// CRM (reservation) lookup. Currently delegates to the Quickbase stub —
-// returns null on NotImplementedError so callers don't blow up while we wait
-// for the real Quickbase magic-mirror client.
+// CRM (reservation) lookup wrapper. Delegates to the Quickbase client. Wraps
+// the call in a try/catch so a Quickbase outage (auth failure, 5xx after
+// retries, missing token) doesn't crash the inbound trigger — caller treats
+// `null` as "guest not found in CRM" and the override path can fall through
+// with a stub guest (see shared/services/readymode/service.ts).
 
 import {
   getQuickbaseClient,
-  NotImplementedError,
   type ReservationLookup,
 } from "@shared/services/quickbase/client.ts";
 
@@ -14,12 +15,9 @@ export async function findGuestByResId(
   try {
     return await getQuickbaseClient().findReservationByResID(resId);
   } catch (e) {
-    if (e instanceof NotImplementedError) {
-      console.warn(
-        `[crm] Quickbase findReservationByResID stub — returning null for ${resId}.`,
-      );
-      return null;
-    }
-    throw e;
+    console.warn(
+      `[crm] Quickbase lookup failed for ${resId}: ${(e as Error).message}`,
+    );
+    return null;
   }
 }

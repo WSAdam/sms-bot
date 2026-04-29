@@ -1,12 +1,16 @@
-// Quickbase client interface. Real impl lives in two files:
-//   report.ts → calls the public Cloud Function `getReports`
-//   stub.ts   → throws NotImplementedError for everything else
+// Quickbase client interface. Real impls live in:
+//   report.ts        → public Cloud Function `getReports`
+//   reservations.ts  → direct REST API for reservation lookups + DNC
 //
 // Wire-up: the default export from this file is the production client.
-// Tests pass their own implementation directly.
+// Tests pass their own implementation directly via setQuickbaseClientForTests.
 
 import { realGetReport } from "@shared/services/quickbase/report.ts";
-import { stubFindReservation, stubIsDNC, stubMarkDNC } from "@shared/services/quickbase/stub.ts";
+import {
+  findByResId,
+  isDncByPhone,
+  markDncByPhone,
+} from "@shared/services/quickbase/reservations.ts";
 
 export interface QuickbaseField {
   id: number | string;
@@ -55,13 +59,13 @@ class DefaultQuickbaseClient implements QuickbaseClient {
     return realGetReport(tableID, reportID);
   }
   findReservationByResID(resId: number) {
-    return stubFindReservation(resId);
+    return findByResId(resId);
   }
   markDNC(phone: string) {
-    return stubMarkDNC(phone);
+    return markDncByPhone(phone);
   }
   isDNC(phone: string) {
-    return stubIsDNC(phone);
+    return isDncByPhone(phone);
   }
 }
 

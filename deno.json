@@ -2,16 +2,16 @@
   "nodeModulesDir": "manual",
   "tasks": {
     "check": "deno fmt --check . && deno lint . && deno check",
-    "dev": "vite",
-    "start:dev": "vite",
+    "dev": "deno run -A --env-file=env/local npm:vite",
+    "start:dev": "deno run -A --env-file=env/local npm:vite",
     "build": "vite build",
     "start": "deno serve -A _fresh/server.js",
     "update": "deno run -A -r jsr:@fresh/update .",
-    "tunnel": "deno run -A scripts/tunnel.ts",
+    "tunnel": "deno run -A --env-file=env/local scripts/tunnel.ts",
     "test": "deno test -A --parallel tests/unit",
     "test:emulator": "deno test -A --parallel tests/emulator",
     "test:all": "deno task test && deno task test:emulator",
-    "migrate": "deno run -A scripts/migrate-kv-to-firestore.ts",
+    "migrate": "deno run -A --env-file=env/local scripts/migrate-kv-to-firestore.ts",
     "shape-check": "deno run -A scripts/shape-check.ts"
   },
   "lint": {

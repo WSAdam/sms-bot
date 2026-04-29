@@ -59,16 +59,10 @@ export function loadEnv(): AppEnv {
 
     quickbaseReportToken: read("QUICKBASE_REPORT_TOKEN"),
     quickbaseUserToken: read("QUICKBASE_USER_TOKEN"),
-    quickbaseRealm: read("QUICKBASE_REALM"),
     quickbaseFailOpen: parseBool(read("QUICKBASE_FAIL_OPEN"), true),
 
     rmUser: read("RM_USER"),
     rmPass: read("RM_PASS"),
-
-    cronSharedSecret: read("CRON_SHARED_SECRET"),
-    cronInternalToken: read("CRON_INTERNAL_TOKEN"),
-
-    smsCountToken: read("SMS_COUNT_TOKEN"),
 
     isDeploy,
   };

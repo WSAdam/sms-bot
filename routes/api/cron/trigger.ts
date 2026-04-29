@@ -1,20 +1,15 @@
-// Cron sweep entry point. Gated by X-Cron-Internal-Token (matches env var
-// CRON_INTERNAL_TOKEN). Deno Deploy's built-in Deno.cron self-fetches this
-// with the matching header.
+// Manual scheduled-injection sweep. The same sweep runs automatically every
+// minute on Deno Deploy via Deno.cron (see main.ts) — this route is just for
+// manual firing from the Test page or curl.
 //
-// Both GET and POST work — the legacy URL was poked from a browser sometimes.
+// Both GET and POST are accepted because the legacy URL was sometimes poked
+// from a browser tab.
 
 import { define } from "@/utils.ts";
-import { loadEnv } from "@shared/config/env.ts";
 import { sweepScheduledInjections } from "@shared/services/injections/sweep.ts";
 
-async function handle(ctx: { req: Request }) {
-  const env = loadEnv();
-  const token = ctx.req.headers.get("X-Cron-Internal-Token");
-  if (env.cronInternalToken && token !== env.cronInternalToken) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const result = await sweepScheduledInjections("cron");
+async function handle() {
+  const result = await sweepScheduledInjections("manual");
   return Response.json({ success: true, ...result });
 }
 

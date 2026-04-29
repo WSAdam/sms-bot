@@ -18,19 +18,11 @@ export interface AppEnv {
   // Quickbase
   quickbaseReportToken: string | null;
   quickbaseUserToken: string | null;
-  quickbaseRealm: string | null;
   quickbaseFailOpen: boolean;
 
   // ReadyMode (default + per-domain overrides resolved by readymode/auth.ts)
   rmUser: string | null;
   rmPass: string | null;
-
-  // Cron auth
-  cronSharedSecret: string | null;
-  cronInternalToken: string | null;
-
-  // Misc
-  smsCountToken: string | null;
 
   // Runtime
   isDeploy: boolean;
@@ -47,10 +39,6 @@ export type EnvKey =
   | "POSTMARK_SERVER"
   | "QUICKBASE_REPORT_TOKEN"
   | "QUICKBASE_USER_TOKEN"
-  | "QUICKBASE_REALM"
   | "QUICKBASE_FAIL_OPEN"
   | "RM_USER"
-  | "RM_PASS"
-  | "CRON_SHARED_SECRET"
-  | "CRON_INTERNAL_TOKEN"
-  | "SMS_COUNT_TOKEN";
+  | "RM_PASS";
