@@ -55,6 +55,8 @@ export function loadEnv(): AppEnv {
     blandPathwayVersion: read("BLAND_PATHWAY_VERSION") ??
       BLAND_DEFAULT_PATHWAY_VERSION,
 
+    calApiKey: read("CAL_API_KEY"),
+
     postmarkServer: read("POSTMARK_SERVER"),
 
     quickbaseReportToken: read("QUICKBASE_REPORT_TOKEN"),

@@ -222,7 +222,14 @@ export async function processInboundLead(
 
   const env = loadEnv();
   try {
-    const blandResult = await bland.createConversation({
+    console.log(
+      `[trigger] sending Bland SMS to ${blandPhone} via pathway ${env.blandPathwayId}/${env.blandPathwayVersion}`,
+    );
+    // NOTE: do NOT pass agent_message — omitting it tells the Bland pathway
+    // to generate the opener itself. Hits /v1/sms/send (the endpoint that
+    // actually fires the message), not /v1/sms/conversations (which only
+    // initializes state).
+    const blandResult = await bland.sendSms({
       user_number: blandPhone,
       agent_number: BLAND_AGENT_NUMBER,
       pathway_id: env.blandPathwayId,
@@ -250,7 +257,12 @@ export async function processInboundLead(
       },
     });
 
-    const conversationId = blandResult?.data?.conversation_id;
+    const conversationId =
+      (blandResult.json as { data?: { conversation_id?: string } } | null)
+        ?.data?.conversation_id;
+    console.log(
+      `[trigger] Bland response status=200 conversation_id=${conversationId ?? "(none)"}`,
+    );
     if (conversationId) {
       // Fire-and-forget — fetch the agent's first message a few seconds later
       // and store it in conversations so dashboards have something to render.

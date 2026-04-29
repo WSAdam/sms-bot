@@ -12,6 +12,9 @@ export interface AppEnv {
   blandPathwayId: string;
   blandPathwayVersion: string;
 
+  // Cal.com
+  calApiKey: string | null;
+
   // Postmark
   postmarkServer: string | null;
 
@@ -36,6 +39,7 @@ export type EnvKey =
   | "NU_BLAND_API_KEY"
   | "BLAND_SMS_PATHWAY_ID"
   | "BLAND_PATHWAY_VERSION"
+  | "CAL_API_KEY"
   | "POSTMARK_SERVER"
   | "QUICKBASE_REPORT_TOKEN"
   | "QUICKBASE_USER_TOKEN"

@@ -29,6 +29,13 @@ export const QB_RES_FIELD = {
   AskTcpaVerbiage: 685,
 } as const;
 
+// Cal.com
+export const CAL_API_BASE = "https://api.cal.com/v2";
+export const CAL_API_VERSION = "2024-08-13";
+export const CAL_MONSTER_APPOINTMENTS_EVENT_TYPE_ID = 4650992;
+export const CAL_DEFAULT_TIMEZONE = "America/New_York";
+export const CAL_HOLDING_CAMPAIGN_ID = "ODR_APPT_HOLDING";
+
 // Postmark
 export const POSTMARK_FROM_ADDRESS = "notifications@monsterrg.com";
 export const POSTMARK_DEFAULT_TO = "adamp@monsterrg.com";

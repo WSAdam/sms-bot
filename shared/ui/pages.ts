@@ -2926,6 +2926,72 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="cal-available-times">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Generate available times <span class="tag">NEW</span></div>
+            <div class="ep-desc">15-min slots, 9–5 ET, future-only. Pure date math, no Cal.com call.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/cal/available-times</code>
+        <div class="actions">
+          <button onclick="runCalAvailableTimes(this)">Generate</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="cal-schedule">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Book Cal.com appointment <span class="tag">NEW</span></div>
+            <div class="ep-desc">Creates real Cal.com booking + schedules SMS injection + tags appointment in conversation history. Fail-safe: still schedules injection if Cal.com fails.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/cal/schedule</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+          <label>name</label>
+          <input type="text" data-param="name" placeholder="Test Guest" />
+          <label>email</label>
+          <input type="text" data-param="email" placeholder="test@example.com" />
+          <label>startTime</label>
+          <input type="datetime-local" data-param="startTime" />
+          <label>conversationId (optional)</label>
+          <input type="text" data-param="conversationId" placeholder="appt_test_xyz" />
+        </div>
+        <div class="actions">
+          <button onclick="runCalSchedule(this)">Book</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="cal-cancel">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Cancel Cal.com appointment <span class="tag">NEW</span></div>
+            <div class="ep-desc">Cancels SMS injection (always) + Cal.com booking (if bookingUid given). Logs SCRUB event.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/cal/delete-scheduled-injection</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+          <label>bookingUid (optional — paste the uid from Book response)</label>
+          <input type="text" data-param="bookingUid" placeholder="abc123" />
+        </div>
+        <div class="actions">
+          <button onclick="runCalCancel(this)">Cancel</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
     </div>
   </div>
 
@@ -3134,6 +3200,37 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         </div>
         <div class="actions">
           <button onclick="runAnswered(this)">Mark answered</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="store-bland-message">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Store Bland message <span class="tag">NEW</span></div>
+            <div class="ep-desc">Simulates a Bland conversation-message webhook. Writes to conversations/messages + the callId→phone lookup index.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/sms-callback/conversation/{phone}/{callId}</code>
+        <div class="params">
+          <label>phone</label>
+          <input class="phone-input" type="text" data-param="phone" placeholder="8432222986" />
+          <label>callId</label>
+          <input type="text" data-param="callId" placeholder="convo_test_xyz" />
+          <label>sender</label>
+          <select data-param="sender">
+            <option>Guest</option>
+            <option>AI Bot</option>
+          </select>
+          <label>message</label>
+          <textarea data-param="message" rows="2" placeholder="testing reply">testing reply</textarea>
+          <label>nodeTag (optional)</label>
+          <input type="text" data-param="nodeTag" placeholder="appointment scheduled" />
+        </div>
+        <div class="actions">
+          <button onclick="runStoreBlandMessage(this)">Store</button>
           <span class="status muted"></span>
         </div>
         <div class="resp"><pre></pre></div>
@@ -3525,6 +3622,40 @@ async function runInjectionSchedule(btn){
     body: { phone, eventTime, isTest: param(card,"isTest") === "true" },
   });
 }
+async function runCalAvailableTimes(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, {
+    method: "POST", url: "/cal/available-times",
+    headers: { "content-type": "application/json" },
+    body: {},
+  });
+}
+async function runCalSchedule(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getCardPhone(card); if(!phone) return;
+  const local = param(card, "startTime");
+  const startTime = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
+  const name = param(card, "name") || "Test Guest";
+  const email = param(card, "email") || "test@example.com";
+  const conversationId = param(card, "conversationId") || undefined;
+  if(!confirm("Book a real Cal.com appointment for " + name + " (" + email + ") at " + startTime + "? An SMS injection will also be scheduled.")) return;
+  await runRequest(card, {
+    method: "POST", url: "/cal/schedule",
+    headers: { "content-type": "application/json" },
+    body: { phone, name, email, startTime, conversationId },
+  });
+}
+async function runCalCancel(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getCardPhone(card); if(!phone) return;
+  const bookingUid = param(card, "bookingUid") || undefined;
+  if(!confirm("Cancel the scheduled SMS injection for " + phone + (bookingUid ? " AND Cal.com booking " + bookingUid : "") + "?")) return;
+  await runRequest(card, {
+    method: "POST", url: "/cal/delete-scheduled-injection",
+    headers: { "content-type": "application/json" },
+    body: { phone, bookingUid },
+  });
+}
 
 // ===================== Section 3: Disposition / Hot-path =====================
 async function runDispo(btn){
@@ -3597,6 +3728,22 @@ async function runAnswered(btn){
     method: "POST", url: "/api/guests/answered",
     headers: { "content-type": "application/json" },
     body: { phone },
+  });
+}
+async function runStoreBlandMessage(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getCardPhone(card); if(!phone) return;
+  const callId = param(card, "callId");
+  if(!callId || !callId.trim()){ alert("Type a callId first."); return; }
+  const message = param(card, "message");
+  if(!message || !message.trim()){ alert("Type a message first."); return; }
+  const sender = param(card, "sender") || "Guest";
+  const nodeTag = param(card, "nodeTag") || undefined;
+  await runRequest(card, {
+    method: "POST",
+    url: "/sms-callback/conversation/" + encodeURIComponent(phone) + "/" + encodeURIComponent(callId),
+    headers: { "content-type": "application/json" },
+    body: { sender, message, nodeTag },
   });
 }
 async function runSalesRecord(btn){

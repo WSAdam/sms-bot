@@ -15,39 +15,23 @@ function authHeader(): BlandHeaders {
   return { authorization: key };
 }
 
-export interface CreateConversationParams {
-  user_number: string;
-  agent_number: string;
-  pathway_id: string;
-  pathway_version: string;
-  new_conversation: boolean;
-  request_data: Record<string, unknown>;
-}
-
-export interface CreateConversationResult {
-  data?: { conversation_id?: string; [k: string]: unknown };
-  [k: string]: unknown;
-}
-
-export async function createConversation(
-  params: CreateConversationParams,
-): Promise<CreateConversationResult> {
-  const res = await fetch(BLAND_API_BASE, {
-    method: "POST",
-    headers: { ...authHeader(), "content-type": "application/json" },
-    body: JSON.stringify(params),
-  });
-  return await res.json() as CreateConversationResult;
-}
-
-// Plain SMS send — bypasses any pathway, sends `agent_message` verbatim.
-// Used by the /trigger/test-sms QA endpoint so we can preview specific text
-// to a real phone without authoring a Bland pathway.
-// Endpoint: https://api.bland.ai/v1/sms/send
+// SMS send — POSTs to https://api.bland.ai/v1/sms/send.
+//
+// Two callers:
+//   1. /trigger/test-sms QA endpoint — passes `agent_message` verbatim,
+//      bypassing any pathway, so we can preview specific text on a real
+//      phone without authoring a Bland pathway.
+//   2. processInboundLead — passes `pathway_id` + `pathway_version` and
+//      OMITS `agent_message`, which tells the Bland pathway to generate
+//      the opener itself. (Per Bland docs, /v1/sms/conversations only
+//      initializes state without sending — /v1/sms/send is the endpoint
+//      that actually fires the first message.)
 export interface SendSmsParams {
   user_number: string;     // E.164 destination
   agent_number: string;    // E.164 sender (must be a number on your Bland account)
-  agent_message: string;   // raw message text
+  agent_message?: string;  // raw message text — omit when using a pathway
+  pathway_id?: string;
+  pathway_version?: string;
   new_conversation?: boolean;
   request_data?: Record<string, unknown>;
 }
@@ -61,8 +45,19 @@ export async function sendSms(
     headers: { ...authHeader(), "content-type": "application/json" },
     body: JSON.stringify(params),
   });
-  const json = await res.json();
-  return { status: res.status, ok: res.ok, json };
+  const status = res.status;
+  const text = await res.text();
+  let json: unknown = null;
+  try {
+    json = JSON.parse(text);
+  } catch { /* non-JSON body — leave json null, we'll surface text in error */ }
+
+  console.log(`[bland] POST ${url} → ${status}`);
+  if (!res.ok) {
+    console.error(`[bland] non-2xx body:`, json ?? text);
+    throw new Error(`Bland sendSms ${status}: ${text.slice(0, 200)}`);
+  }
+  return { status, ok: res.ok, json };
 }
 
 export interface BlandConvoResponse {
