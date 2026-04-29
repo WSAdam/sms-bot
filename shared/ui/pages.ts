@@ -173,6 +173,7 @@ hr{border:none;border-top:1px solid rgba(42,59,54,.75);margin:18px 0}
         <a href="/audit">Audit Search</a>
     <a href="/injections">Injections</a>
     <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
       </div>
 
       <div class="grid">
@@ -273,6 +274,7 @@ ${sharedThemeCss}
     <a href="/audit">Audit Search</a>
     <a href="/injections">Injections</a>
     <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
   </div>
 
   <div class="panel" style="margin-bottom:16px">
@@ -611,6 +613,7 @@ ${sharedThemeCss}
     <a href="/audit">Audit Search</a>
     <a href="/injections">Injections</a>
     <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
   </div>
 
   <div class="panel" style="margin-bottom:16px">
@@ -1628,6 +1631,7 @@ ${sharedThemeCss}
     <a href="/audit">Audit Search</a>
     <a href="/injections">Injections</a>
     <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
   </div>
 
   <div class="panel">
@@ -2040,6 +2044,7 @@ ${sharedThemeCss}
     <a href="/audit">Audit Search</a>
     <a href="/injections">Injections</a>
     <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
   </div>
 
   <!-- Schedule new injection -->
@@ -2484,6 +2489,7 @@ ${sharedThemeCss}
     <a href="/audit">Audit Search</a>
     <a href="/injections">Injections</a>
     <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
   </div>
 
   <div class="panel" style="margin-bottom:16px">
@@ -2645,6 +2651,902 @@ function toggleResp(idx){
 }
 
 loadReview();
+</script>
+</body>
+</html>`;
+
+export const testPageHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>">
+<title>Endpoint Test Console</title>
+<style>
+${sharedThemeCss}
+.sticky-bar{
+  position:sticky;top:0;z-index:30;
+  background:linear-gradient(180deg, rgba(11,18,16,.96), rgba(11,18,16,.88));
+  backdrop-filter:blur(8px);
+  border-bottom:1px solid rgba(42,59,54,.85);
+  padding:14px 0;
+  margin:-20px -20px 18px;
+  padding-left:20px;padding-right:20px;
+}
+.sticky-bar .row{display:flex;gap:16px;align-items:end;flex-wrap:wrap;max-width:1200px;margin:0 auto}
+.sticky-bar .filter-group{flex:1;min-width:240px}
+.sticky-bar input[type="text"]{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.1rem}
+.danger-banner{
+  background:rgba(255,71,87,.12);border:1px solid rgba(255,71,87,.45);
+  color:#ffd1d7;padding:12px 16px;border-radius:10px;margin-bottom:14px;font-weight:700;
+}
+.section{margin-bottom:24px}
+.section h2{color:var(--silver);font-size:1.15rem;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.section .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px}
+.endpoint-card{
+  background:linear-gradient(180deg, rgba(16,34,28,.92), rgba(15,27,23,.92));
+  border:1px solid rgba(42,59,54,.85);
+  border-radius:12px;
+  padding:16px;
+  box-shadow:var(--shadow);
+}
+.endpoint-card.danger{border-color:rgba(255,71,87,.55)}
+.endpoint-card .ep-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px}
+.endpoint-card .ep-head .ep-title{color:var(--silver);font-weight:700;font-size:.98rem}
+.endpoint-card .ep-head .ep-desc{color:var(--muted2);font-size:.82rem;margin-top:2px}
+.endpoint-card .ep-method{
+  display:inline-block;padding:2px 8px;border-radius:6px;font-size:.75rem;font-weight:800;
+  font-family:ui-monospace,monospace;letter-spacing:.04em;
+}
+.method-GET{background:rgba(25,195,125,.18);color:#b8ffe2;border:1px solid rgba(25,195,125,.4)}
+.method-POST{background:rgba(46,134,222,.18);color:#bfdcff;border:1px solid rgba(46,134,222,.4)}
+.method-DELETE{background:rgba(255,71,87,.18);color:#ffd1d7;border:1px solid rgba(255,71,87,.4)}
+.endpoint-card code.path{color:var(--accentHi);font-family:ui-monospace,monospace;font-size:.82rem;display:block;margin-bottom:10px;word-break:break-all}
+.endpoint-card .params{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.endpoint-card .params label{font-size:.78rem;color:var(--muted)}
+.endpoint-card .params input,.endpoint-card .params select{padding:8px 10px;font-size:.9rem}
+.endpoint-card .actions{display:flex;gap:8px;align-items:center}
+.endpoint-card .actions button{height:36px;padding:0 18px;font-size:.9rem}
+.endpoint-card .actions .status{font-family:ui-monospace,monospace;font-size:.85rem}
+.endpoint-card .resp{
+  margin-top:10px;border-top:1px solid rgba(42,59,54,.55);padding-top:10px;display:none;
+}
+.endpoint-card .resp.show{display:block}
+.endpoint-card .resp pre{
+  background:rgba(11,18,16,.7);
+  border:1px solid rgba(42,59,54,.65);
+  border-radius:8px;
+  padding:10px 12px;
+  font-family:ui-monospace,monospace;font-size:.78rem;
+  max-height:340px;overflow:auto;color:var(--text);white-space:pre-wrap;word-break:break-all;
+}
+.status-2xx{color:#b8ffe2}
+.status-4xx{color:#ffe6b8}
+.status-5xx{color:#ffd1d7}
+details.auth{
+  background:rgba(11,18,16,.5);border:1px solid rgba(42,59,54,.65);border-radius:10px;
+  padding:10px 14px;margin-bottom:18px;
+}
+details.auth summary{cursor:pointer;color:var(--silver);font-weight:700;outline:none}
+details.auth .auth-row{display:flex;gap:14px;margin-top:10px;flex-wrap:wrap}
+details.auth .auth-row .filter-group{flex:1;min-width:280px}
+.tag{display:inline-block;background:rgba(195,204,209,.08);border:1px solid rgba(195,204,209,.2);color:var(--muted2);padding:2px 8px;border-radius:6px;font-size:.7rem;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="sticky-bar">
+    <div class="row">
+      <div class="filter-group">
+        <label>📱 Phone (any format — normalized to 10 digits)</label>
+        <input type="text" id="testPhone" placeholder="(555) 123-4567 or 5551234567" />
+      </div>
+      <button class="secondary" onclick="clearAllResponses()" title="Clear all response panels">Clear all</button>
+    </div>
+  </div>
+
+  <h1 style="margin-top:0">🧪 Endpoint Test Console</h1>
+  <p class="subtitle">Fire any endpoint with one click. Responses render inline.</p>
+
+  <div class="nav-links">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/search">Search</a>
+    <a href="/audit">Audit</a>
+    <a href="/injections">Injections</a>
+    <a href="/review">Review</a>
+    <a href="/test">🧪 Test</a>
+  </div>
+
+  <details class="auth">
+    <summary>🔐 Auth tokens (saved to localStorage)</summary>
+    <div class="auth-row">
+      <div class="filter-group">
+        <label>X-Cron-Internal-Token (for /api/cron/trigger)</label>
+        <input type="text" id="cronInternalToken" placeholder="paste token..." />
+      </div>
+      <div class="filter-group">
+        <label>X-Cron-Secret (for /api/guests/activate-from-report)</label>
+        <input type="text" id="cronSharedSecret" placeholder="paste secret..." />
+      </div>
+      <div class="filter-group">
+        <label>SMS_COUNT_TOKEN (for /api/sms/count)</label>
+        <input type="text" id="smsCountToken" placeholder="paste token..." />
+      </div>
+    </div>
+  </details>
+
+  <!-- ============ 1. TRIGGER INBOUND SMS ============ -->
+  <div class="section">
+    <h2>🚀 Trigger inbound SMS <span class="tag">REAL BLAND SEND</span></h2>
+    <div class="danger-banner">⚠️ These actually send SMS to the entered phone via Bland.ai. Confirm before clicking.</div>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="trigger-manual">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Manual trigger (override=true)</div>
+            <div class="ep-desc">Bypasses every gatekeeper. Sends one Bland SMS.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/trigger/manual</code>
+        <div class="params">
+          <label>resID (any number — passes through to Bland)</label>
+          <input type="text" data-param="resID" value="123456" />
+          <label>domain</label>
+          <select data-param="domain">
+            <option>monsterrg</option><option>monsterodr</option><option>monsteract</option>
+            <option>monsterods</option><option>monsterds</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button onclick="runTriggerManual(this)">Send SMS</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="trigger-readymode">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">ReadyMode webhook</div>
+            <div class="ep-desc">Full gatekeeper path. Won't send unless attempts ≥ 40 and DNC clear.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/trigger/readymode</code>
+        <div class="params">
+          <label>attempts</label>
+          <input type="number" data-param="attempts" value="45" />
+          <label>resID</label>
+          <input type="text" data-param="resID" value="123456" />
+          <label>domain</label>
+          <select data-param="domain">
+            <option>monsterrg</option><option>monsterodr</option><option>monsteract</option>
+            <option>monsterods</option><option>monsterds</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button onclick="runTriggerReadymode(this)">Send</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 2. APPOINTMENT FLOW ============ -->
+  <div class="section">
+    <h2>📅 Cal.com / Appointment</h2>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="appt-booked">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Appointment booked</div>
+            <div class="ep-desc">Scrubs current source, schedules a future injection.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/sms-callback/appointment-booked</code>
+        <div class="params">
+          <label>event_time (ISO)</label>
+          <input type="datetime-local" data-param="event_time" />
+        </div>
+        <div class="actions">
+          <button onclick="runApptBooked(this)">Schedule</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="cron-trigger-single">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Fire scheduled injection now</div>
+            <div class="ep-desc">Runs the injection that's scheduled for this phone immediately.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/cron/trigger-single?phone=…</code>
+        <div class="actions">
+          <button onclick="runCronTriggerSingle(this)">Fire</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="injection-schedule">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Manual schedule injection</div>
+            <div class="ep-desc">Same as Cal.com path but skips the source scrub.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/injection/schedule</code>
+        <div class="params">
+          <label>eventTime</label>
+          <input type="datetime-local" data-param="eventTime" />
+          <label>isTest</label>
+          <select data-param="isTest"><option value="true">true</option><option value="false">false</option></select>
+        </div>
+        <div class="actions">
+          <button onclick="runInjectionSchedule(this)">Schedule</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 3. DISPOSITION / HOT-PATH ============ -->
+  <div class="section">
+    <h2>📞 Disposition / Hot-path</h2>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="dispo">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Post-call disposition</div>
+            <div class="ep-desc">Sale=no-op, ODR=return-to-source, else recycle.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/sms-callback/disposition</code>
+        <div class="params">
+          <label>disposition</label>
+          <select data-param="disposition">
+            <option>Not Interested</option><option>No Answer</option>
+            <option>sale</option><option>booked</option>
+          </select>
+          <label>campaign_name</label>
+          <input type="text" data-param="campaign_name" value="ODR_Auto_Return" />
+        </div>
+        <div class="actions">
+          <button onclick="runDispo(this)">Send</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="talk-now">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Talk-now (immediate ODR inject)</div>
+            <div class="ep-desc">Scrubs source, injects into ODR Appointments now.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/sms-callback/bland/talk-now</code>
+        <div class="actions">
+          <button onclick="runTalkNow(this)">Fire</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="return-to-source">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Return to source</div>
+            <div class="ep-desc">Scrub ODR, inject back to original campaign.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/sms-callback/return-to-source</code>
+        <div class="actions">
+          <button onclick="runReturnToSource(this)">Fire</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 4. STOP / DNC ============ -->
+  <div class="section">
+    <h2>🛑 STOP / Opt-out</h2>
+    <div class="grid">
+      <div class="endpoint-card" data-id="stop">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">STOP request</div>
+            <div class="ep-desc">Marks DNC in Firestore + DNCs across all 5 ReadyMode domains.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/sms-callback/stop</code>
+        <div class="actions">
+          <button onclick="runStop(this)">Send STOP</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 5. INSPECT STATE ============ -->
+  <div class="section">
+    <h2>🔍 Inspect state (read-only)</h2>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="convo-search">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Conversation messages</div>
+            <div class="ep-desc">All Bland-stored messages for this phone.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/conversations/search2?phone=…</code>
+        <div class="actions">
+          <button onclick="runConvoSearch(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="pointer">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Lead pointer</div>
+            <div class="ep-desc">Current and original ReadyMode location.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/sms-flow/orchestrator/pointer/{phone}</code>
+        <div class="actions">
+          <button onclick="runPointer(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="events">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Orchestrator events</div>
+            <div class="ep-desc">Audit trail of inject/scrub/dnc events.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/sms-flow/orchestrator/events/{phone}</code>
+        <div class="actions">
+          <button onclick="runEvents(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="state">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Config state</div>
+            <div class="ep-desc">sms-bot/config/settings/state doc.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/state</code>
+        <div class="actions">
+          <button onclick="runState(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 6. MISC WRITES ============ -->
+  <div class="section">
+    <h2>📊 Misc writes</h2>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="answered">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Mark guest answered</div>
+            <div class="ep-desc">Writes guestanswered/byPhone/{phone10}.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/guests/answered</code>
+        <div class="actions">
+          <button onclick="runAnswered(this)">Mark answered</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="sales-record">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Manual sale match</div>
+            <div class="ep-desc">Single-phone variant of the daily QB cron.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/sales/record</code>
+        <div class="actions">
+          <button onclick="runSalesRecord(this)">Match</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 7. CRON / BATCH ============ -->
+  <div class="section">
+    <h2>⚙️ Cron / Batch (no phone needed)</h2>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="cron-sweep">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Scheduled-injection sweep</div>
+            <div class="ep-desc">Fires every scheduled injection whose eventTime ≤ now.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/cron/trigger</code>
+        <div class="actions">
+          <button onclick="runCronSweep(this)">Sweep now</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="activate-from-report">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Daily QB sale-match cron</div>
+            <div class="ep-desc">Pulls today's bookings from Quickbase, matches against scheduled injections.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/guests/activate-from-report</code>
+        <div class="actions">
+          <button onclick="runActivateFromReport(this)">Run cron</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="bland-list-today">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Bland: list today's conversations</div>
+            <div class="ep-desc">Sanity check that BLAND_API_KEY is good.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/sms-callback/list-today</code>
+        <div class="actions">
+          <button onclick="runListToday(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="dashboard-stats">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Dashboard stats</div>
+            <div class="ep-desc">Firestore round-trip sanity check (lists every container).</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/dashboard/stats</code>
+        <div class="actions">
+          <button onclick="runDashboardStats(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="sms-count">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Today's SMS count</div>
+            <div class="ep-desc">Token-gated. Reads sms-bot/globalsmscount/byDate/today.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/sms/count</code>
+        <div class="actions">
+          <button onclick="runSmsCount(this)">Fetch</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 8. CLEANUP (DANGEROUS) ============ -->
+  <div class="section">
+    <h2>🧹 Cleanup <span class="tag">IRREVERSIBLE</span></h2>
+    <div class="danger-banner">These wipe Firestore docs and call ReadyMode TPI. Use only on test phones.</div>
+    <div class="grid">
+
+      <div class="endpoint-card danger" data-id="cleanup">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Full reset for phone</div>
+            <div class="ep-desc">Deletes context, conversations, pointer, ratelimit, scheduled injection. Scrubs ODR.</div>
+          </div>
+          <span class="ep-method method-DELETE">DELETE</span>
+        </div>
+        <code class="path">/sms-callback/cleanup</code>
+        <div class="actions">
+          <button onclick="runCleanup(this)">Wipe everything</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card danger" data-id="delete-history">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Delete conversation history</div>
+            <div class="ep-desc">Wipes all Bland message records for this phone.</div>
+          </div>
+          <span class="ep-method method-DELETE">DELETE</span>
+        </div>
+        <code class="path">/sms-callback/conversation-history</code>
+        <div class="actions">
+          <button onclick="runDeleteHistory(this)">Delete</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card danger" data-id="cancel-injection">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">Cancel scheduled injection</div>
+            <div class="ep-desc">Removes the scheduledinjections/byPhone/{phone10} doc.</div>
+          </div>
+          <span class="ep-method method-DELETE">DELETE</span>
+        </div>
+        <code class="path">/api/injection/cancel?phone=…</code>
+        <div class="actions">
+          <button onclick="runCancelInjection(this)">Cancel</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ===================== Helpers =====================
+function normPhone(raw){
+  if(!raw) return null;
+  const d = String(raw).replace(/\\D/g, "");
+  if(d.length === 10) return d;
+  if(d.length === 11 && d.startsWith("1")) return d.slice(1);
+  return null;
+}
+function getPhone(){
+  const raw = document.getElementById("testPhone").value;
+  const p = normPhone(raw);
+  if(!p){ alert("Enter a valid 10-digit phone in the top bar first."); return null; }
+  return p;
+}
+function param(card, name){
+  const el = card.querySelector('[data-param="'+name+'"]');
+  return el ? el.value : null;
+}
+function showResp(card, status, ms, body){
+  const resp = card.querySelector(".resp");
+  const pre = resp.querySelector("pre");
+  const stat = card.querySelector(".actions .status");
+  resp.classList.add("show");
+  let cls = "muted";
+  if(status >= 200 && status < 300) cls = "status-2xx";
+  else if(status >= 400 && status < 500) cls = "status-4xx";
+  else if(status >= 500) cls = "status-5xx";
+  stat.className = "status " + cls;
+  stat.textContent = status + " · " + ms + "ms";
+  let pretty;
+  try { pretty = JSON.stringify(body, null, 2); } catch { pretty = String(body); }
+  pre.textContent = pretty;
+}
+function showError(card, err){
+  const resp = card.querySelector(".resp");
+  const pre = resp.querySelector("pre");
+  const stat = card.querySelector(".actions .status");
+  resp.classList.add("show");
+  stat.className = "status status-5xx";
+  stat.textContent = "FETCH FAIL";
+  pre.textContent = String(err && err.message ? err.message : err);
+}
+async function runRequest(card, opts){
+  const btn = card.querySelector("button");
+  btn.disabled = true;
+  const stat = card.querySelector(".actions .status");
+  stat.className = "status muted";
+  stat.textContent = "running...";
+  const t0 = performance.now();
+  try {
+    const res = await fetch(opts.url, {
+      method: opts.method || "GET",
+      headers: opts.headers || {},
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const ms = Math.round(performance.now() - t0);
+    let body;
+    const text = await res.text();
+    try { body = JSON.parse(text); } catch { body = text; }
+    showResp(card, res.status, ms, body);
+  } catch(err){
+    showError(card, err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+function clearAllResponses(){
+  document.querySelectorAll(".endpoint-card .resp").forEach(r => {
+    r.classList.remove("show");
+    r.querySelector("pre").textContent = "";
+  });
+  document.querySelectorAll(".endpoint-card .actions .status").forEach(s => {
+    s.className = "status muted";
+    s.textContent = "";
+  });
+}
+
+// Token persistence
+const TOKEN_KEYS = ["cronInternalToken", "cronSharedSecret", "smsCountToken"];
+TOKEN_KEYS.forEach(k => {
+  const el = document.getElementById(k);
+  el.value = localStorage.getItem("test." + k) || "";
+  el.addEventListener("input", () => localStorage.setItem("test." + k, el.value));
+});
+// Phone persistence
+const phoneEl = document.getElementById("testPhone");
+phoneEl.value = localStorage.getItem("test.phone") || "";
+phoneEl.addEventListener("input", () => localStorage.setItem("test.phone", phoneEl.value));
+
+function getToken(k){ return document.getElementById(k).value; }
+
+// Default datetime-local values to "now + 2 minutes" so scheduling works out of the box
+function defaultDateTimeLocal(plusMinutes){
+  const d = new Date(Date.now() + (plusMinutes||0) * 60000);
+  const pad = n => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) +
+    "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+document.querySelectorAll('input[type="datetime-local"]').forEach(el => {
+  el.value = defaultDateTimeLocal(2);
+});
+
+// ===================== Section 1: Trigger =====================
+async function runTriggerManual(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  if(!confirm("This will SEND A REAL SMS to " + phone + " via Bland. Continue?")) return;
+  await runRequest(card, {
+    method: "POST", url: "/trigger/manual",
+    headers: { "content-type": "application/json" },
+    body: { phone, resID: param(card,"resID"), domain: param(card,"domain"), attempts: 99 },
+  });
+}
+async function runTriggerReadymode(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  if(!confirm("This will go through the FULL gatekeeper path. If attempts ≥ 40 and DNC is clear, a real SMS will fire. Continue?")) return;
+  await runRequest(card, {
+    method: "POST", url: "/trigger/readymode",
+    headers: { "content-type": "application/json" },
+    body: { phone, resID: param(card,"resID"), domain: param(card,"domain"), attempts: Number(param(card,"attempts")) },
+  });
+}
+
+// ===================== Section 2: Appointment =====================
+async function runApptBooked(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  const local = param(card, "event_time");
+  const event_time = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
+  await runRequest(card, {
+    method: "POST", url: "/sms-callback/appointment-booked",
+    headers: { "content-type": "application/json" },
+    body: { phone, event_time },
+  });
+}
+async function runCronTriggerSingle(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, { method: "GET", url: "/api/cron/trigger-single?phone=" + encodeURIComponent(phone) });
+}
+async function runInjectionSchedule(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  const local = param(card, "eventTime");
+  const eventTime = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
+  await runRequest(card, {
+    method: "POST", url: "/api/injection/schedule",
+    headers: { "content-type": "application/json" },
+    body: { phone, eventTime, isTest: param(card,"isTest") === "true" },
+  });
+}
+
+// ===================== Section 3: Disposition / Hot-path =====================
+async function runDispo(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, {
+    method: "POST", url: "/sms-callback/disposition",
+    headers: { "content-type": "application/json" },
+    body: { phone, disposition: param(card,"disposition"), campaign_name: param(card,"campaign_name") },
+  });
+}
+async function runTalkNow(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  if(!confirm("This will inject " + phone + " into ODR Appointments NOW. Continue?")) return;
+  await runRequest(card, {
+    method: "POST", url: "/sms-callback/bland/talk-now",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+async function runReturnToSource(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, {
+    method: "POST", url: "/sms-callback/return-to-source",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+
+// ===================== Section 4: STOP =====================
+async function runStop(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  if(!confirm("This will mark " + phone + " as DNC across all 5 ReadyMode domains. Continue?")) return;
+  await runRequest(card, {
+    method: "POST", url: "/sms-callback/stop",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+
+// ===================== Section 5: Inspect =====================
+async function runConvoSearch(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, { method: "GET", url: "/api/conversations/search2?phone=" + encodeURIComponent(phone) });
+}
+async function runPointer(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, { method: "GET", url: "/sms-flow/orchestrator/pointer/" + encodeURIComponent(phone) });
+}
+async function runEvents(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, { method: "GET", url: "/sms-flow/orchestrator/events/" + encodeURIComponent(phone) });
+}
+async function runState(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, { method: "GET", url: "/api/state" });
+}
+
+// ===================== Section 6: Misc =====================
+async function runAnswered(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, {
+    method: "POST", url: "/api/guests/answered",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+async function runSalesRecord(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, {
+    method: "POST", url: "/api/sales/record",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+
+// ===================== Section 7: Cron / Batch =====================
+async function runCronSweep(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, {
+    method: "GET", url: "/api/cron/trigger",
+    headers: { "X-Cron-Internal-Token": getToken("cronInternalToken") },
+  });
+}
+async function runActivateFromReport(btn){
+  const card = btn.closest(".endpoint-card");
+  if(!confirm("This pulls today's bookings from Quickbase and writes saleswithin7d markers. Continue?")) return;
+  await runRequest(card, {
+    method: "POST", url: "/api/guests/activate-from-report",
+    headers: { "content-type": "application/json", "X-Cron-Secret": getToken("cronSharedSecret") },
+    body: {},
+  });
+}
+async function runListToday(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, { method: "GET", url: "/sms-callback/list-today" });
+}
+async function runDashboardStats(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, { method: "GET", url: "/api/dashboard/stats" });
+}
+async function runSmsCount(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, {
+    method: "POST", url: "/api/sms/count",
+    headers: { "content-type": "application/json" },
+    body: { test: getToken("smsCountToken") },
+  });
+}
+
+// ===================== Section 8: Cleanup =====================
+async function runCleanup(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  if(!confirm("⚠️ IRREVERSIBLE: this will delete EVERY Firestore record for " + phone + " and scrub ODR. Continue?")) return;
+  await runRequest(card, {
+    method: "DELETE", url: "/sms-callback/cleanup",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+async function runDeleteHistory(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  if(!confirm("Delete ALL conversation history for " + phone + "?")) return;
+  await runRequest(card, {
+    method: "DELETE", url: "/sms-callback/conversation-history",
+    headers: { "content-type": "application/json" },
+    body: { phone },
+  });
+}
+async function runCancelInjection(btn){
+  const card = btn.closest(".endpoint-card");
+  const phone = getPhone(); if(!phone) return;
+  await runRequest(card, {
+    method: "DELETE", url: "/api/injection/cancel?phone=" + encodeURIComponent(phone),
+  });
+}
 </script>
 </body>
 </html>`;
