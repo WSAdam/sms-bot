@@ -3,10 +3,229 @@
 This packet is the starting point for consolidating three legacy systems into one Deno Deploy project:
 
 1. **omnisource sms-flow module** — the SMS pipeline (lead intake, ReadyMode injection/scrub, Bland.ai send, Cal.com appointment hook, lead orchestration). Code dump in `_source-omnisource/sms-flow/`.
-2. **Daily cron site** — *not* being ported. It just POSTs once a day to a single endpoint. The new app needs to expose that endpoint (`/api/guests/activate-from-report`); the cron URL will be repointed when the new app is live.
-3. **Deno KV playground** — the dashboards, conversation search, audit search, scheduled-injection UI, nightly Postmark report, KV CRUD, and the existing `/api/guests/activate` + `/api/guests/answered` + `/api/sales/record` endpoints. The user has saved its `main.ts` into this folder as the canonical reference.
+2. **Daily cron site** — *not* being ported. Replaced by an internal `Deno.cron` job (no external trigger needed).
+3. **Deno KV playground** — the dashboards, conversation search, audit search, scheduled-injection UI, nightly Postmark report, KV CRUD, and the existing `/api/guests/activate` + `/api/guests/answered` + `/api/sales/record` endpoints. The user has saved its `main.ts` (renamed to `_legacy-main.ts`) into this folder as the canonical reference.
 
-This document is the spec. Edit freely as decisions land.
+> **The original spec is below — kept as historical record.** Sections 0 + below "POST-IMPLEMENTATION STATE" reflect actual built state and the deltas + gotchas discovered during implementation. Read those first.
+
+---
+
+## 0. POST-IMPLEMENTATION STATE (current truth as of last commit)
+
+### 0.1 Architecture decisions made
+
+- **Single Fresh project** — Fresh hosts both UI pages (`routes/*.tsx`-style HTML) and API handlers (`routes/api/*`, `routes/sms-callback/*`, `routes/cal/*`, `routes/trigger/*`, `routes/sms-flow/*`). One Deno Deploy project, one URL.
+- **NOT JSX/Fresh page templates** — UI pages are served as raw HTML strings extracted verbatim from `_legacy-main.ts` and stored in `shared/ui/pages.ts`. Each route handler returns `new Response(htmlConst, { headers: { "content-type": "text/html; charset=utf-8" }})`. No Fresh page composition for the legacy pages — kept the inline CSS + inline JS that the playground already had.
+- **Webhooks at clean paths** — `/sms-callback/*`, `/trigger/*`, `/cal/*`, `/sms-flow/*`. Decided NOT to mount under `/confirmations/v001/` (that was legacy ngrok cruft).
+- **Quickbase REAL** (was stub originally) — direct REST API in `shared/services/quickbase/api.ts` + `reservations.ts`. Only `getReport` (the daily cron data pull) still uses the public Cloud Function.
+- **Cal.com integration FULL** — `shared/services/cal/service.ts` ports the legacy `CalService` verbatim. Three new routes under `/cal/*`.
+- **No external cron, no auth tokens** — `Deno.cron` runs both the every-minute injection sweep and the daily QB sale-match. No `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`, or `SMS_COUNT_TOKEN` env vars exist anymore. The endpoints are open (manual triggers via Test page).
+- **shape-checker abandoned** — fundamentally incompatible with Fresh's `routes/` convention. The script is still wired to `deno task shape-check` for completeness; ignore its output.
+
+### 0.2 Critical gotchas discovered during implementation
+
+1. **Bland send: use `/v1/sms/send`, NOT `/v1/sms/conversations`.** The latter is the "Create SMS Conversation" endpoint which initializes state without sending. We hit `https://api.bland.ai/v1/sms/send` with `{user_number, agent_number, pathway_id, pathway_version, new_conversation: true, request_data}` and **omit `agent_message`** so the pathway generates the opener. The legacy `BlandSmsService.createConversation` was misleadingly named — it actually called `/v1/sms/send`.
+
+2. **Firestore `preferRest: true` is mandatory on Deno Deploy.** firebase-admin's gRPC transport doesn't work — every call hangs 50s and 500s with `14 UNAVAILABLE: No connection established`. Set in `shared/firestore/client.ts` after `getFirestore(app)`. Already wired.
+
+3. **Vite + npm CJS modules require `new Function` for dynamic imports.** Plain `await import("firebase-admin/...")` AND `await import(/* @vite-ignore */ "...")` BOTH fail because @fresh/plugin-vite's deno-loader resolves them anyway. Bundle drops from 5MB → 250KB once you wrap:
+   ```ts
+   const dynamicImport = new Function("specifier", "return import(specifier)");
+   const adminApp = await dynamicImport("firebase-admin/app");
+   ```
+   Both `shared/firestore/client.ts` and `shared/services/postmark/client.ts` use this pattern.
+
+4. **`Deno.cron` types are gated `unstable` even though it's stable on Deploy.** Use a typed alias:
+   ```ts
+   type DenoCron = (name: string, schedule: string, handler: () => Promise<void> | void) => void;
+   const denoCron = (Deno as unknown as { cron?: DenoCron }).cron;
+   if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) { denoCron(...) }
+   ```
+
+5. **`QUICKBASE_USER_TOKEN` env value is the raw token string.** Quickbase's "copy as code" UI sometimes hands you a base64-encoded HTTP-headers blob — looks like `Insi…SI=`. Decode that and extract the `b…` token from the Authorization line.
+
+6. **Phone field in QB is queried by formatted string.** `8432222986` → format to `(843) 222-2986` for `EX` queries. Done in `shared/services/quickbase/reservations.ts:formatPhoneForQb`.
+
+7. **Override mode in `processInboundLead` falls through to a stub guest** if the CRM lookup returns null. Without this, the "fire a test SMS to your phone" path can't work until QB has a record for your test resID.
+
+8. **Bland conversation-message webhook receiver was missing originally.** Built at `routes/sms-callback/conversation/[phone]/[callId].ts`. Bland needs to be configured to POST every message there or the dashboard's "People Replied" stays at 0 forever.
+
+### 0.3 Env vars (current canonical list)
+
+| Var | Required | Purpose | Notes |
+|---|---|---|---|
+| `FIREBASE_PROJECT_ID` | ✅ | GCP project ID | `keystone-fs97` |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | ✅ on Deploy | Raw JSON of service account | Paste the whole `{...}` blob |
+| `GOOGLE_APPLICATION_CREDENTIALS` | ✅ local | Path to service-account JSON file | e.g. `./data/service-account.dev.json` (gitignored) |
+| `BLAND_API_KEY` | ✅ | Bland.ai API key | Header: `authorization: <key>` (no Bearer prefix) |
+| `NU_BLAND_API_KEY` | optional | Bland fallback key | |
+| `BLAND_SMS_PATHWAY_ID` | optional | Pathway override | Default: `d6bd66a2-13b4-4365-a994-842c705e22b1` |
+| `BLAND_PATHWAY_VERSION` | optional | Pathway version | Default: `production` |
+| `POSTMARK_SERVER` | required for /api/report/nightly | Postmark server token | |
+| `QUICKBASE_REPORT_TOKEN` | required for daily cron | `test` body field for `getReports` Cloud Function | |
+| `QUICKBASE_USER_TOKEN` | required for direct QB ops | User token from QB My Preferences → Manage user tokens | Raw token only, NOT a base64 headers blob |
+| `QUICKBASE_FAIL_OPEN` | optional | `true` (default) = QB outage soft-fails | Flip to `false` once you trust QB wiring |
+| `RM_USER`, `RM_PASS` | ✅ | ReadyMode TPI Basic-auth creds | Same creds work for all 5 domains (no per-domain overrides needed) |
+| `CAL_API_KEY` | ✅ for Cal.com endpoints | Cal.com v2 API key | `cal_live_…` format |
+| `NGROK_KEY` | local dev only | ngrok auth token | For `deno task tunnel` |
+| `SOURCE_KV_URL` | migration script only | Legacy KV deploy URL | `https://google-sheets-kv.thetechgoose.deno.net` |
+
+**Removed since original plan:** `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`, `SMS_COUNT_TOKEN`, `QUICKBASE_REALM` (now hardcoded constant).
+
+### 0.4 Hardcoded constants
+
+In `shared/config/constants.ts`:
+- Bland: agent number `+18435488335`, pathway ID `d6bd66a2-…`, version `production`
+- Quickbase: realm `monsterrg.quickbase.com`, reservations table `bmhvhc72c`, fields `{ResId:3, Email:78, GuestName:79, Phone:82, SpouseName:84, Dnc:457, TCPA:685}`, bookings table `bpb28qsnn`, report `530`
+- Cal.com: API base `https://api.cal.com/v2`, version header `2024-08-13`, event type ID `4650992` (Monster Appointments), holding campaign `ODR_APPT_HOLDING`
+- Postmark: from `notifications@monsterrg.com`, default to `adamp@monsterrg.com`
+- Throttling: daily cap 100, rate-limit window 30d, attempts threshold 40
+- Sale match: 7-day window
+- Firestore root: `sms-bot`
+- Time: `America/New_York` for all ET-day calculations
+
+### 0.5 Endpoint inventory (current — supersedes §5)
+
+**UI pages** (return HTML from `shared/ui/pages.ts`):
+- `GET /` — landing (also handles legacy audit `?recordId` GET / POST)
+- `GET /dashboard`, `/search`, `/audit`, `/injections`, `/review`
+- `GET /test` — endpoint test console (8 sections, ~25 cards, sticky phone input, override toggle, response preview)
+- `GET /healthz` — `{ok:true, service, time}`
+
+**Trigger** (inbound SMS):
+- `POST /trigger/manual` — pathway SMS via `/v1/sms/send`. Body `{phone, resID, domain, attempts, override?}`. Override defaults true if omitted (back-compat); `override:false` from Test page exercises real gatekeepers.
+- `POST /trigger/readymode` — full gatekeeper path (attempts ≥40, DNC, rate limit, CRM)
+- `POST /trigger/test-sms` — raw text via `/v1/sms/send`. Body `{phone, message}`. Bypasses pathway. Used by Custom SMS Test card.
+
+**SMS callbacks** (Bland + Cal.com webhook receivers, dialer dispositions):
+- `POST /sms-callback/appointment-booked` — `{phone, event_time}` → scrub source + scheduledInjection
+- `POST /sms-callback/disposition` — `{phone, disposition, campaign_name}` → 3-branch (sale/booked = noop, ODR = return-to-source, else = recycle)
+- `POST /sms-callback/stop` — `{phone}` → DNC across 5 RM domains + Firestore flag
+- `POST /sms-callback/bland/talk-now` — `{phone}` → instant ODR inject
+- `POST|GET /sms-callback/return-to-source` — scrub ODR, inject back to original
+- `POST /sms-callback/backfill-conversations` — `{conversationIds:[…]}`
+- `POST /sms-callback/seed-conversations`, `POST /sms-callback/seed-conversation` — bulk/single Bland history seed
+- `GET /sms-callback/list-today` — Bland's today list (sanity check API key)
+- `DELETE /sms-callback/conversation-history`, `/sms-callback/cleanup` — testing wipes
+- **`POST /sms-callback/conversation/:phone/:callId`** — **NEW.** Bland per-message webhook receiver. Body `{sender, message, nodeTag?}` — phone+callId in body ignored (URL path wins). Sender normalization: `"USER"`/`"GUEST"`/`"Guest"` → `"Guest"`, anything else → `"AI Bot"`. Calls `storeMessage` which writes the callId→phone lookup index FIRST.
+
+**Cal.com**:
+- `POST /cal/available-times` — generates 15-min slots, 9–5 ET, 7-day window, future-only
+- `POST /cal/schedule` — Cal.com `createBooking` + `scheduleInjection` + auto-tag conversation history with `nodeTag: "appointment scheduled"` + orchestrator events. Fail-safe: SMS injection schedules even if Cal.com errors.
+- `POST /cal/delete-scheduled-injection` — cancels both Cal.com booking (if uid given) and the scheduledInjection doc
+
+**SMS-flow**:
+- `GET /sms-flow/orchestrator/pointer/:phone`
+- `GET /sms-flow/orchestrator/events/:phone`
+- `POST /sms-flow/queue/trigger` — `{type:"INJECT_APPT", phone}` → fire-and-forget delayed injection
+
+**API**:
+- `GET /api/state`
+- `GET|POST|DELETE /api/kv/{get,set,delete,list}` — legacy compat
+- `GET /api/dashboard/{stats,drill}`, `GET /api/appointments`
+- `GET /api/conversations/{search,search2}`
+- `GET /api/audit/{browse,check,status}`, `POST /api/audit/save`
+- `POST /api/injection/schedule`, `DELETE /api/injection/cancel`
+- `GET /api/cron/trigger` — manual sweep (no auth — Deno.cron also calls)
+- `GET /api/cron/trigger-single?phone=…` — fire one phone's scheduled injection now
+- `POST /api/sales/record` — single-phone sale match
+- `POST /api/guests/activate` — bulk SHA256 phone match (legacy)
+- `POST /api/guests/answered` — mark answered
+- `POST /api/guests/activate-from-report` — manual trigger for daily QB cron
+- `POST /api/sms/count` — today's count (no auth — was token-gated, dropped)
+- `GET|POST /api/report/nightly` — Postmark email
+
+### 0.6 Scheduled jobs (Deno.cron, Deploy-only)
+
+In `main.ts`, gated on `DENO_DEPLOYMENT_ID`:
+- **`scheduled-injection-sweep`** — every minute (`* * * * *`). Calls `sweepScheduledInjections("cron")`.
+- **`daily-qb-sale-match`** — daily at `0 14 * * *` UTC = **10 AM ET / 9 AM EDT**. Calls `runDailyQbSaleMatch()` from `shared/services/sale-match/cron.ts`.
+
+Edit cron expressions in `main.ts` to change schedules. Both also callable via routes for manual firing.
+
+### 0.7 Test console (`/test`)
+
+8 sections, ~25 cards. Each card has:
+- Per-card phone input (placeholder `8432222986`); top "global phone" bar fills all
+- Inline params (selects, dates, textareas)
+- Run button → response panel below (status code colored, elapsed ms, pretty JSON)
+- Confirm dialog on every destructive or send-real-SMS action
+
+Sections:
+1. **🚀 Trigger inbound SMS** — Manual trigger, Custom SMS, ReadyMode webhook (Manual + ReadyMode have `override=true` checkbox, default unchecked)
+2. **📅 Cal.com / Appointment** — Appointment booked, Fire scheduled injection now, Manual schedule injection, Generate available times, Book Cal.com appointment, Cancel Cal.com appointment
+3. **📞 Disposition / Hot-path** — Disposition, Talk-now, Return-to-source
+4. **🛑 STOP / Opt-out** — STOP request
+5. **🔍 Inspect state** — Conversation messages, Lead pointer, Orchestrator events, Config state
+6. **📊 Misc writes** — Mark guest answered, Manual sale match, Store Bland message (simulates webhook)
+7. **⚙️ Cron / Batch** — Sweep, Daily QB cron, Bland list-today, Dashboard stats, SMS count
+8. **🧹 Cleanup (irreversible)** — Full reset, Delete history, Cancel injection
+
+### 0.8 Local dev
+
+```bash
+deno task dev          # Fresh on port 5173/5174 with --env-file=env/local
+deno task tunnel --env=dev    # ngrok exposing the dev server
+deno task test         # 33 unit tests (all mocked)
+deno task build        # Vite production build
+deno task migrate      # KV → Firestore one-shot
+deno task shape-check  # ignore output, structure incompatible with Fresh
+```
+
+`env/local` is gitignored (`env/example` is the template). Both `data/` and `env/` are gitignored except `data/*.example` (ngrok yaml templates) and `env/example`.
+
+Service-account JSON for local dev: drop at `data/service-account.dev.json` and set `GOOGLE_APPLICATION_CREDENTIALS=./data/service-account.dev.json` (default already in `env/local`). Or set `FIREBASE_SERVICE_ACCOUNT_JSON` with the inline JSON — that takes precedence.
+
+### 0.9 Deploy
+
+- **Project**: Deno Deploy auto-deploys from `main` branch of https://github.com/WSAdam/sms-bot
+- **Build**: `deno task build` (Vite). Native Fresh runtime.
+- **Bundle health**: server-entry ~305KB, pages chunk ~150KB. firebase-admin + postmark are externalized (resolved at runtime via `npm:` import map).
+- **Cron tab in Deploy panel** confirms both Deno.cron jobs registered.
+- **Logs**: every request logs ET-time + method + path + status + ms via `routes/_middleware.ts`.
+
+### 0.10 Bland webhook config (cutover guide)
+
+Existing legacy webhook in Bland's pathway/numbers config posts to:
+```
+https://conf-deploy.ngrok.app/confirmations/v001/cal/conversation/{{from}}/{{callID}}
+```
+
+To dual-fire to the new app **clone the webhook** (don't replace yet) and add:
+```
+https://<new-deploy-url>/sms-callback/conversation/{{from}}/{{callID}}
+```
+
+Body shape works as-is (`{phoneNumber, callId, sender, message, nodeTag}`). Path params win over body for phone+callId. Sender values `"AI Bot"` and `"Guest"` both land correctly. Once new endpoint is verified for a few days, remove the legacy webhook.
+
+### 0.11 Migration script
+
+`scripts/migrate-kv-to-firestore.ts` pulls from legacy KV deploy → writes to Firestore.
+
+**Idempotency**: doc paths are deterministic (built from KV key parts). Re-runs OVERWRITE the existing Firestore doc with destructive `set()` (no `{merge:true}`). So:
+- ✅ Safe to re-run `conversations`, `auditstage`, `injectionhistory`, `audit` — append-only, unique keys per record
+- ⚠️ DON'T re-run `scheduledinjection`, `smsflowcontext` after cutover — one row per phone, would clobber any fresh writes from the live app
+
+Run per-prefix:
+```bash
+deno task migrate -- --prefix=conversations --limit=10000
+deno task migrate -- --prefix=audit --dry-run
+```
+
+Optional future enhancement: `--skip-existing` flag (does `.get()` first) for truly safe re-runs. Not built yet.
+
+### 0.12 What's NOT done (vs. original plan)
+
+- **Emulator tests** (`tests/emulator/*`) — never built. All 33 tests are unit + mocked.
+- **MostRecentPackage QB fields** — `MostRecentPackageIdDateOfBooking`, `MostRecentPackageIdCreditCardType`, `MostRecentPackageIdLast4OfCreditCardOnly` come back as empty strings from `findReservationByResID`. They're on a related Packages table (`bttffb64u`) and need a follow-up join. Bland pathway gets empty strings — no error, just no booking-detail interpolation.
+- **Phase 6 cleanup** — `_source-omnisource/` and `_legacy-main.ts` still in repo as references.
+- **Cal.com webhook receiver** (Cal.com → us, for booking events from outside) — not built. We initiate bookings, Cal.com doesn't currently call us.
+- **Per-domain RM creds** — env vars exist conceptually but `RM_USER`/`RM_PASS` covers all 5 domains in practice.
+
+### 0.13 Memory rules (Adam's preferences)
+
+- **Never add `Co-Authored-By` to git commits** — commits are attributed to Adam alone.
+- **Never push without explicit approval** — commit freely, but ask before `git push`. Silence/acknowledgment doesn't count as approval.
 
 ---
 

@@ -32,7 +32,21 @@ export const handler = define.handlers({
       callId: string;
     };
 
-    const phone10 = normalizePhone(rawPhone);
+    // Bland's pathway templating sometimes double-encodes the phone (e.g.
+    // "+18432222986" arrives as "%252B18432222986"). Decode repeatedly until
+    // stable so single-, double-, or unencoded inputs all normalize the same.
+    let decodedPhone = rawPhone;
+    for (let i = 0; i < 3 && decodedPhone.includes("%"); i++) {
+      try {
+        const next = decodeURIComponent(decodedPhone);
+        if (next === decodedPhone) break;
+        decodedPhone = next;
+      } catch {
+        break;
+      }
+    }
+
+    const phone10 = normalizePhone(decodedPhone);
     if (!phone10) {
       return Response.json(
         { error: `Invalid phone parameter: ${rawPhone}` },
