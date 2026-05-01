@@ -94,6 +94,10 @@ const app = initializeApp({
   projectId: FIREBASE_PROJECT_ID,
 });
 const db = getFirestore(app);
+// Force REST transport — same reason as the Fresh app (shared/firestore/client.ts):
+// firebase-admin's default gRPC transport hangs/disconnects from this machine
+// (and from Deno Deploy). REST is one HTTP POST per batch, fast and reliable.
+db.settings({ preferRest: true });
 
 function sanitizeDocId(s: string): string {
   // Firestore doc IDs cannot contain '/', cannot be '.' or '..', cannot match /__.*__/
