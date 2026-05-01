@@ -21,61 +21,66 @@ const dynamicImport: (specifier: string) => Promise<any> = new Function(
   "return import(specifier)",
 ) as (specifier: string) => Promise<unknown> as (specifier: string) => Promise<unknown>;
 
+// We cache the in-flight Promise — not just the resolved value — so concurrent
+// callers during cold start all await the same single initialization. Without
+// this, two requests racing through getDb() before the first finishes would
+// each call db.settings({preferRest:true}); the second throws "Firestore has
+// already been initialized. You can only call settings() once".
 // deno-lint-ignore no-explicit-any
-let app: any = null;
+let appPromise: Promise<any> | null = null;
 // deno-lint-ignore no-explicit-any
-let db: any = null;
+let dbPromise: Promise<any> | null = null;
 
 // deno-lint-ignore no-explicit-any
-async function ensureApp(): Promise<any> {
-  if (app) return app;
+function ensureApp(): Promise<any> {
+  if (appPromise) return appPromise;
+  appPromise = (async () => {
+    const env = loadEnv();
+    const adminApp = await dynamicImport("firebase-admin/app");
 
-  const env = loadEnv();
-  const adminApp = await dynamicImport("firebase-admin/app");
-
-  const existing = adminApp.getApps().find(
-    (a: { name: string }) => a.name === "[DEFAULT]",
-  );
-  if (existing) {
-    app = existing;
-    return app;
-  }
-
-  let credential;
-  if (env.firebaseServiceAccountJson) {
-    credential = adminApp.cert(JSON.parse(env.firebaseServiceAccountJson));
-  } else if (env.googleApplicationCredentials) {
-    const json = JSON.parse(
-      await Deno.readTextFile(env.googleApplicationCredentials),
+    const existing = adminApp.getApps().find(
+      (a: { name: string }) => a.name === "[DEFAULT]",
     );
-    credential = adminApp.cert(json);
-  } else {
-    throw new Error("No Firebase credentials available");
-  }
+    if (existing) return existing;
 
-  app = adminApp.initializeApp({
-    credential,
-    projectId: env.firebaseProjectId,
-  });
-  return app;
+    let credential;
+    if (env.firebaseServiceAccountJson) {
+      credential = adminApp.cert(JSON.parse(env.firebaseServiceAccountJson));
+    } else if (env.googleApplicationCredentials) {
+      const json = JSON.parse(
+        await Deno.readTextFile(env.googleApplicationCredentials),
+      );
+      credential = adminApp.cert(json);
+    } else {
+      throw new Error("No Firebase credentials available");
+    }
+
+    return adminApp.initializeApp({
+      credential,
+      projectId: env.firebaseProjectId,
+    });
+  })();
+  return appPromise;
 }
 
 // deno-lint-ignore no-explicit-any
-export async function getDb(): Promise<any> {
-  if (db) return db;
-  const adminApp = await ensureApp();
-  const adminFs = await dynamicImport("firebase-admin/firestore");
-  db = adminFs.getFirestore(adminApp);
-  // Force REST transport. Deno Deploy doesn't reliably support the long-lived
-  // HTTP/2 gRPC streams the Firestore SDK uses by default — without this every
-  // call 500s after ~50s with "14 UNAVAILABLE: No connection established".
-  // Must be called before any other Firestore op; we cache `db` so this
-  // only runs once.
-  db.settings({ preferRest: true });
-  return db;
+export function getDb(): Promise<any> {
+  if (dbPromise) return dbPromise;
+  dbPromise = (async () => {
+    const adminApp = await ensureApp();
+    const adminFs = await dynamicImport("firebase-admin/firestore");
+    const instance = adminFs.getFirestore(adminApp);
+    // Force REST transport. Deno Deploy doesn't reliably support the long-lived
+    // HTTP/2 gRPC streams the Firestore SDK uses by default — without this
+    // every call 500s after ~50s with "14 UNAVAILABLE: No connection
+    // established". Must run once, before any other Firestore op.
+    instance.settings({ preferRest: true });
+    return instance;
+  })();
+  return dbPromise;
 }
 
 export function resetDbForTests(): void {
-  db = null;
-  app = null;
+  appPromise = null;
+  dbPromise = null;
 }
