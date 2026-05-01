@@ -50,6 +50,7 @@ const PREFIXES = [
   "guestanswered",
   "audit",
   "auditstage",
+  "audit_stage",
   "saleswithin7d",
   "injectionhistory",
   "config",
@@ -70,18 +71,23 @@ const args = parseArgs(Deno.args);
 const SOURCE_KV_URL = Deno.env.get("SOURCE_KV_URL") ||
   "https://google-sheets-kv.thetechgoose.deno.net";
 const FIREBASE_PROJECT_ID = Deno.env.get("FIREBASE_PROJECT_ID");
+const inlineJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
 const credPath = Deno.env.get("GOOGLE_APPLICATION_CREDENTIALS");
 
 if (!FIREBASE_PROJECT_ID) {
   console.error("❌ Missing FIREBASE_PROJECT_ID env var");
   Deno.exit(1);
 }
-if (!credPath) {
-  console.error("❌ Missing GOOGLE_APPLICATION_CREDENTIALS env var (path to service-account.json)");
+if (!inlineJson && !credPath) {
+  console.error(
+    "❌ Need either FIREBASE_SERVICE_ACCOUNT_JSON (inline) or GOOGLE_APPLICATION_CREDENTIALS (path)",
+  );
   Deno.exit(1);
 }
 
-const serviceAccount = JSON.parse(await Deno.readTextFile(credPath));
+const serviceAccount = inlineJson
+  ? JSON.parse(inlineJson)
+  : JSON.parse(await Deno.readTextFile(credPath!));
 
 const app = initializeApp({
   credential: cert(serviceAccount),
@@ -173,7 +179,13 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
         sourceKey: entry.key,
       };
     }
-    case "auditstage": {
+    case "auditstage":
+    // Legacy data also exists under the underscore-form prefix `audit_stage`
+    // (786 records, written before the legacy app renamed to `auditstage`).
+    // Identical key+value shape, zero recordId overlap with auditstage —
+    // safe to merge into the same Firestore collection.
+    // deno-lint-ignore no-fallthrough
+    case "audit_stage": {
       const [stage, recordId] = rest;
       return {
         path: `${ROOT_COLLECTION}/auditstage/${sanitizeDocId(String(stage))}/${sanitizeDocId(String(recordId))}`,
