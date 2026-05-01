@@ -6,8 +6,11 @@ import { define } from "@/utils.ts";
 import { runDailyQbSaleMatch } from "@shared/services/sale-match/cron.ts";
 
 export const handler = define.handlers({
-  async POST() {
-    const r = await runDailyQbSaleMatch();
+  async POST(ctx) {
+    const body = await ctx.req.json().catch(() => null) as
+      | { reportId?: string; tableId?: string }
+      | null;
+    const r = await runDailyQbSaleMatch(body?.reportId, body?.tableId);
     if (!r.ok) {
       return Response.json(
         { success: false, reason: r.reason },

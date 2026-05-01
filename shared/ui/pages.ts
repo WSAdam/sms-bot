@@ -3284,11 +3284,14 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="ep-head">
           <div>
             <div class="ep-title">Daily QB sale-match cron</div>
-            <div class="ep-desc">Pulls today's bookings from Quickbase, matches against scheduled injections.</div>
+            <div class="ep-desc">Pulls bookings from Quickbase, matches against scheduled injections. Leave reportId blank to use default (530).</div>
           </div>
           <span class="ep-method method-POST">POST</span>
         </div>
         <code class="path">/api/guests/activate-from-report</code>
+        <div class="row">
+          <label>reportId<input type="text" data-input="reportId" placeholder="e.g. 678 (blank = 530)"></label>
+        </div>
         <div class="actions">
           <button onclick="runActivateFromReport(this)">Run cron</button>
           <span class="status muted"></span>
@@ -3763,11 +3766,12 @@ async function runCronSweep(btn){
 }
 async function runActivateFromReport(btn){
   const card = btn.closest(".endpoint-card");
-  if(!confirm("This pulls today's bookings from Quickbase and writes saleswithin7d markers. Continue?")) return;
+  const reportId = card.querySelector('[data-input="reportId"]').value.trim();
+  if(!confirm("This pulls bookings from Quickbase report " + (reportId || "530 (default)") + " and writes saleswithin7d markers. Continue?")) return;
   await runRequest(card, {
     method: "POST", url: "/api/guests/activate-from-report",
     headers: { "content-type": "application/json" },
-    body: {},
+    body: reportId ? { reportId } : {},
   });
 }
 async function runListToday(btn){
