@@ -72,6 +72,14 @@ export const handler = define.handlers({
     const sender: "Guest" | "AI Bot" =
       senderUpper === "USER" || senderUpper === "GUEST" ? "Guest" : "AI Bot";
 
+    const preview = body.message.length > 80
+      ? body.message.slice(0, 80) + "…"
+      : body.message;
+    console.log(
+      `[conv-webhook] phone=${phone10} callId=${callId} sender=${sender} ` +
+        `(raw="${body.sender}") nodeTag=${body.nodeTag ?? "—"} msg="${preview}"`,
+    );
+
     const stored = await storeMessage(
       phone10,
       callId,
