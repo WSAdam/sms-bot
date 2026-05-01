@@ -26,6 +26,12 @@ function decode(s: string): string {
   }
 }
 
+// Bland's pathway fires duplicate webhooks for the same logical message as
+// the conversation transitions between nodes — typically within 60s of each
+// other, sometimes with different nodeTags. 5 minutes is a comfortable
+// window that catches every observed dupe without suppressing legit re-asks.
+const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+
 export async function storeMessage(
   rawPhone: string,
   rawCallId: string,
@@ -38,6 +44,30 @@ export async function storeMessage(
   const phone = normalizePhone(rawPhone) ?? rawPhone;
   const callId = decode(rawCallId);
   const timestamp = new Date().toISOString();
+
+  // Dedupe: short-circuit if an identical (callId, sender, message) write
+  // landed in the last DEDUPE_WINDOW_MS. Match ignores nodeTag — first one
+  // in keeps its tag, later dupes are dropped.
+  const recent = await client.list(conversationsCollection, {
+    where: { field: "callId", op: "==", value: callId },
+    orderBy: { field: "timestamp", dir: "desc" },
+    limit: 20,
+  });
+  const cutoff = Date.now() - DEDUPE_WINDOW_MS;
+  const dup = recent
+    .map((e) => e.data as unknown as ConversationMessage)
+    .find((m) =>
+      m.sender === sender &&
+      m.message === message &&
+      new Date(m.timestamp).getTime() >= cutoff
+    );
+  if (dup) {
+    console.log(
+      `[storeMessage] dedupe: skip dup phone=${phone} callId=${callId} ` +
+        `sender=${sender} (existing ts=${dup.timestamp})`,
+    );
+    return dup;
+  }
 
   // 🔥 IMPORTANT: write the lookup FIRST so getConversationByCallId can
   // resolve phone-by-callId before any message is queried.
