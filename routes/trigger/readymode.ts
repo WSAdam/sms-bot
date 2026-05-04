@@ -21,10 +21,15 @@ export const handler = define.handlers({
       merged.phone || merged.primaryPhone || merged.Phone
     );
     if (!hasPhone) {
+      const h = ctx.req.headers;
+      const ua = h.get("user-agent") ?? "(none)";
+      const fwd = h.get("x-forwarded-for") ?? h.get("x-real-ip") ?? "(none)";
+      const origin = h.get("origin") ?? h.get("referer") ?? "(none)";
+      const host = h.get("host") ?? "(none)";
       console.warn(
         `[trigger] ❌ rejecting empty/no-phone request — keys=${
           Object.keys(merged).join(",") || "(none)"
-        }`,
+        } UA="${ua}" IP=${fwd} origin=${origin} host=${host}`,
       );
       return Response.json(
         { status: "error", message: "Missing phone number" },
