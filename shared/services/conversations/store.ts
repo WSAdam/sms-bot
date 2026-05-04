@@ -48,13 +48,18 @@ export async function storeMessage(
   // Dedupe: short-circuit if an identical (callId, sender, message) write
   // landed in the last DEDUPE_WINDOW_MS. Match ignores nodeTag — first one
   // in keeps its tag, later dupes are dropped.
-  const recent = await client.list(conversationsCollection, {
+  //
+  // We list by callId only (no orderBy) because Firestore would otherwise
+  // require a composite (callId asc, timestamp desc) index — which it
+  // refused without one and 500'd every webhook hit. Per callId there are
+  // ≤ ~50 messages in practice, so filtering in-memory is cheap and avoids
+  // the index management overhead.
+  const matches = await client.list(conversationsCollection, {
     where: { field: "callId", op: "==", value: callId },
-    orderBy: { field: "timestamp", dir: "desc" },
-    limit: 20,
+    limit: 500,
   });
   const cutoff = Date.now() - DEDUPE_WINDOW_MS;
-  const dup = recent
+  const dup = matches
     .map((e) => e.data as unknown as ConversationMessage)
     .find((m) =>
       m.sender === sender &&
