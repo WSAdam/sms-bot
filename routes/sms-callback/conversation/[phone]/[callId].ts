@@ -11,18 +11,26 @@
 //   callId — Bland's conversation_id; passed straight through to storeMessage,
 //            which writes the callId→phone lookup index FIRST (gotcha §15).
 //
-// Body: { sender, message, nodeTag? }
-//   sender — Bland sends "USER" / "AGENT"; we also accept "Guest". We
-//            collapse to the two-value union storeMessage expects.
+// Body: { sender, message, nodeTag?, doNotText? }
+//   sender     — Bland sends "USER" / "AGENT"; we also accept "Guest". We
+//                collapse to the two-value union storeMessage expects.
+//   doNotText  — when true, ALSO marks the phone as DNC (Firestore flag +
+//                ReadyMode opt-out across all 5 domains). Used by the Bland
+//                Stop pathway: the Guest STOP message arrives with
+//                doNotText:true so future SMS attempts are blocked at the
+//                gatekeeper. Same effect as POSTing to /sms-callback/stop.
 
 import { define } from "@/utils.ts";
 import { storeMessage } from "@shared/services/conversations/store.ts";
+import { markDnc } from "@shared/services/dnc/service.ts";
+import { dncGlobal } from "@shared/services/readymode/service.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
 interface IncomingBody {
   sender?: string;
   message?: string;
   nodeTag?: string;
+  doNotText?: boolean;
 }
 
 export const handler = define.handlers({
@@ -77,7 +85,8 @@ export const handler = define.handlers({
       : body.message;
     console.log(
       `[conv-webhook] phone=${phone10} callId=${callId} sender=${sender} ` +
-        `(raw="${body.sender}") nodeTag=${body.nodeTag ?? "—"} msg="${preview}"`,
+        `(raw="${body.sender}") nodeTag=${body.nodeTag ?? "—"} ` +
+        `doNotText=${body.doNotText === true} msg="${preview}"`,
     );
 
     const stored = await storeMessage(
@@ -86,13 +95,34 @@ export const handler = define.handlers({
       sender,
       body.message,
       body.nodeTag,
+      body.doNotText === true ? true : undefined,
     );
+
+    let dncResults: Record<string, string> | undefined;
+    if (body.doNotText === true) {
+      console.log(`[conv-webhook] 🛑 doNotText=true → marking DNC for ${phone10}`);
+      try {
+        await markDnc(phone10, body.nodeTag ?? "Stop");
+      } catch (e) {
+        console.warn(
+          `[conv-webhook] markDnc failed (non-fatal): ${(e as Error).message}`,
+        );
+      }
+      try {
+        dncResults = await dncGlobal(phone10);
+      } catch (e) {
+        console.warn(
+          `[conv-webhook] dncGlobal failed (non-fatal): ${(e as Error).message}`,
+        );
+      }
+    }
 
     return Response.json({
       status: "success",
       phoneNumber: phone10,
       callId,
       timestamp: stored.timestamp,
+      ...(dncResults ? { dnc: dncResults } : {}),
     });
   },
 });

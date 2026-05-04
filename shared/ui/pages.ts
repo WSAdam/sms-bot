@@ -3271,6 +3271,7 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
           <textarea data-param="message" rows="2" placeholder="testing reply">testing reply</textarea>
           <label>nodeTag (optional)</label>
           <input type="text" data-param="nodeTag" placeholder="appointment scheduled" />
+          <label class="checkbox-label"><input type="checkbox" data-param="doNotText" /> doNotText (also marks DNC + ReadyMode opt-out)</label>
         </div>
         <div class="actions">
           <button onclick="runStoreBlandMessage(this)">Store</button>
@@ -3786,11 +3787,15 @@ async function runStoreBlandMessage(btn){
   if(!message || !message.trim()){ alert("Type a message first."); return; }
   const sender = param(card, "sender") || "Guest";
   const nodeTag = param(card, "nodeTag") || undefined;
+  const doNotText = card.querySelector('[data-param="doNotText"]').checked;
+  if(doNotText && !confirm("doNotText will mark the phone as DNC and opt them out of all 5 ReadyMode domains. Continue?")) return;
+  const body = { sender, message, nodeTag };
+  if(doNotText) body.doNotText = true;
   await runRequest(card, {
     method: "POST",
     url: "/sms-callback/conversation/" + encodeURIComponent(phone) + "/" + encodeURIComponent(callId),
     headers: { "content-type": "application/json" },
-    body: { sender, message, nodeTag },
+    body,
   });
 }
 async function runSalesRecord(btn){
