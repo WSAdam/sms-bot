@@ -96,3 +96,26 @@ Deno.test("phone with multiple history entries picks closest within window", asy
   // withinDays should reflect the 2d match, not the 30d one
   assertEquals(Math.round(r.matches[0].withinDays), 2);
 });
+
+Deno.test("same-day appointment + activation matches (date-only saleAt)", async () => {
+  const db = setup();
+  // Appointment is at 5:15pm ET today. Activation is "today" as a date-only
+  // string from QB report — used to false-reject because date-only parses to
+  // midnight UTC = 8pm previous-day ET.
+  const today = new Date();
+  const eventTime = new Date(today);
+  eventTime.setHours(17, 15, 0, 0);
+  const inj: FutureInjection = {
+    phone: "9999999997",
+    eventTime: eventTime.toISOString(),
+    scheduledAt: Date.now(),
+  };
+  db.docs.set(scheduledInjectionDocPath("9999999997"), { ...inj });
+
+  // Format today's date the same way QB report 678 returns it.
+  const yyyyMmDd = today.toISOString().slice(0, 10);
+  const r = await processSaleMatches([
+    { phone10: "9999999997", saleAt: yyyyMmDd },
+  ]);
+  assertEquals(r.matched, 1, "same-day should match");
+});

@@ -18,7 +18,12 @@ import type {
   ActivateFromReportSummary,
   SaleWithinWindowMarker,
 } from "@shared/types/sale.ts";
-import { isWithinWindowAfter, parseDateishToMs } from "@shared/util/time.ts";
+import {
+  dayDiff,
+  easternDateString,
+  isWithinDayWindow,
+  parseDateishToMs,
+} from "@shared/util/time.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
 export interface SaleMatchInput {
@@ -94,23 +99,39 @@ export async function processSaleMatches(
       continue;
     }
 
-    // Pick the candidate whose eventTime is the *most recent one before saleMs*
-    // and within the 7-day window. Falls back to "any candidate within window"
-    // if no past candidate exists.
+    // Pick the candidate that matches the day-level window. We compare
+    // calendar days in ET, not raw timestamps, so a same-day activation
+    // doesn't false-reject when the appointment is later in the day than
+    // midnight-UTC of the activation date.
     let best: ApptCandidate | null = null;
     let bestWithinDays = Infinity;
     for (const c of candidates) {
-      if (!isWithinWindowAfter(c.eventTimeMs, saleMs, SALE_MATCH_WINDOW_DAYS)) {
+      if (!isWithinDayWindow(c.eventTimeMs, saleMs, SALE_MATCH_WINDOW_DAYS)) {
         continue;
       }
-      const withinDays = (saleMs - c.eventTimeMs) / (24 * 60 * 60 * 1000);
-      if (withinDays >= 0 && withinDays < bestWithinDays) {
+      const d = dayDiff(c.eventTimeMs, saleMs);
+      if (d >= 0 && d < bestWithinDays) {
         best = c;
-        bestWithinDays = withinDays;
+        bestWithinDays = d;
       }
     }
 
-    if (!best) {
+    // Detailed per-phone log — only fires for phones that actually have
+    // appointment records (~hundreds at scale, not the full QB report).
+    // Lets you eyeball whether a near-miss should have matched.
+    const saleDay = easternDateString(new Date(saleMs));
+    const apptSummary = candidates
+      .slice(0, 5)
+      .map((c) => `${easternDateString(new Date(c.eventTimeMs))}(d=${dayDiff(c.eventTimeMs, saleMs)})`)
+      .join(",");
+    if (best) {
+      console.log(
+        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] → matched ${easternDateString(new Date(best.eventTimeMs))} (${bestWithinDays}d)`,
+      );
+    } else {
+      console.log(
+        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
+      );
       summary.skippedOlderThan7Days++;
       continue;
     }
