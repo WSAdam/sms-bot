@@ -1,5 +1,8 @@
 import { assertEquals } from "@std/assert";
-import { scheduledInjectionDocPath } from "@shared/firestore/paths.ts";
+import {
+  injectionHistoryDocPath,
+  scheduledInjectionDocPath,
+} from "@shared/firestore/paths.ts";
 import { setFirestoreClientForTests } from "@shared/firestore/wrapper.ts";
 import { processSaleMatches } from "@shared/services/sale-match/service.ts";
 import type { FutureInjection } from "@shared/types/injection.ts";
@@ -20,6 +23,16 @@ function seed(db: FirestoreMock, phone10: string, daysAgo: number) {
     scheduledAt: Date.now(),
   };
   db.docs.set(scheduledInjectionDocPath(phone10), { ...inj });
+}
+
+function seedHistory(db: FirestoreMock, phone10: string, daysAgo: number) {
+  const eventTime = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
+    .toISOString();
+  const firedAt = new Date().toISOString();
+  db.docs.set(
+    injectionHistoryDocPath(`${phone10}__${firedAt}`),
+    { phone: phone10, eventTime, firedAt, scheduledAt: Date.now() },
+  );
 }
 
 Deno.test("phone within 7-day window matches", async () => {
@@ -61,4 +74,25 @@ Deno.test("matched run writes both saleswithin7d and guestactivated docs", async
   const activated = await db.get("sms-bot/guestactivated/byPhone/9999999994");
   assertEquals(sale?.phone10, "9999999994");
   assertEquals(activated?.Activated, true);
+});
+
+Deno.test("phone with only injectionhistory entry (no pending) still matches", async () => {
+  const db = setup();
+  // No scheduledinjections doc — only an injectionhistory entry. This is the
+  // common case for phones whose appointment SMS already fired and got swept.
+  seedHistory(db, "9999999995", 3);
+  const r = await processSaleMatches([{ phone10: "9999999995" }]);
+  assertEquals(r.matched, 1);
+});
+
+Deno.test("phone with multiple history entries picks closest within window", async () => {
+  const db = setup();
+  // Two history entries: one 30d old (out of window), one 2d old (in window).
+  // The 2d entry should be picked.
+  seedHistory(db, "9999999996", 30);
+  seedHistory(db, "9999999996", 2);
+  const r = await processSaleMatches([{ phone10: "9999999996" }]);
+  assertEquals(r.matched, 1);
+  // withinDays should reflect the 2d match, not the 30d one
+  assertEquals(Math.round(r.matches[0].withinDays), 2);
 });
