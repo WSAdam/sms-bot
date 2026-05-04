@@ -576,6 +576,10 @@ ${sharedThemeCss}
 .stat-card.clickable{cursor:pointer;transition:transform .12s ease, filter .12s ease, border-color .12s ease}
 .stat-card.clickable:hover{transform:translateY(-2px);filter:brightness(1.02);border-color:rgba(25,195,125,.75)}
 .stat-card .hint{margin-top:10px;font-size:.78rem;color:rgba(152,166,173,.85)}
+.stat-card .explain{margin-top:10px;font-size:.78rem;line-height:1.45;color:rgba(152,166,173,.78);font-style:italic}
+.section-header{margin:6px 0 12px}
+.section-header h2{font-size:1.15rem;color:var(--silver);margin-bottom:4px}
+.section-header .section-desc{color:var(--muted2);font-size:.88rem;line-height:1.4}
 .kv-section{margin-bottom:16px}
 .kv-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px}
 
@@ -649,6 +653,10 @@ ${sharedThemeCss}
   <div id="error" class="error" style="display:none"></div>
 
   <div id="content" style="display:none">
+    <div class="section-header">
+      <h2>📈 Daily Activity</h2>
+      <p class="section-desc">SMS funnel for the date range above. Adjust the dates and Apply to scope these numbers.</p>
+    </div>
     <div class="stats-grid">
       <div class="stat-card clickable" id="textsSentCard" title="Click to view sent messages">
         <div style="display:flex;gap:16px">
@@ -657,12 +665,14 @@ ${sharedThemeCss}
             <div class="value" id="totalTexts">-</div>
             <div class="label">Total Texts</div>
             <div class="subvalue" id="totalTextsDetail">-</div>
+            <div class="explain">Every SMS exchanged in this range — both ours and replies.</div>
           </div>
           <div style="flex:1">
             <div class="icon">🚀</div>
             <div class="value" id="initialTexts">-</div>
             <div class="label">Initial Texts Sent</div>
             <div class="subvalue" id="initialTextsDetail">First message to guest</div>
+            <div class="explain">Distinct guests we reached out to (one per phone number).</div>
           </div>
         </div>
         <div class="hint">Click to drill in</div>
@@ -673,6 +683,7 @@ ${sharedThemeCss}
         <div class="value" id="peopleReplied">-</div>
         <div class="label">People Replied</div>
         <div class="subvalue" id="peopleRepliedDetail">-</div>
+        <div class="explain">Unique guests who sent at least one reply back to us in this range.</div>
         <div class="hint">Click to drill in</div>
       </div>
 
@@ -681,7 +692,51 @@ ${sharedThemeCss}
         <div class="value" id="appointmentsSet">-</div>
         <div class="label">Appointments Booked</div>
         <div class="subvalue" id="appointmentsSetDetail">-</div>
+        <div class="explain">Conversations where the bot tagged "appointment scheduled" in this range.</div>
         <div class="hint">Click to drill in</div>
+      </div>
+    </div>
+
+    <div class="section-header" style="margin-top:24px">
+      <h2>🏆 Lifetime Stats</h2>
+      <p class="section-desc">All-time totals across the entire history of the system. Independent of the date filter above.</p>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="icon">📅</div>
+        <div class="value" id="lifetimeAppointments">-</div>
+        <div class="label">Appointments Booked (lifetime)</div>
+        <div class="explain">Every appointment ever scheduled via the bot, all-time.</div>
+      </div>
+
+      <div class="stat-card clickable" id="activatedCard" title="Click to view activated guests">
+        <div class="icon">✅</div>
+        <div class="value" id="activatedCount">-</div>
+        <div class="label">Activated (lifetime)</div>
+        <div class="explain">Guests marked as a sale — either via the daily QB sale-match cron or manual /api/sales/record calls.</div>
+        <div class="hint">Click to drill in</div>
+      </div>
+
+      <div class="stat-card clickable" id="answeredCard" title="Click to view answered guests">
+        <div class="icon">📞</div>
+        <div class="value" id="answeredCount">-</div>
+        <div class="label">Answered (lifetime)</div>
+        <div class="explain">Guests who answered an inbound call from the dialer (POST /api/guests/answered).</div>
+        <div class="hint">Click to drill in</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="icon">💰</div>
+        <div class="value" id="lifetimeSalesMatched">-</div>
+        <div class="label">Sales Matched in Window</div>
+        <div class="explain">Activations that landed within the configured day-window of a scheduled appointment (currently 8 days). Source for the productivity report.</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="icon">👥</div>
+        <div class="value" id="lifetimeUniqueGuests">-</div>
+        <div class="label">Unique Guests Reached</div>
+        <div class="explain">Distinct phone numbers we've ever sent at least one SMS to. Watermark of the SMS audience.</div>
       </div>
 
       <div class="stat-card">
@@ -689,22 +744,7 @@ ${sharedThemeCss}
         <div class="value" id="totalKvEntries">-</div>
         <div class="label">Total SMS Records</div>
         <div class="subvalue" id="totalKvDetail">-</div>
-      </div>
-
-      <div class="stat-card clickable" id="activatedCard" title="Click to view activated guests">
-        <div class="icon">✅</div>
-        <div class="value" id="activatedCount">-</div>
-        <div class="label">Activated</div>
-        <div class="subvalue" id="activatedDetail">Guests marked as sale via SHA match</div>
-        <div class="hint">Click to drill in</div>
-      </div>
-
-      <div class="stat-card clickable" id="answeredCard" title="Click to view answered guests">
-        <div class="icon">📞</div>
-        <div class="value" id="answeredCount">-</div>
-        <div class="label">Answered</div>
-        <div class="subvalue" id="answeredDetail">Guests who answered the call</div>
-        <div class="hint">Click to drill in</div>
+        <div class="explain">Sum of every Firestore doc across all SMS-related collections (full breakdown below).</div>
       </div>
     </div>
 
@@ -925,9 +965,12 @@ function renderDashboard(data){
   document.getElementById("totalKvEntries").textContent = (data.stats.totalKvEntries || 0).toLocaleString();
   document.getElementById("totalKvDetail").textContent = Object.keys(data.kvBreakdown || {}).length + " data types";
 
-  // Activated + Answered counts
+  // Lifetime stats (date-filter-independent)
   document.getElementById("activatedCount").textContent = (data.stats.activatedCount || 0).toLocaleString();
   document.getElementById("answeredCount").textContent = (data.stats.answeredCount || 0).toLocaleString();
+  document.getElementById("lifetimeAppointments").textContent = (data.stats.lifetimeAppointmentsBooked || 0).toLocaleString();
+  document.getElementById("lifetimeSalesMatched").textContent = (data.stats.lifetimeSalesMatched || 0).toLocaleString();
+  document.getElementById("lifetimeUniqueGuests").textContent = (data.stats.lifetimeUniqueGuests || 0).toLocaleString();
 
   const breakdownBody = document.getElementById("kvBreakdown");
   breakdownBody.innerHTML = "";

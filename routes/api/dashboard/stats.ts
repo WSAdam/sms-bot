@@ -85,6 +85,14 @@ export const handler = define.handlers({
     }
     const initialTextsSent = phonesSeen.size;
 
+    // Lifetime appointments — same heuristic, no date filter.
+    let lifetimeAppointmentsBooked = 0;
+    for (const m of deduped) {
+      if ((m.nodeTag ?? "").toLowerCase().includes("appointment scheduled")) {
+        lifetimeAppointmentsBooked++;
+      }
+    }
+
     // Recent activity also needs dedupe (the user was seeing 4× of the same
     // line in the table). Don't apply the date filter here — recent activity
     // is intentionally a global "what's happening now" feed.
@@ -102,14 +110,19 @@ export const handler = define.handlers({
 
     return Response.json({
       stats: {
+        // Date-filtered (driven by Start/End Date pickers)
         textsSent: filtered.length,
         uniquePhonesSent: phonesSeen.size,
         initialTextsSent,
         peopleReplied: phonesReplied.size,
         appointmentsSet,
+        // Lifetime — date-filter-independent
         totalKvEntries: totalKv,
         activatedCount: breakdown.guestactivated?.count ?? 0,
         answeredCount: breakdown.guestanswered?.count ?? 0,
+        lifetimeAppointmentsBooked,
+        lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
+        lifetimeUniqueGuests: new Set(deduped.map((m) => m.phoneNumber)).size,
       },
       kvBreakdown: breakdown,
       recentEntries,
