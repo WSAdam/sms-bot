@@ -7,7 +7,7 @@ import { SALE_MATCH_WINDOW_DAYS } from "@shared/config/constants.ts";
 import {
   guestActivatedDocPath,
   salesWithin7dDocPath,
-  scheduledInjectionDocPath,
+  scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
 import {
   type FirestoreClient,
@@ -38,15 +38,24 @@ export async function processSaleMatches(
     matches: [],
   };
 
+  // Bulk-load scheduled injections once instead of doing one Firestore .get()
+  // per input phone. With 27k+ inputs from report 678, sequential reads blew
+  // through Deno Deploy's 60s request timeout. The injections collection is
+  // tiny (~4 docs today, low thousands at scale) so listing it once is cheap.
+  const injectionDocs = await client.list(scheduledInjectionsCollection, {
+    limit: 50_000,
+  });
+  const injMap = new Map<string, FutureInjection>(
+    injectionDocs.map((e) => [e.id, e.data as unknown as FutureInjection]),
+  );
+
   for (const { phone10, saleAt } of inputs) {
     if (phone10.length !== 10) {
       summary.skippedNoInjection++;
       continue;
     }
 
-    const inj = await client.get(scheduledInjectionDocPath(phone10)) as
-      | FutureInjection
-      | null;
+    const inj = injMap.get(phone10);
     if (!inj) {
       summary.skippedNoInjection++;
       continue;
