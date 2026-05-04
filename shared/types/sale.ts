@@ -22,7 +22,8 @@ export interface ActivateFromReportSummary {
     withinDays: number;
   }>;
   // Phones that had at least one appointment record but no candidate fell
-  // inside the 7-day window. Always included — small set, near-miss visibility.
+  // inside the configured window. Always included — small set, near-miss
+  // visibility.
   skippedInWindow: Array<{
     phone10: string;
     activatedAt: string;

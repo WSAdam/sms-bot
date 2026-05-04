@@ -35,7 +35,7 @@ function seedHistory(db: FirestoreMock, phone10: string, daysAgo: number) {
   );
 }
 
-Deno.test("phone within 7-day window matches", async () => {
+Deno.test("phone within window matches", async () => {
   const db = setup();
   seed(db, "9999999991", 1); // -1d
   const r = await processSaleMatches([{ phone10: "9999999991" }]);
@@ -44,16 +44,16 @@ Deno.test("phone within 7-day window matches", async () => {
   assertEquals(r.skippedOlderThan7Days, 0);
 });
 
-Deno.test("phone exactly at 7-day boundary still matches", async () => {
+Deno.test("phone exactly at window boundary still matches (8 days)", async () => {
   const db = setup();
-  seed(db, "9999999992", 7);
+  seed(db, "9999999992", 8);
   const r = await processSaleMatches([{ phone10: "9999999992" }]);
   assertEquals(r.matched, 1);
 });
 
-Deno.test("phone past 7 days is skipped", async () => {
+Deno.test("phone past window is skipped (9 days)", async () => {
   const db = setup();
-  seed(db, "9999999993", 8);
+  seed(db, "9999999993", 9);
   const r = await processSaleMatches([{ phone10: "9999999993" }]);
   assertEquals(r.matched, 0);
   assertEquals(r.skippedOlderThan7Days, 1);
