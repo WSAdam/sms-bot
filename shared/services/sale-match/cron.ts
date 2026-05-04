@@ -24,6 +24,7 @@ export interface DailyCronResult {
 export async function runDailyQbSaleMatch(
   reportId: string = QUICKBASE_BOOKINGS_REPORT_ID,
   tableId: string = QUICKBASE_BOOKINGS_TABLE_ID,
+  options: { verbose?: boolean } = {},
 ): Promise<DailyCronResult> {
   console.log(
     `[sale-match] starting: tableId=${tableId} reportId=${reportId}`,
@@ -71,6 +72,8 @@ export async function runDailyQbSaleMatch(
       phone10: r.phone10,
       ...(r.addedDate ? { saleAt: r.addedDate } : {}),
     })),
+    undefined,
+    { verbose: options.verbose },
   );
   console.log(
     `[sale-match] done: matched=${summary.matched} ` +

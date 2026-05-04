@@ -8,9 +8,11 @@ import { runDailyQbSaleMatch } from "@shared/services/sale-match/cron.ts";
 export const handler = define.handlers({
   async POST(ctx) {
     const body = await ctx.req.json().catch(() => null) as
-      | { reportId?: string; tableId?: string }
+      | { reportId?: string; tableId?: string; verbose?: boolean }
       | null;
-    const r = await runDailyQbSaleMatch(body?.reportId, body?.tableId);
+    const r = await runDailyQbSaleMatch(body?.reportId, body?.tableId, {
+      verbose: body?.verbose === true,
+    });
     if (!r.ok) {
       return Response.json(
         { success: false, reason: r.reason },

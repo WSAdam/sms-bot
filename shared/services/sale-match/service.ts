@@ -36,9 +36,14 @@ interface ApptCandidate {
   eventTimeMs: number;
 }
 
+export interface ProcessSaleMatchOptions {
+  verbose?: boolean; // include full skippedNoInjection list in response
+}
+
 export async function processSaleMatches(
   inputs: SaleMatchInput[],
   client: FirestoreClient = getFirestoreClient(),
+  options: ProcessSaleMatchOptions = {},
 ): Promise<ActivateFromReportSummary> {
   const summary: ActivateFromReportSummary = {
     success: true,
@@ -47,6 +52,8 @@ export async function processSaleMatches(
     skippedNoInjection: 0,
     skippedOlderThan7Days: 0,
     matches: [],
+    skippedInWindow: [],
+    ...(options.verbose ? { skippedNoInjectionList: [] } : {}),
   };
 
   // Bulk-load every known appointment for every phone — both pending
@@ -84,18 +91,30 @@ export async function processSaleMatches(
   for (const { phone10, saleAt } of inputs) {
     if (phone10.length !== 10) {
       summary.skippedNoInjection++;
+      summary.skippedNoInjectionList?.push({
+        phone10,
+        activatedAt: saleAt ?? "",
+      });
       continue;
     }
 
     const candidates = apptMap.get(phone10);
     if (!candidates || candidates.length === 0) {
       summary.skippedNoInjection++;
+      summary.skippedNoInjectionList?.push({
+        phone10,
+        activatedAt: saleAt ?? "",
+      });
       continue;
     }
 
     const saleMs = saleAt ? parseDateishToMs(saleAt) : Date.now();
     if (saleMs == null) {
       summary.skippedNoInjection++;
+      summary.skippedNoInjectionList?.push({
+        phone10,
+        activatedAt: saleAt ?? "",
+      });
       continue;
     }
 
@@ -133,6 +152,14 @@ export async function processSaleMatches(
         `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
       );
       summary.skippedOlderThan7Days++;
+      summary.skippedInWindow.push({
+        phone10,
+        activatedAt: new Date(saleMs).toISOString(),
+        candidates: candidates.map((c) => ({
+          appointmentAt: c.eventTime,
+          daysDiff: dayDiff(c.eventTimeMs, saleMs),
+        })),
+      });
       continue;
     }
 

@@ -3291,6 +3291,7 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <code class="path">/api/guests/activate-from-report</code>
         <div class="row">
           <label>reportId<input type="text" data-input="reportId" placeholder="number only — e.g. 678 — blank uses 530"></label>
+          <label class="checkbox-label"><input type="checkbox" data-input="verbose"> verbose (include all skippedNoInjection phones — large response)</label>
         </div>
         <div class="actions">
           <button onclick="runActivateFromReport(this)">Run cron</button>
@@ -3769,11 +3770,15 @@ async function runActivateFromReport(btn){
   // Strip "reportId=" prefix if user copy-pasted it; keep digits only.
   const raw = card.querySelector('[data-input="reportId"]').value.trim();
   const reportId = raw.replace(/^reportId\s*=\s*/i, "").replace(/\D/g, "");
+  const verbose = card.querySelector('[data-input="verbose"]').checked;
   if(!confirm("This pulls bookings from Quickbase report " + (reportId || "530 (default)") + " and writes saleswithin7d markers. Continue?")) return;
+  const body = {};
+  if(reportId) body.reportId = reportId;
+  if(verbose) body.verbose = true;
   await runRequest(card, {
     method: "POST", url: "/api/guests/activate-from-report",
     headers: { "content-type": "application/json" },
-    body: reportId ? { reportId } : {},
+    body,
   });
 }
 async function runListToday(btn){
