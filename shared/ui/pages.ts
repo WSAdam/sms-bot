@@ -2541,7 +2541,9 @@ async function fireInjection(phone, btn){
   try{
     const res = await fetch("/api/cron/trigger-single?phone=" + encodeURIComponent(phone));
     const data = await res.json();
-    if(res.ok && data.success){
+    // Backend (routes/api/cron/trigger-single.ts) returns
+    // { phone, fired: bool, error?: string } — no "success" field.
+    if(res.ok && data.fired){
       btn.textContent = "Fired!";
       btn.style.background = "var(--accent)";
       btn.style.color = "#08110e";
