@@ -5,9 +5,11 @@
 import { define } from "@/utils.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
 
 const APPT_KEYWORDS = ["appointment scheduled"];
+const LIST_LIMIT = 50_000;
 
 function isAppointmentMatch(msg: ConversationMessage): boolean {
   const tag = (msg.nodeTag ?? "").toLowerCase();
@@ -24,9 +26,12 @@ export const handler = define.handlers({
     const start = startDate ? new Date(`${startDate}T00:00:00`).getTime() : null;
     const end = endDate ? new Date(`${endDate}T23:59:59.999`).getTime() : null;
 
-    const all = await getFirestoreClient().list(conversationsCollection, { limit: 5000 });
-    const matches = all
-      .map((e) => e.data as unknown as ConversationMessage)
+    const all = await getFirestoreClient().list(conversationsCollection, {
+      limit: LIST_LIMIT,
+    });
+    const matches = dedupeMessages(
+      all.map((e) => e.data as unknown as ConversationMessage),
+    )
       .filter(isAppointmentMatch)
       .filter((m) => {
         const t = new Date(m.timestamp).getTime();

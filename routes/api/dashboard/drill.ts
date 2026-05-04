@@ -5,9 +5,11 @@
 import { define } from "@/utils.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
 
 const MAX_ITEMS = 500;
+const LIST_LIMIT = 50_000;
 
 export const handler = define.handlers({
   async GET(ctx) {
@@ -23,8 +25,14 @@ export const handler = define.handlers({
     const end = endDate ? new Date(`${endDate}T23:59:59-04:00`) : null;
 
     const all = await getFirestoreClient().list(conversationsCollection, {
-      limit: 5000,
+      limit: LIST_LIMIT,
     });
+
+    // Collapse historical Bland-pathway dupes before applying user filters,
+    // otherwise the same message shows up multiple times in a drill-in.
+    const deduped = dedupeMessages(
+      all.map((e) => e.data as unknown as ConversationMessage),
+    );
 
     const items: Array<{
       phoneNumber: string | null;
@@ -35,8 +43,7 @@ export const handler = define.handlers({
       timestamp: string | null;
     }> = [];
 
-    for (const e of all) {
-      const v = e.data as unknown as ConversationMessage;
+    for (const v of deduped) {
       const ts = v.timestamp ?? null;
 
       if (ts && (start || end)) {

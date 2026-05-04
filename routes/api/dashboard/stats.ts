@@ -5,6 +5,7 @@
 import { define } from "@/utils.ts";
 import { ROOT_COLLECTION } from "@shared/config/constants.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
 
 const PREFIXES = [
@@ -19,20 +20,38 @@ const PREFIXES = [
   ["leadpointer", "byPhone"],
 ] as const;
 
+// Bumped from 5,000 → 50,000 so we count past the historical-data cap.
+// Audit currently has ~37,715 docs; conversations ~7,077 + growth.
+const LIST_LIMIT = 50_000;
+
 interface BreakdownEntry {
   count: number;
   latest: string | null;
 }
 
 export const handler = define.handlers({
-  async GET() {
+  async GET(ctx) {
+    const url = new URL(ctx.req.url);
+    const startDate = url.searchParams.get("startDate");
+    const endDate = url.searchParams.get("endDate");
+
+    // Eastern-time day boundaries (mirrors drill.ts).
+    const startMs = startDate
+      ? new Date(`${startDate}T00:00:00-04:00`).getTime()
+      : null;
+    const endMs = endDate
+      ? new Date(`${endDate}T23:59:59-04:00`).getTime()
+      : null;
+
     const db = getFirestoreClient();
     const breakdown: Record<string, BreakdownEntry> = {};
     let totalKv = 0;
 
-    // Each container's docs
+    // Each container's docs (raw, no dedupe — these are storage stats).
     for (const [container, sub] of PREFIXES) {
-      const list = await db.list(`${ROOT_COLLECTION}/${container}/${sub}`, { limit: 5000 });
+      const list = await db.list(`${ROOT_COLLECTION}/${container}/${sub}`, {
+        limit: LIST_LIMIT,
+      });
       const latest = list
         .map((e) => extractTimestamp(e.data))
         .filter((t): t is string => !!t)
@@ -42,27 +61,38 @@ export const handler = define.handlers({
       totalKv += list.length;
     }
 
-    // Conversation-derived stats
-    const allMessages = await db.list(`${ROOT_COLLECTION}/conversations/messages`, {
-      limit: 5000,
-    });
+    // Conversation-derived stats: dedupe + date-filter before counting.
+    const allMessages = await db.list(
+      `${ROOT_COLLECTION}/conversations/messages`,
+      { limit: LIST_LIMIT },
+    );
+    const allMsgs = allMessages.map((e) =>
+      e.data as unknown as ConversationMessage
+    );
+    const deduped = dedupeMessages(allMsgs);
+    const filtered = inWindow(deduped, startMs, endMs);
+
     const phonesSeen = new Set<string>();
     const phonesReplied = new Set<string>();
-    let initialTextsSent = 0;
     let appointmentsSet = 0;
 
-    for (const e of allMessages) {
-      const m = e.data as unknown as ConversationMessage;
+    for (const m of filtered) {
       phonesSeen.add(m.phoneNumber);
       if (m.sender === "Guest") phonesReplied.add(m.phoneNumber);
       if ((m.nodeTag ?? "").toLowerCase().includes("appointment scheduled")) {
         appointmentsSet++;
       }
     }
-    initialTextsSent = phonesSeen.size;
+    const initialTextsSent = phonesSeen.size;
 
-    const recentEntries = allMessages
-      .map((e) => ({ key: ["conversations", e.id], value: e.data }))
+    // Recent activity also needs dedupe (the user was seeing 4× of the same
+    // line in the table). Don't apply the date filter here — recent activity
+    // is intentionally a global "what's happening now" feed.
+    const recentEntries = deduped
+      .map((m) => ({
+        key: ["conversations", `${m.phoneNumber}__${m.callId}__${m.timestamp}`],
+        value: m as unknown as Record<string, unknown>,
+      }))
       .sort((a, b) => {
         const ta = extractTimestamp(a.value) ?? "";
         const tb = extractTimestamp(b.value) ?? "";
@@ -72,7 +102,7 @@ export const handler = define.handlers({
 
     return Response.json({
       stats: {
-        textsSent: allMessages.length,
+        textsSent: filtered.length,
         uniquePhonesSent: phonesSeen.size,
         initialTextsSent,
         peopleReplied: phonesReplied.size,
@@ -86,6 +116,21 @@ export const handler = define.handlers({
     });
   },
 });
+
+function inWindow(
+  msgs: ConversationMessage[],
+  startMs: number | null,
+  endMs: number | null,
+): ConversationMessage[] {
+  if (startMs == null && endMs == null) return msgs;
+  return msgs.filter((m) => {
+    const t = m.timestamp ? new Date(m.timestamp).getTime() : NaN;
+    if (!Number.isFinite(t)) return false;
+    if (startMs != null && t < startMs) return false;
+    if (endMs != null && t > endMs) return false;
+    return true;
+  });
+}
 
 function extractTimestamp(v: Record<string, unknown>): string | null {
   if (typeof v.timestamp === "string") return v.timestamp;
