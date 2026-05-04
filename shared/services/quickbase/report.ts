@@ -49,21 +49,48 @@ export async function realGetReport(
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-// Field 48 in the bookings report is a phone like "(936) 676-2277".
-// Field -1 is the date the row was added (YYYY-MM-DD).
 export interface BookingRow {
   phone10: string;
   phoneRaw: string;
   addedDate: string | null;
 }
 
-export function normalizeBookingRows(
+// Auto-detect phone + date column IDs from the report's fields metadata.
+// Different QB reports use different field IDs (e.g. 530: phone=48 date=-1,
+// 678: phone=-1 date=8), so we can't hardcode them. Falls back to the
+// report-530 IDs only when no field metadata is present (legacy callers).
+import type { QuickbaseField } from "@shared/services/quickbase/client.ts";
+
+function findPhoneField(fields: QuickbaseField[]): QuickbaseField | undefined {
+  return fields.find((f) => (f.type ?? "").toLowerCase() === "phone") ??
+    fields.find((f) => /phone/i.test(f.label ?? ""));
+}
+
+function findDateField(fields: QuickbaseField[]): QuickbaseField | undefined {
+  return fields.find((f) => (f.type ?? "").toLowerCase() === "date") ??
+    fields.find((f) => /date|added|arrival|activated/i.test(f.label ?? ""));
+}
+
+export interface NormalizationResult {
+  rows: BookingRow[];
+  phoneFieldId: string;
+  dateFieldId: string | null;
+}
+
+export function normalizeBookingRowsDetailed(
   resp: QuickbaseReportResponse,
-): BookingRow[] {
+): NormalizationResult {
+  const fields = resp.fields ?? [];
+  const phoneF = findPhoneField(fields);
+  const dateF = findDateField(fields);
+  // Fall back to report-530 schema if metadata is absent.
+  const phoneKey = phoneF ? String(phoneF.id) : "48";
+  const dateKey = dateF ? String(dateF.id) : "-1";
+
   const rows: BookingRow[] = [];
   for (const r of resp.data ?? []) {
-    const rawPhone = (r["48"] ?? r[48 as unknown as string])?.value;
-    const addedRaw = (r["-1"] ?? r[-1 as unknown as string])?.value;
+    const rawPhone = r[phoneKey]?.value;
+    const addedRaw = r[dateKey]?.value;
     if (typeof rawPhone !== "string") continue;
     const digits = rawPhone.replace(/\D/g, "");
     if (digits.length < 10) continue;
@@ -73,5 +100,12 @@ export function normalizeBookingRows(
       addedDate: typeof addedRaw === "string" ? addedRaw : null,
     });
   }
-  return rows;
+  return { rows, phoneFieldId: phoneKey, dateFieldId: dateF ? dateKey : null };
+}
+
+// Backwards-compat alias for the existing call sites + tests.
+export function normalizeBookingRows(
+  resp: QuickbaseReportResponse,
+): BookingRow[] {
+  return normalizeBookingRowsDetailed(resp).rows;
 }

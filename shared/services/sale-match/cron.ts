@@ -11,7 +11,7 @@ import {
   QUICKBASE_BOOKINGS_TABLE_ID,
 } from "@shared/config/constants.ts";
 import { getQuickbaseClient } from "@shared/services/quickbase/client.ts";
-import { normalizeBookingRows } from "@shared/services/quickbase/report.ts";
+import { normalizeBookingRowsDetailed } from "@shared/services/quickbase/report.ts";
 import { processSaleMatches } from "@shared/services/sale-match/service.ts";
 import type { ActivateFromReportSummary } from "@shared/types/sale.ts";
 
@@ -38,12 +38,23 @@ export async function runDailyQbSaleMatch(
   const rawCount = report.data?.length ?? 0;
   console.log(
     `[sale-match] QB returned ${rawCount} raw rows, fields=${
-      (report.fields ?? []).map((f) => `${f.id}:${f.label}`).join(",") || "(none)"
+      (report.fields ?? [])
+        .map((f) => `${f.id}:${f.label}(${f.type ?? "?"})`)
+        .join(",") || "(none)"
     }`,
   );
-  const rows = normalizeBookingRows(report);
+  if (rawCount > 0) {
+    console.log(
+      `[sale-match] raw row[0]: ${
+        JSON.stringify(report.data[0]).slice(0, 400)
+      }`,
+    );
+  }
+  const { rows, phoneFieldId, dateFieldId } = normalizeBookingRowsDetailed(
+    report,
+  );
   console.log(
-    `[sale-match] normalized to ${rows.length} usable phones (dropped ${rawCount - rows.length})`,
+    `[sale-match] using phoneFieldId=${phoneFieldId} dateFieldId=${dateFieldId ?? "(none)"} → ${rows.length} usable phones (dropped ${rawCount - rows.length})`,
   );
   if (rows.length > 0) {
     const sample = rows.slice(0, 3).map((r) =>

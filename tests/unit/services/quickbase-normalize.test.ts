@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
   normalizeBookingRows,
+  normalizeBookingRowsDetailed,
 } from "@shared/services/quickbase/report.ts";
 import type { QuickbaseReportResponse } from "@shared/services/quickbase/client.ts";
 
@@ -47,4 +48,50 @@ Deno.test("normalizeBookingRows handles 11-digit (with country code) phones", ()
   };
   const rows = normalizeBookingRows(resp);
   assertEquals(rows[0].phone10, "9366762277");
+});
+
+Deno.test("normalizeBookingRowsDetailed auto-detects fields by type (report 678)", () => {
+  // Report 678 schema: phone in field -1, arrival date in field 8
+  const resp: QuickbaseReportResponse = {
+    fields: [
+      { id: -1, label: "Phone", type: "phone" },
+      { id: 8, label: "Arrival Date", type: "date" },
+    ],
+    data: [
+      {
+        "-1": { value: "(936) 676-2277" },
+        "8": { value: "2026-04-20" },
+      },
+    ],
+  };
+  const result = normalizeBookingRowsDetailed(resp);
+  assertEquals(result.phoneFieldId, "-1");
+  assertEquals(result.dateFieldId, "8");
+  assertEquals(result.rows.length, 1);
+  assertEquals(result.rows[0].phone10, "9366762277");
+  assertEquals(result.rows[0].addedDate, "2026-04-20");
+});
+
+Deno.test("normalizeBookingRowsDetailed falls back to label match when type missing", () => {
+  const resp: QuickbaseReportResponse = {
+    fields: [
+      { id: 99, label: "Phone Number", type: "text" },
+      { id: 100, label: "Date Activated", type: "text" },
+    ],
+    data: [{ "99": { value: "555-123-4567" }, "100": { value: "2026-04-01" } }],
+  };
+  const result = normalizeBookingRowsDetailed(resp);
+  assertEquals(result.phoneFieldId, "99");
+  assertEquals(result.dateFieldId, "100");
+  assertEquals(result.rows[0].phone10, "5551234567");
+});
+
+Deno.test("normalizeBookingRowsDetailed falls back to legacy 48/-1 when no metadata", () => {
+  const resp: QuickbaseReportResponse = {
+    data: [{ "48": { value: "(555) 999-1234" }, "-1": { value: "2026-04-01" } }],
+  };
+  const result = normalizeBookingRowsDetailed(resp);
+  assertEquals(result.phoneFieldId, "48");
+  assertEquals(result.dateFieldId, null);
+  assertEquals(result.rows[0].phone10, "5559991234");
 });
