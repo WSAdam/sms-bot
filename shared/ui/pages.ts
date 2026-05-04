@@ -702,11 +702,12 @@ ${sharedThemeCss}
       <p class="section-desc">All-time totals across the entire history of the system. Independent of the date filter above.</p>
     </div>
     <div class="stats-grid">
-      <div class="stat-card">
+      <div class="stat-card clickable" id="lifetimeAppointmentsCard" title="Click to view every appointment all-time">
         <div class="icon">📅</div>
         <div class="value" id="lifetimeAppointments">-</div>
         <div class="label">Appointments Booked (lifetime)</div>
         <div class="explain">Every appointment ever scheduled via the bot, all-time.</div>
+        <div class="hint">Click to drill in</div>
       </div>
 
       <div class="stat-card clickable" id="activatedCard" title="Click to view activated guests">
@@ -1078,11 +1079,24 @@ document.addEventListener("keydown", (e) => { if(e.key === "Escape" && overlay.c
 
 document.getElementById("appointmentsCard").addEventListener("click", () => {
   apptPage = 1;
+  apptLifetime = false;
   openOverlay();
   loadAppointments(apptPage);
 });
 
+document.getElementById("lifetimeAppointmentsCard").addEventListener("click", () => {
+  apptPage = 1;
+  apptLifetime = true;
+  openOverlay();
+  loadAppointments(apptPage);
+});
+
+let apptLifetime = false;
+
 function getCurrentFiltersForAppointments(){
+  if(apptLifetime){
+    return { startDate: "", endDate: "", prefixFilter: "" };
+  }
   const startDate = document.getElementById("startDate").value;
   const endDate = document.getElementById("endDate").value;
   const prefixFilter = document.getElementById("prefixFilter").value;
