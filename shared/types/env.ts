@@ -27,6 +27,9 @@ export interface AppEnv {
   rmUser: string | null;
   rmPass: string | null;
 
+  // Throttling
+  globalDailySmsCap: number;
+
   // Runtime
   isDeploy: boolean;
 }
@@ -45,4 +48,5 @@ export type EnvKey =
   | "QUICKBASE_USER_TOKEN"
   | "QUICKBASE_FAIL_OPEN"
   | "RM_USER"
-  | "RM_PASS";
+  | "RM_PASS"
+  | "GLOBAL_DAILY_SMS_CAP";

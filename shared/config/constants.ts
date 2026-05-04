@@ -40,7 +40,11 @@ export const CAL_HOLDING_CAMPAIGN_ID = "ODR_APPT_HOLDING";
 export const POSTMARK_FROM_ADDRESS = "notifications@monsterrg.com";
 export const POSTMARK_DEFAULT_TO = "adamp@monsterrg.com";
 
-// Throttling
+// Throttling. GLOBAL_DAILY_SMS_CAP is the *fallback*; the live ceiling is
+// loadEnv().globalDailySmsCap, which reads the GLOBAL_DAILY_SMS_CAP env var.
+// Set GLOBAL_DAILY_SMS_CAP in env/local (or Deno Deploy settings) to override
+// without a code change — useful for staged rollouts (e.g. =10 today, =50
+// tomorrow). Falls back to this 100 if the env var is unset or invalid.
 export const GLOBAL_DAILY_SMS_CAP = 100;
 export const RATE_LIMIT_WINDOW_DAYS = 30;
 export const ATTEMPTS_GATEKEEPER_THRESHOLD = 40;

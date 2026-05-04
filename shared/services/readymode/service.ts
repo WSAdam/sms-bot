@@ -8,7 +8,6 @@
 import {
   ATTEMPTS_GATEKEEPER_THRESHOLD,
   BLAND_AGENT_NUMBER,
-  GLOBAL_DAILY_SMS_CAP,
 } from "@shared/config/constants.ts";
 import { loadEnv } from "@shared/config/env.ts";
 import {
@@ -129,10 +128,15 @@ export async function processInboundLead(
     return { status: "skipped", reason: "Insufficient attempts", attempts };
   }
 
-  // Gatekeeper 2: global daily cap
+  // Gatekeeper 2: global daily cap (env-overridable so Adam can set
+  // GLOBAL_DAILY_SMS_CAP=10 in env/local for staged rollout testing).
   if (!isOverride) {
+    const cap = loadEnv().globalDailySmsCap;
     const dailyCount = await getGlobalDailyCount(client);
-    if (dailyCount >= GLOBAL_DAILY_SMS_CAP) {
+    if (dailyCount >= cap) {
+      console.log(
+        `[trigger] ⛔ daily cap reached: ${dailyCount}/${cap} — skipped`,
+      );
       return { status: "skipped", reason: "Global Daily Limit Reached" };
     }
   }

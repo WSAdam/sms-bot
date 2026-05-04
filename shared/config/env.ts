@@ -1,6 +1,7 @@
 import {
   BLAND_DEFAULT_PATHWAY_ID,
   BLAND_DEFAULT_PATHWAY_VERSION,
+  GLOBAL_DAILY_SMS_CAP,
 } from "@shared/config/constants.ts";
 import type { AppEnv, EnvKey } from "@shared/types/env.ts";
 
@@ -66,10 +67,26 @@ export function loadEnv(): AppEnv {
     rmUser: read("RM_USER"),
     rmPass: read("RM_PASS"),
 
+    globalDailySmsCap: parseIntOr(
+      read("GLOBAL_DAILY_SMS_CAP"),
+      GLOBAL_DAILY_SMS_CAP,
+    ),
+
     isDeploy,
   };
 
+  console.log(
+    `[env] loaded: globalDailySmsCap=${cached.globalDailySmsCap}` +
+      (read("GLOBAL_DAILY_SMS_CAP") ? " (from env)" : " (default)"),
+  );
+
   return cached;
+}
+
+function parseIntOr(v: string | null, fallback: number): number {
+  if (v == null) return fallback;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 export function resetEnvForTests(): void {
