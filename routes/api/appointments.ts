@@ -3,6 +3,7 @@
 // a date range.
 
 import { define } from "@/utils.ts";
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
@@ -30,7 +31,9 @@ export const handler = define.handlers({
       limit: LIST_LIMIT,
     });
     const matches = dedupeMessages(
-      all.map((e) => e.data as unknown as ConversationMessage),
+      all
+        .map((e) => e.data as unknown as ConversationMessage)
+        .filter((m) => !isExcludedFromReporting(m.phoneNumber)),
     )
       .filter(isAppointmentMatch)
       .filter((m) => {

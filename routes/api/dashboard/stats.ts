@@ -3,7 +3,10 @@
 // these reads get expensive; consider precomputing into a `stats` doc later.
 
 import { define } from "@/utils.ts";
-import { ROOT_COLLECTION } from "@shared/config/constants.ts";
+import {
+  isExcludedFromReporting,
+  ROOT_COLLECTION,
+} from "@shared/config/constants.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
@@ -19,6 +22,26 @@ const PREFIXES = [
   ["injectionhistory", "byPhone"],
   ["leadpointer", "byPhone"],
 ] as const;
+
+// Per-phone collections — doc ID encodes a phone10 (sometimes prefixed onto
+// other parts via "__"). For these we drop excluded phones from counts.
+// audit/auditstage/conversations are not per-phone and stay raw.
+const PER_PHONE_CONTAINERS = new Set<string>([
+  "scheduledinjections",
+  "smsflowcontext",
+  "guestactivated",
+  "guestanswered",
+  "saleswithin7d",
+  "injectionhistory",
+  "leadpointer",
+]);
+
+function docIdToPhone10(id: string): string {
+  // Most per-phone docs: id IS the phone10. injectionhistory uses
+  // `${phone10}__${firedAt}` — split on "__" and take the first part.
+  const idx = id.indexOf("__");
+  return idx >= 0 ? id.slice(0, idx) : id;
+}
 
 // Bumped from 5,000 → 50,000 so we count past the historical-data cap.
 // Audit currently has ~37,715 docs; conversations ~7,077 + growth.
@@ -47,28 +70,34 @@ export const handler = define.handlers({
     const breakdown: Record<string, BreakdownEntry> = {};
     let totalKv = 0;
 
-    // Each container's docs (raw, no dedupe — these are storage stats).
+    // Each container's docs. For per-phone containers, exclude test phones
+    // from the count so dashboard totals don't reflect Adam's own SMS traffic.
+    // audit/auditstage/conversations are NOT filtered here — they're raw
+    // storage counts (the conversations stat is derived separately below).
     for (const [container, sub] of PREFIXES) {
       const list = await db.list(`${ROOT_COLLECTION}/${container}/${sub}`, {
         limit: LIST_LIMIT,
       });
-      const latest = list
+      const filteredList = PER_PHONE_CONTAINERS.has(container)
+        ? list.filter((e) => !isExcludedFromReporting(docIdToPhone10(e.id)))
+        : list;
+      const latest = filteredList
         .map((e) => extractTimestamp(e.data))
         .filter((t): t is string => !!t)
         .sort()
         .pop() ?? null;
-      breakdown[container] = { count: list.length, latest };
-      totalKv += list.length;
+      breakdown[container] = { count: filteredList.length, latest };
+      totalKv += filteredList.length;
     }
 
-    // Conversation-derived stats: dedupe + date-filter before counting.
+    // Conversation-derived stats: dedupe + drop excluded phones + date-filter.
     const allMessages = await db.list(
       `${ROOT_COLLECTION}/conversations/messages`,
       { limit: LIST_LIMIT },
     );
-    const allMsgs = allMessages.map((e) =>
+    const allMsgs = (allMessages.map((e) =>
       e.data as unknown as ConversationMessage
-    );
+    )).filter((m) => !isExcludedFromReporting(m.phoneNumber));
     const deduped = dedupeMessages(allMsgs);
     const filtered = inWindow(deduped, startMs, endMs);
 

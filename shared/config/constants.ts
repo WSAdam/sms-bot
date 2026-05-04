@@ -52,6 +52,18 @@ export const ATTEMPTS_GATEKEEPER_THRESHOLD = 40;
 // source of truth for the window math.
 export const SALE_MATCH_WINDOW_DAYS = 8;
 
+// Phones excluded from dashboard reporting. Test traffic on these numbers
+// shouldn't inflate Total Texts, People Replied, Appointments Booked, etc.
+// Storage breakdown counts for raw collections (audit, conversations) are
+// NOT filtered — those reflect physical Firestore size. Lifetime per-phone
+// counts (activated/answered/sales) DO subtract these phones.
+export const EXCLUDED_REPORTING_PHONES = new Set<string>([
+  "8432222986", // Adam's test phone
+]);
+export function isExcludedFromReporting(phone10: string): boolean {
+  return EXCLUDED_REPORTING_PHONES.has(phone10);
+}
+
 // Firestore
 export const ROOT_COLLECTION = "sms-bot";
 

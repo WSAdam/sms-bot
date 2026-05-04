@@ -3,6 +3,7 @@
 // Response shape matches the legacy main.ts: { items: [...], count }.
 
 import { define } from "@/utils.ts";
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
@@ -28,10 +29,13 @@ export const handler = define.handlers({
       limit: LIST_LIMIT,
     });
 
-    // Collapse historical Bland-pathway dupes before applying user filters,
-    // otherwise the same message shows up multiple times in a drill-in.
+    // Collapse historical Bland-pathway dupes + drop test-phone traffic
+    // before applying user filters. Otherwise drill-ins surface duplicate
+    // rows and inflate counts with Adam's own test SMS.
     const deduped = dedupeMessages(
-      all.map((e) => e.data as unknown as ConversationMessage),
+      all
+        .map((e) => e.data as unknown as ConversationMessage)
+        .filter((m) => !isExcludedFromReporting(m.phoneNumber)),
     );
 
     const items: Array<{
