@@ -18,6 +18,7 @@ export interface ActivateFromReportSummary {
   matches: Array<{
     phone10: string;
     appointmentAt: string;
+    activatedAt: string;
     withinDays: number;
   }>;
 }

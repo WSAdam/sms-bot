@@ -161,6 +161,7 @@ export async function processSaleMatches(
     summary.matches.push({
       phone10,
       appointmentAt: best.eventTime,
+      activatedAt: marker.saleAt,
       withinDays: bestWithinDays,
     });
   }
