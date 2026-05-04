@@ -733,19 +733,21 @@ ${sharedThemeCss}
         <div class="explain">Activations that landed within the configured day-window of a scheduled appointment (currently 8 days). Source for the productivity report.</div>
       </div>
 
-      <div class="stat-card">
+      <div class="stat-card clickable" id="lifetimeUniqueGuestsCard" title="Click to view every guest we've messaged">
         <div class="icon">👥</div>
         <div class="value" id="lifetimeUniqueGuests">-</div>
         <div class="label">Unique Guests Reached</div>
         <div class="explain">Distinct phone numbers we've ever sent at least one SMS to. Watermark of the SMS audience.</div>
+        <div class="hint">Click to drill in</div>
       </div>
 
-      <div class="stat-card">
+      <div class="stat-card clickable" id="totalKvRecordsCard" title="Jump to the per-collection breakdown">
         <div class="icon">🗄️</div>
         <div class="value" id="totalKvEntries">-</div>
         <div class="label">Total SMS Records</div>
         <div class="subvalue" id="totalKvDetail">-</div>
         <div class="explain">Sum of every Firestore doc across all SMS-related collections (full breakdown below).</div>
+        <div class="hint">Click to jump to breakdown ↓</div>
       </div>
     </div>
 
@@ -1540,6 +1542,45 @@ document.getElementById("answeredCard").addEventListener("click", async function
     drillLoading.style.display = "none";
     drillError.textContent = String(err.message || err);
     drillError.style.display = "block";
+  }
+});
+
+// Unique Guests Reached drill-in (lifetime). Hits /api/guests/list which
+// builds the per-phone summary (firstSeen/lastSeen/messageCount/replied).
+document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", async function(){
+  drillReset();
+  drillTitle.textContent = "Unique Guests Reached (lifetime)";
+  drillSubtitle.textContent = "Distinct phone numbers we've sent at least one SMS to (test phones excluded). Sorted most-recent contact first.";
+  openDrill();
+  drillLoading.style.display = "block";
+  try{
+    const res = await fetch("/api/guests/list?page=1&pageSize=500");
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || "Failed");
+    drillLoading.style.display = "none";
+    renderDrillTable(data.items || [], [
+      { label: "Phone", render: function(m){ return phoneLink(m.phoneNumber); } },
+      { label: "Messages", render: function(m){ return '<span style="font-weight:900">' + m.messageCount + '</span>'; } },
+      { label: "Replies", render: function(m){ return m.replyCount; }, cls: "muted" },
+      { label: "Replied?", render: function(m){ return m.hasReplied ? '<span class="badge ok">Yes</span>' : '<span class="muted">No</span>'; } },
+      { label: "First Seen", render: function(m){ return escapeHtml(formatTimestamp(m.firstSeen)); }, cls: "muted" },
+      { label: "Last Seen", render: function(m){ return escapeHtml(formatTimestamp(m.lastSeen)); }, cls: "muted" }
+    ]);
+    drillSubtitle.textContent += " — showing " + (data.items || []).length + " of " + (data.total || 0);
+  } catch(err){
+    drillLoading.style.display = "none";
+    drillError.textContent = String(err.message || err);
+    drillError.style.display = "block";
+  }
+});
+
+// Total SMS Records → scroll to the breakdown table that's already on the page.
+document.getElementById("totalKvRecordsCard").addEventListener("click", function(){
+  const el = document.querySelector(".kv-section");
+  if(el){
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.style.outline = "2px solid var(--accent)";
+    setTimeout(function(){ el.style.outline = ""; }, 1500);
   }
 });
 

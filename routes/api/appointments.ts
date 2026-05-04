@@ -22,7 +22,11 @@ export const handler = define.handlers({
     const url = new URL(ctx.req.url);
     const startDate = url.searchParams.get("startDate");
     const endDate = url.searchParams.get("endDate");
-    const limit = Number(url.searchParams.get("limit") ?? 100);
+    const page = Math.max(1, Number(url.searchParams.get("page") ?? 1));
+    const pageSize = Math.max(
+      1,
+      Math.min(500, Number(url.searchParams.get("pageSize") ?? 50)),
+    );
 
     const start = startDate ? new Date(`${startDate}T00:00:00`).getTime() : null;
     const end = endDate ? new Date(`${endDate}T23:59:59.999`).getTime() : null;
@@ -30,7 +34,7 @@ export const handler = define.handlers({
     const all = await getFirestoreClient().list(conversationsCollection, {
       limit: LIST_LIMIT,
     });
-    const matches = dedupeMessages(
+    const allMatches = dedupeMessages(
       all
         .map((e) => e.data as unknown as ConversationMessage)
         .filter((m) => !isExcludedFromReporting(m.phoneNumber)),
@@ -43,9 +47,20 @@ export const handler = define.handlers({
         if (end && t > end) return false;
         return true;
       })
-      .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
-      .slice(0, limit);
+      .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
 
-    return Response.json({ count: matches.length, matches });
+    const total = allMatches.length;
+    const items = allMatches.slice((page - 1) * pageSize, page * pageSize);
+
+    // Both `items`/`total` (frontend dashboard expects these) and
+    // `matches`/`count` (legacy clients) are returned for compatibility.
+    return Response.json({
+      items,
+      total,
+      page,
+      pageSize,
+      matches: items,
+      count: total,
+    });
   },
 });
