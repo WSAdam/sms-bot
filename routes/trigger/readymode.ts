@@ -6,30 +6,40 @@ import { processInboundLead } from "@shared/services/readymode/service.ts";
 export const handler = define.handlers({
   async POST(ctx) {
     const url = new URL(ctx.req.url);
-    const body = await ctx.req.json().catch(() => ({}));
+
+    // Read the raw body BEFORE parsing so we can dump it on rejection.
+    // Once consumed, .text() can't be called again, so we parse JSON from
+    // the string we already have.
+    const rawBody = await ctx.req.text().catch(() => "");
+    let body: unknown = {};
+    try {
+      body = rawBody ? JSON.parse(rawBody) : {};
+    } catch {
+      body = {};
+    }
+
     const queryObj: Record<string, string> = {};
     for (const [k, v] of url.searchParams.entries()) queryObj[k] = v;
 
     const merged = { ...queryObj, ...(body as Record<string, unknown>) };
 
-    // Fast-path reject for empty payloads. ReadyMode was hammering this
-    // endpoint with empty {} bodies (probably non-lead events or unfilled
-    // URL templates) and our 200 + 4 log lines per request masked the issue.
-    // One short log + 400 lets the dialer know to stop retrying and keeps
-    // the deploy logs scannable.
     const hasPhone = !!(
       merged.phone || merged.primaryPhone || merged.Phone
     );
+
     if (!hasPhone) {
-      const h = ctx.req.headers;
-      const ua = h.get("user-agent") ?? "(none)";
-      const fwd = h.get("x-forwarded-for") ?? h.get("x-real-ip") ?? "(none)";
-      const origin = h.get("origin") ?? h.get("referer") ?? "(none)";
-      const host = h.get("host") ?? "(none)";
+      // Dump EVERYTHING so we can identify the source. Headers, raw body,
+      // query string, full URL — no filtering.
+      const headers: Record<string, string> = {};
+      for (const [k, v] of ctx.req.headers.entries()) headers[k] = v;
       console.warn(
-        `[trigger] ❌ rejecting empty/no-phone request — keys=${
-          Object.keys(merged).join(",") || "(none)"
-        } UA="${ua}" IP=${fwd} origin=${origin} host=${host}`,
+        `[trigger] ❌ rejecting empty/no-phone request — FULL REQUEST DUMP:\n` +
+          `  url       = ${ctx.req.url}\n` +
+          `  method    = ${ctx.req.method}\n` +
+          `  query     = ${JSON.stringify(queryObj)}\n` +
+          `  rawBody   = ${rawBody.length > 0 ? rawBody : "(empty)"}\n` +
+          `  parsedBody= ${JSON.stringify(body)}\n` +
+          `  headers   = ${JSON.stringify(headers, null, 2)}`,
       );
       return Response.json(
         { status: "error", message: "Missing phone number" },
@@ -38,8 +48,6 @@ export const handler = define.handlers({
     }
 
     const r = await processInboundLead(merged);
-    // Map service-level errors to 4xx so the caller can see the difference
-    // between accepted+skipped (200) and outright rejected (4xx).
     const status = r.status === "error" ? 400 : 200;
     return Response.json(r, { status });
   },
