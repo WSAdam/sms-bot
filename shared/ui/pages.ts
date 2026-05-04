@@ -743,7 +743,7 @@ ${sharedThemeCss}
         <div class="icon">⏱️</div>
         <div class="value" id="lifetimeOutsideWindow">-</div>
         <div class="label">Activations Outside Window</div>
-        <div class="explain">Activations that DID have a scheduled appointment with us, but the activation landed outside the configured day-window (currently 8 days). These are guests who came in on their own — outside our reminder timing.</div>
+        <div class="explain">Activations that DID have a scheduled appointment with us, but the activation landed outside the configured day-window (currently 7 days). These are guests who came in on their own — outside our reminder timing.</div>
         <div class="hint">Click to drill in</div>
       </div>
 
@@ -1370,18 +1370,23 @@ function drillReset(){
   drillCountChip.textContent = "0";
 }
 
-// Sortable + sticky-header drill table. State is kept in module scope so
-// header click handlers can re-render without re-fetching data.
+// Sortable + paginated + sticky-header drill table. State is kept in module
+// scope so header/pager clicks can re-render without re-fetching data.
+// Sort applies to the FULL items array, then we slice for pagination so the
+// ranking is consistent across pages.
 var _drillItems = [];
 var _drillColumns = [];
-var _drillSortIdx = -1;     // index into columns
-var _drillSortDir = "asc";   // "asc" | "desc"
+var _drillSortIdx = -1;       // index into columns
+var _drillSortDir = "asc";    // "asc" | "desc"
+var _drillPage = 1;           // 1-indexed
+var _drillPageSize = 100;     // pager only renders when items > pageSize
 
 function renderDrillTable(items, columns){
   _drillItems = items || [];
   _drillColumns = columns;
   _drillSortIdx = -1;
   _drillSortDir = "asc";
+  _drillPage = 1;
   _renderDrillTableBody();
 }
 
@@ -1391,9 +1396,7 @@ function _renderDrillTableBody(){
     drillContent.innerHTML = "";
     return;
   }
-  drillCountChip.textContent = _drillItems.length.toLocaleString() + " entries";
-  // Sort: each column can supply sortKey(item) -> string|number for custom
-  // sorting, otherwise we fall back to item[col.key] (string compare).
+  // Sort the FULL set first.
   var sorted = _drillItems.slice();
   if(_drillSortIdx >= 0){
     var col = _drillColumns[_drillSortIdx];
@@ -1408,6 +1411,15 @@ function _renderDrillTableBody(){
     });
     if(_drillSortDir === "desc") sorted.reverse();
   }
+  // Slice for pagination.
+  var totalPages = Math.max(1, Math.ceil(sorted.length / _drillPageSize));
+  if(_drillPage > totalPages) _drillPage = totalPages;
+  var start = (_drillPage - 1) * _drillPageSize;
+  var pageSlice = sorted.slice(start, start + _drillPageSize);
+
+  drillCountChip.textContent = _drillItems.length.toLocaleString() + " entries" +
+    (totalPages > 1 ? " · page " + _drillPage + "/" + totalPages : "");
+
   var html = '<table class="table"><thead><tr>';
   _drillColumns.forEach(function(col, idx){
     var sortable = !!(col.sortKey || col.key);
@@ -1418,7 +1430,7 @@ function _renderDrillTableBody(){
     html += '<th' + (sortable ? ' class="sortable" data-sort-idx="' + idx + '"' : '') + '>' + col.label + arrow + '</th>';
   });
   html += '</tr></thead><tbody>';
-  sorted.forEach(function(item){
+  pageSlice.forEach(function(item){
     html += '<tr>';
     _drillColumns.forEach(function(col){
       var val = col.render ? col.render(item) : escapeHtml(item[col.key] || "-");
@@ -1427,8 +1439,21 @@ function _renderDrillTableBody(){
     html += '</tr>';
   });
   html += '</tbody></table>';
+  if(totalPages > 1){
+    html += '<div class="pager">';
+    if(_drillPage > 1){
+      html += '<button class="secondary" data-drill-page="' + (_drillPage - 1) + '">◀ Prev</button>';
+    }
+    html += '<span class="muted">Showing ' + (start + 1).toLocaleString() + '–' +
+      Math.min(start + _drillPageSize, sorted.length).toLocaleString() +
+      ' of ' + sorted.length.toLocaleString() + '</span>';
+    if(_drillPage < totalPages){
+      html += '<button class="secondary" data-drill-page="' + (_drillPage + 1) + '">Next ▶</button>';
+    }
+    html += '</div>';
+  }
   drillContent.innerHTML = html;
-  // Wire click → toggle sort.
+  // Wire click → toggle sort. Sorting resets to page 1 so the new top is visible.
   drillContent.querySelectorAll('th.sortable').forEach(function(th){
     th.addEventListener("click", function(){
       var idx = parseInt(th.getAttribute("data-sort-idx"), 10);
@@ -1438,7 +1463,17 @@ function _renderDrillTableBody(){
         _drillSortIdx = idx;
         _drillSortDir = "asc";
       }
+      _drillPage = 1;
       _renderDrillTableBody();
+    });
+  });
+  // Wire pager.
+  drillContent.querySelectorAll('button[data-drill-page]').forEach(function(btn){
+    btn.addEventListener("click", function(){
+      _drillPage = parseInt(btn.getAttribute("data-drill-page"), 10);
+      _renderDrillTableBody();
+      var modalBody = drillContent.closest(".modal-body");
+      if(modalBody) modalBody.scrollTop = 0;
     });
   });
 }
@@ -1620,7 +1655,9 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
   openDrill();
   drillLoading.style.display = "block";
   try{
-    const res = await fetch("/api/guests/list?page=1&pageSize=500");
+    // Pull the full set so client-side sort + pagination work across every
+    // record, not just the first page.
+    const res = await fetch("/api/guests/list?page=1&pageSize=50000");
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
@@ -1632,7 +1669,6 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
       { label: "First Seen", render: function(m){ return escapeHtml(formatTimestamp(m.firstSeen)); }, cls: "muted", sortKey: function(m){ return m.firstSeen || ""; } },
       { label: "Last Seen", render: function(m){ return escapeHtml(formatTimestamp(m.lastSeen)); }, cls: "muted", sortKey: function(m){ return m.lastSeen || ""; } }
     ]);
-    drillSubtitle.textContent += " — showing " + (data.items || []).length + " of " + (data.total || 0);
   } catch(err){
     drillLoading.style.display = "none";
     drillError.textContent = String(err.message || err);
@@ -1646,7 +1682,7 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
 document.getElementById("outsideWindowCard").addEventListener("click", async function(){
   drillReset();
   drillTitle.textContent = "Activations Outside Window";
-  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first.";
+  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 7 days). Sorted by closest miss first.";
   openDrill();
   drillLoading.style.display = "block";
   try{
@@ -2855,7 +2891,6 @@ loadReview();
 </script>
 </body>
 </html>`;
-
 
 export const testPageHtml = `<!DOCTYPE html>
 <html lang="en">
