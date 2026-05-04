@@ -13,6 +13,7 @@
     "test:all": "deno task test && deno task test:emulator",
     "migrate": "deno run -A --env-file=env/local scripts/migrate-kv-to-firestore.ts",
     "dedupe-conversations": "deno run -A --env-file=env/local scripts/dedupe-conversations.ts",
+    "import-call-dispositions": "deno run -A --env-file=env/local scripts/import-call-dispositions.ts",
     "shape-check": "deno run -A scripts/shape-check.ts"
   },
   "lint": {
@@ -42,6 +43,7 @@
     "postmark": "npm:postmark@^4.0.5",
     "@std/assert": "jsr:@std/assert@^1.0.7",
     "@std/cli": "jsr:@std/cli@^1.0.7",
+    "@std/csv": "jsr:@std/csv@^1.0.5",
     "@std/path": "jsr:@std/path@^1.0.8",
     "@std/testing": "jsr:@std/testing@^1.0.4"
   },

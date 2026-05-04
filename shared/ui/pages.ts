@@ -604,6 +604,19 @@ ${sharedThemeCss}
 .small{font-size:.82rem}
 .pager{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:12px}
 .codechip{display:inline-block;padding:3px 9px;border-radius:999px;border:1px solid rgba(42,59,54,.85);background:rgba(11,18,16,.55);color:var(--muted2);font-size:.78rem}
+
+/* Drill-in modal: sticky header row so column titles stay visible while
+   scrolling, plus sortable column indicator. */
+.modal-body table{border-collapse:separate;border-spacing:0}
+.modal-body table thead th{
+  position:sticky;top:0;z-index:2;
+  background:linear-gradient(180deg, rgba(20,40,32,1), rgba(15,30,25,1));
+  border-bottom:1px solid rgba(42,59,54,.95);
+  user-select:none;
+}
+.modal-body table thead th.sortable{cursor:pointer}
+.modal-body table thead th.sortable:hover{color:var(--accentHi)}
+.modal-body table thead th .sort-arrow{color:var(--accentHi);margin-left:4px;font-size:.85em}
 </style>
 </head>
 <body>
@@ -1356,18 +1369,57 @@ function drillReset(){
   drillCountChip.textContent = "0";
 }
 
+// Sortable + sticky-header drill table. State is kept in module scope so
+// header click handlers can re-render without re-fetching data.
+var _drillItems = [];
+var _drillColumns = [];
+var _drillSortIdx = -1;     // index into columns
+var _drillSortDir = "asc";   // "asc" | "desc"
+
 function renderDrillTable(items, columns){
-  if(!items || items.length === 0){
+  _drillItems = items || [];
+  _drillColumns = columns;
+  _drillSortIdx = -1;
+  _drillSortDir = "asc";
+  _renderDrillTableBody();
+}
+
+function _renderDrillTableBody(){
+  if(!_drillItems || _drillItems.length === 0){
     drillEmpty.style.display = "block";
+    drillContent.innerHTML = "";
     return;
   }
-  drillCountChip.textContent = items.length.toLocaleString() + " entries";
+  drillCountChip.textContent = _drillItems.length.toLocaleString() + " entries";
+  // Sort: each column can supply sortKey(item) -> string|number for custom
+  // sorting, otherwise we fall back to item[col.key] (string compare).
+  var sorted = _drillItems.slice();
+  if(_drillSortIdx >= 0){
+    var col = _drillColumns[_drillSortIdx];
+    var sortFn = col.sortKey || function(m){ return col.key ? m[col.key] : ""; };
+    sorted.sort(function(a, b){
+      var av = sortFn(a), bv = sortFn(b);
+      if(av == null && bv == null) return 0;
+      if(av == null) return 1;
+      if(bv == null) return -1;
+      if(typeof av === "number" && typeof bv === "number") return av - bv;
+      return String(av).localeCompare(String(bv), undefined, { numeric: true });
+    });
+    if(_drillSortDir === "desc") sorted.reverse();
+  }
   var html = '<table class="table"><thead><tr>';
-  columns.forEach(function(col){ html += '<th>' + col.label + '</th>'; });
+  _drillColumns.forEach(function(col, idx){
+    var sortable = !!(col.sortKey || col.key);
+    var arrow = "";
+    if(sortable && idx === _drillSortIdx){
+      arrow = '<span class="sort-arrow">' + (_drillSortDir === "asc" ? "▲" : "▼") + '</span>';
+    }
+    html += '<th' + (sortable ? ' class="sortable" data-sort-idx="' + idx + '"' : '') + '>' + col.label + arrow + '</th>';
+  });
   html += '</tr></thead><tbody>';
-  items.forEach(function(item){
+  sorted.forEach(function(item){
     html += '<tr>';
-    columns.forEach(function(col){
+    _drillColumns.forEach(function(col){
       var val = col.render ? col.render(item) : escapeHtml(item[col.key] || "-");
       html += '<td' + (col.cls ? ' class="' + col.cls + '"' : '') + (col.style ? ' style="' + col.style + '"' : '') + '>' + val + '</td>';
     });
@@ -1375,6 +1427,19 @@ function renderDrillTable(items, columns){
   });
   html += '</tbody></table>';
   drillContent.innerHTML = html;
+  // Wire click → toggle sort.
+  drillContent.querySelectorAll('th.sortable').forEach(function(th){
+    th.addEventListener("click", function(){
+      var idx = parseInt(th.getAttribute("data-sort-idx"), 10);
+      if(idx === _drillSortIdx){
+        _drillSortDir = _drillSortDir === "asc" ? "desc" : "asc";
+      } else {
+        _drillSortIdx = idx;
+        _drillSortDir = "asc";
+      }
+      _renderDrillTableBody();
+    });
+  });
 }
 
 function phoneLink(phone){
@@ -1559,12 +1624,12 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
     renderDrillTable(data.items || [], [
-      { label: "Phone", render: function(m){ return phoneLink(m.phoneNumber); } },
-      { label: "Messages", render: function(m){ return '<span style="font-weight:900">' + m.messageCount + '</span>'; } },
-      { label: "Replies", render: function(m){ return m.replyCount; }, cls: "muted" },
-      { label: "Replied?", render: function(m){ return m.hasReplied ? '<span class="badge ok">Yes</span>' : '<span class="muted">No</span>'; } },
-      { label: "First Seen", render: function(m){ return escapeHtml(formatTimestamp(m.firstSeen)); }, cls: "muted" },
-      { label: "Last Seen", render: function(m){ return escapeHtml(formatTimestamp(m.lastSeen)); }, cls: "muted" }
+      { label: "Phone", render: function(m){ return phoneLink(m.phoneNumber); }, sortKey: function(m){ return m.phoneNumber; } },
+      { label: "Messages", render: function(m){ return '<span style="font-weight:900">' + m.messageCount + '</span>'; }, sortKey: function(m){ return m.messageCount || 0; } },
+      { label: "Replies", render: function(m){ return m.replyCount; }, cls: "muted", sortKey: function(m){ return m.replyCount || 0; } },
+      { label: "Replied?", render: function(m){ return m.hasReplied ? '<span class="badge ok">Yes</span>' : '<span class="muted">No</span>'; }, sortKey: function(m){ return m.hasReplied ? 1 : 0; } },
+      { label: "First Seen", render: function(m){ return escapeHtml(formatTimestamp(m.firstSeen)); }, cls: "muted", sortKey: function(m){ return m.firstSeen || ""; } },
+      { label: "Last Seen", render: function(m){ return escapeHtml(formatTimestamp(m.lastSeen)); }, cls: "muted", sortKey: function(m){ return m.lastSeen || ""; } }
     ]);
     drillSubtitle.textContent += " — showing " + (data.items || []).length + " of " + (data.total || 0);
   } catch(err){
