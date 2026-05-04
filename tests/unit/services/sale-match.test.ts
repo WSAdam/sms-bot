@@ -59,6 +59,21 @@ Deno.test("phone past window is skipped (9 days)", async () => {
   assertEquals(r.skippedOlderThan7Days, 1);
 });
 
+Deno.test("out-of-window run writes salesoutsidewindow doc", async () => {
+  const db = setup();
+  seed(db, "9999999998", 14); // 14 days ago — outside window
+  await processSaleMatches([{ phone10: "9999999998" }]);
+  const outside = await db.get(
+    "sms-bot/salesoutsidewindow/byPhone/9999999998",
+  );
+  assertEquals(outside?.phone10, "9999999998");
+  assertEquals(typeof outside?.closestDaysDiff, "number");
+  assertEquals((outside?.closestDaysDiff as number) >= 14, true);
+  // Must NOT also write the within-window marker.
+  const within = await db.get("sms-bot/saleswithin7d/byPhone/9999999998");
+  assertEquals(within, null);
+});
+
 Deno.test("phone with no scheduled injection is skipped", async () => {
   setup();
   const r = await processSaleMatches([{ phone10: "0000000000" }]);

@@ -38,6 +38,13 @@ export function auditStageCollection(stage: string): string {
 export const salesWithin7dContainer = `${R}/saleswithin7d`;
 export const salesWithin7dCollection = `${salesWithin7dContainer}/byPhone`;
 
+// Activations from QB report 678 that had a scheduled appointment but the
+// activation landed OUTSIDE the SALE_MATCH_WINDOW_DAYS day-window.
+// Tracked separately so we can see who slipped past our reminder timing.
+export const salesOutsideWindowContainer = `${R}/salesoutsidewindow`;
+export const salesOutsideWindowCollection =
+  `${salesOutsideWindowContainer}/byPhone`;
+
 export const injectionHistoryContainer = `${R}/injectionhistory`;
 export const injectionHistoryCollection =
   `${injectionHistoryContainer}/byPhone`;
@@ -88,6 +95,9 @@ export function auditStageDocPath(stage: string, recordId: string): string {
 }
 export function salesWithin7dDocPath(phone10: string): string {
   return `${salesWithin7dCollection}/${phone10}`;
+}
+export function salesOutsideWindowDocPath(phone10: string): string {
+  return `${salesOutsideWindowCollection}/${phone10}`;
 }
 export function injectionHistoryDocPath(docId: string): string {
   return `${injectionHistoryCollection}/${docId}`;

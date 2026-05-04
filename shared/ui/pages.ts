@@ -739,11 +739,12 @@ ${sharedThemeCss}
         <div class="hint">Click to drill in</div>
       </div>
 
-      <div class="stat-card">
-        <div class="icon">💰</div>
-        <div class="value" id="lifetimeSalesMatched">-</div>
-        <div class="label">Sales Matched in Window</div>
-        <div class="explain">Activations that landed within the configured day-window of a scheduled appointment (currently 8 days). Source for the productivity report.</div>
+      <div class="stat-card clickable" id="outsideWindowCard" title="Click to view activations that slipped past the reminder window">
+        <div class="icon">⏱️</div>
+        <div class="value" id="lifetimeOutsideWindow">-</div>
+        <div class="label">Activations Outside Window</div>
+        <div class="explain">Activations that DID have a scheduled appointment with us, but the activation landed outside the configured day-window (currently 8 days). These are guests who came in on their own — outside our reminder timing.</div>
+        <div class="hint">Click to drill in</div>
       </div>
 
       <div class="stat-card clickable" id="lifetimeUniqueGuestsCard" title="Click to view every guest we've messaged">
@@ -985,7 +986,7 @@ function renderDashboard(data){
   document.getElementById("activatedCount").textContent = (data.stats.activatedCount || 0).toLocaleString();
   document.getElementById("answeredCount").textContent = (data.stats.answeredCount || 0).toLocaleString();
   document.getElementById("lifetimeAppointments").textContent = (data.stats.lifetimeAppointmentsBooked || 0).toLocaleString();
-  document.getElementById("lifetimeSalesMatched").textContent = (data.stats.lifetimeSalesMatched || 0).toLocaleString();
+  document.getElementById("lifetimeOutsideWindow").textContent = (data.stats.lifetimeActivationsOutsideWindow || 0).toLocaleString();
   document.getElementById("lifetimeUniqueGuests").textContent = (data.stats.lifetimeUniqueGuests || 0).toLocaleString();
 
   const breakdownBody = document.getElementById("kvBreakdown");
@@ -1632,6 +1633,43 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
       { label: "Last Seen", render: function(m){ return escapeHtml(formatTimestamp(m.lastSeen)); }, cls: "muted", sortKey: function(m){ return m.lastSeen || ""; } }
     ]);
     drillSubtitle.textContent += " — showing " + (data.items || []).length + " of " + (data.total || 0);
+  } catch(err){
+    drillLoading.style.display = "none";
+    drillError.textContent = String(err.message || err);
+    drillError.style.display = "block";
+  }
+});
+
+// Activations Outside Window drill-in. Reads salesoutsidewindow collection
+// via the existing /api/kv/list endpoint (same path the activated/answered
+// drills use). Each doc has activatedAt + closestAppointmentAt + closestDaysDiff.
+document.getElementById("outsideWindowCard").addEventListener("click", async function(){
+  drillReset();
+  drillTitle.textContent = "Activations Outside Window";
+  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first.";
+  openDrill();
+  drillLoading.style.display = "block";
+  try{
+    var res = await fetch("/api/kv/list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prefix: ["salesoutsidewindow"], limit: 1000 })
+    });
+    var data = await res.json();
+    if(!res.ok) throw new Error(data.error || "Failed");
+    drillLoading.style.display = "none";
+    var items = (data.entries || []).map(function(e){ return e.value; });
+    // Default sort: closest miss first (smallest absolute daysDiff).
+    items.sort(function(a, b){
+      return Math.abs(a.closestDaysDiff || 0) - Math.abs(b.closestDaysDiff || 0);
+    });
+    renderDrillTable(items, [
+      { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
+      { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
+      { label: "Closest Appt", render: function(m){ return escapeHtml(formatTimestamp(m.closestAppointmentAt)); }, sortKey: function(m){ return m.closestAppointmentAt || ""; } },
+      { label: "Days Off", render: function(m){ return '<span style="font-weight:900">' + (m.closestDaysDiff || 0) + 'd</span>'; }, sortKey: function(m){ return m.closestDaysDiff || 0; } },
+      { label: "Window", render: function(m){ return (m.windowDays || 8) + 'd'; }, cls: "muted" }
+    ]);
   } catch(err){
     drillLoading.style.display = "none";
     drillError.textContent = String(err.message || err);

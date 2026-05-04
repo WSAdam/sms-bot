@@ -19,6 +19,7 @@ const PREFIXES = [
   ["guestanswered", "byPhone"],
   ["audit", "byRecordId"],
   ["saleswithin7d", "byPhone"],
+  ["salesoutsidewindow", "byPhone"],
   ["injectionhistory", "byPhone"],
   ["leadpointer", "byPhone"],
 ] as const;
@@ -32,6 +33,7 @@ const PER_PHONE_CONTAINERS = new Set<string>([
   "guestactivated",
   "guestanswered",
   "saleswithin7d",
+  "salesoutsidewindow",
   "injectionhistory",
   "leadpointer",
 ]);
@@ -151,6 +153,7 @@ export const handler = define.handlers({
         answeredCount: breakdown.guestanswered?.count ?? 0,
         lifetimeAppointmentsBooked,
         lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
+        lifetimeActivationsOutsideWindow: breakdown.salesoutsidewindow?.count ?? 0,
         lifetimeUniqueGuests: new Set(deduped.map((m) => m.phoneNumber)).size,
       },
       kvBreakdown: breakdown,

@@ -7,6 +7,7 @@ import { SALE_MATCH_WINDOW_DAYS } from "@shared/config/constants.ts";
 import {
   guestActivatedDocPath,
   injectionHistoryCollection,
+  salesOutsideWindowDocPath,
   salesWithin7dDocPath,
   scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
@@ -152,13 +153,28 @@ export async function processSaleMatches(
         `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
       );
       summary.skippedOlderThan7Days++;
+      const candidateDetails = candidates.map((c) => ({
+        appointmentAt: c.eventTime,
+        daysDiff: dayDiff(c.eventTimeMs, saleMs),
+      }));
       summary.skippedInWindow.push({
         phone10,
         activatedAt: new Date(saleMs).toISOString(),
-        candidates: candidates.map((c) => ({
-          appointmentAt: c.eventTime,
-          daysDiff: dayDiff(c.eventTimeMs, saleMs),
-        })),
+        candidates: candidateDetails,
+      });
+      // Persist so the dashboard can surface "activations that slipped past
+      // the reminder window". Closest miss = smallest abs(daysDiff).
+      const closest = candidateDetails.slice().sort((a, b) =>
+        Math.abs(a.daysDiff) - Math.abs(b.daysDiff)
+      )[0];
+      await client.set(salesOutsideWindowDocPath(phone10), {
+        phone10,
+        activatedAt: new Date(saleMs).toISOString(),
+        closestAppointmentAt: closest?.appointmentAt ?? null,
+        closestDaysDiff: closest?.daysDiff ?? null,
+        candidates: candidateDetails,
+        windowDays: SALE_MATCH_WINDOW_DAYS,
+        updatedAt: new Date().toISOString(),
       });
       continue;
     }
