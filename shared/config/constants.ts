@@ -63,6 +63,9 @@ export const SALE_MATCH_WINDOW_DAYS = 8;
 // counts (activated/answered/sales) DO subtract these phones.
 export const EXCLUDED_REPORTING_PHONES = new Set<string>([
   "8432222986", // Adam's test phone
+  "6098583137", // Edwin — Bland pathway fucked up the messageSent variable
+                // for this conversation, polluting today's stats with stale
+                // opener text. Excluded until the pathway template is fixed.
 ]);
 export function isExcludedFromReporting(phone10: string): boolean {
   return EXCLUDED_REPORTING_PHONES.has(phone10);
