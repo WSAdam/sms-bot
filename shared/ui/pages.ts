@@ -1737,7 +1737,10 @@ drillContent.addEventListener("click", async function(ev){
     });
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
-    await _loadOutsideWindowDrill();
+    // Refresh both the drill (so the row drops) AND the main dashboard
+    // cards behind it (so Activated/SalesWithin7d/OutsideWindow tiles
+    // reflect the new totals). Without this, the user sees stale numbers.
+    await Promise.all([_loadOutsideWindowDrill(), loadDashboard()]);
   } catch(err){
     btn.disabled = false;
     btn.textContent = "Claim";

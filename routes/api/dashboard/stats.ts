@@ -158,6 +158,11 @@ export const handler = define.handlers({
       },
       kvBreakdown: breakdown,
       recentEntries,
+    }, {
+      // Stats reflect live writes — never serve a cached response, otherwise
+      // a Claim or sale-match cron run won't be visible until the cache TTL
+      // expires.
+      headers: { "Cache-Control": "no-store" },
     });
   },
 });
