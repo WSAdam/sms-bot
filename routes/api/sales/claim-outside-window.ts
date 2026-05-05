@@ -98,9 +98,11 @@ export const handler = define.handlers({
         data: {
           phone10,
           Activated: true,
-          activatedAt: updatedAt,
+          // Preserve the actual QB activation date, not the claim-click time.
+          activatedAt,
           eventTime: closestAppointmentAt,
           matchReason: "manual_override",
+          recordedAt: updatedAt,
           ...(activator ? { activator } : {}),
           ...(office ? { office } : {}),
         },

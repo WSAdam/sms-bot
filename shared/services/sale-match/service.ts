@@ -259,11 +259,12 @@ export async function processSaleMatches(
     }
 
     const updatedAt = new Date().toISOString();
+    const saleAtIso = new Date(saleMs).toISOString();
     const marker: SaleWithinWindowMarker = {
       phone10,
       phone11: `1${phone10}`,
       appointmentAt,
-      saleAt: new Date(saleMs).toISOString(),
+      saleAt: saleAtIso,
       windowDays: SALE_MATCH_WINDOW_DAYS,
       withinDays,
       matchReason,
@@ -282,9 +283,12 @@ export async function processSaleMatches(
       data: {
         phone10,
         Activated: true,
-        activatedAt: updatedAt,
+        // activatedAt = the actual sale date from QB, NOT the cron-run time.
+        // Otherwise the drill shows every row with the same "today" timestamp.
+        activatedAt: saleAtIso,
         eventTime: appointmentAt,
         matchReason,
+        recordedAt: updatedAt,
         ...(activator ? { activator } : {}),
         ...(office ? { office } : {}),
       },
