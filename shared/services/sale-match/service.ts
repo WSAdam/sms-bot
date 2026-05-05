@@ -12,6 +12,7 @@ import {
   scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
 import {
+  type BatchOp,
   type FirestoreClient,
   getFirestoreClient,
 } from "@shared/firestore/wrapper.ts";
@@ -99,6 +100,12 @@ export async function processSaleMatches(
   console.log(
     `[sale-match] loaded ${pendingDocs.length} pending + ${historyDocs.length} history = ${apptMap.size} unique phones with appointments`,
   );
+
+  // Collect all writes here and commit as one batch at the end. With report
+  // 678 we can have hundreds of matches × 2 writes each — sequential
+  // client.set() calls easily blew past Deno Deploy's 60s request limit.
+  // One Firestore batch.commit() is essentially a single round trip.
+  const writes: BatchOp[] = [];
 
   for (const { phone10, saleAt, activator } of inputs) {
     if (phone10.length !== 10) {
@@ -200,15 +207,19 @@ export async function processSaleMatches(
       const closest = candidateDetails.slice().sort((a, b) =>
         Math.abs(a.daysDiff) - Math.abs(b.daysDiff)
       )[0];
-      await client.set(salesOutsideWindowDocPath(phone10), {
-        phone10,
-        activatedAt: new Date(saleMs).toISOString(),
-        closestAppointmentAt: closest?.appointmentAt ?? null,
-        closestDaysDiff: closest?.daysDiff ?? null,
-        candidates: candidateDetails,
-        activator: activator ?? null,
-        windowDays: SALE_MATCH_WINDOW_DAYS,
-        updatedAt: new Date().toISOString(),
+      writes.push({
+        type: "set",
+        path: salesOutsideWindowDocPath(phone10),
+        data: {
+          phone10,
+          activatedAt: new Date(saleMs).toISOString(),
+          closestAppointmentAt: closest?.appointmentAt ?? null,
+          closestDaysDiff: closest?.daysDiff ?? null,
+          candidates: candidateDetails,
+          activator: activator ?? null,
+          windowDays: SALE_MATCH_WINDOW_DAYS,
+          updatedAt: new Date().toISOString(),
+        },
       });
       continue;
     }
@@ -225,17 +236,22 @@ export async function processSaleMatches(
       ...(activator ? { activator } : {}),
       updatedAt,
     };
-    await client.set(
-      salesWithin7dDocPath(phone10),
-      marker as unknown as Record<string, unknown>,
-    );
-    await client.set(guestActivatedDocPath(phone10), {
-      phone10,
-      Activated: true,
-      activatedAt: updatedAt,
-      eventTime: appointmentAt,
-      matchReason,
-      ...(activator ? { activator } : {}),
+    writes.push({
+      type: "set",
+      path: salesWithin7dDocPath(phone10),
+      data: marker as unknown as Record<string, unknown>,
+    });
+    writes.push({
+      type: "set",
+      path: guestActivatedDocPath(phone10),
+      data: {
+        phone10,
+        Activated: true,
+        activatedAt: updatedAt,
+        eventTime: appointmentAt,
+        matchReason,
+        ...(activator ? { activator } : {}),
+      },
     });
 
     summary.matched++;
@@ -248,6 +264,14 @@ export async function processSaleMatches(
       matchReason,
       ...(activator ? { activator } : {}),
     });
+  }
+
+  // Single batched commit for ALL writes (matches + outside-window). The
+  // wrapper auto-chunks at 400 ops per Firestore batch, so we don't need
+  // to slice manually.
+  if (writes.length > 0) {
+    console.log(`[sale-match] committing ${writes.length} writes in batch...`);
+    await client.batch(writes);
   }
 
   return summary;
