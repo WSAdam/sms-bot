@@ -54,6 +54,7 @@ export interface BookingRow {
   phoneRaw: string;
   addedDate: string | null;
   activator: string | null;
+  office: string | null;
 }
 
 // Auto-detect phone + date column IDs from the report's fields metadata.
@@ -84,11 +85,22 @@ function findActivatorField(
   );
 }
 
+function findOfficeField(
+  fields: QuickbaseField[],
+): QuickbaseField | undefined {
+  // The "Activating Office" / "Office" / "Department" column — the team
+  // that closed the lead (e.g. "ODR"). Some QB rows have office=ODR but
+  // an empty/non-ODR Activator; we still want to count those as ODR.
+  return fields.find((f) => /activating\s*office/i.test(f.label ?? "")) ??
+    fields.find((f) => /\boffice\b|department/i.test(f.label ?? ""));
+}
+
 export interface NormalizationResult {
   rows: BookingRow[];
   phoneFieldId: string;
   dateFieldId: string | null;
   activatorFieldId: string | null;
+  officeFieldId: string | null;
 }
 
 export function normalizeBookingRowsDetailed(
@@ -98,16 +110,19 @@ export function normalizeBookingRowsDetailed(
   const phoneF = findPhoneField(fields);
   const dateF = findDateField(fields);
   const activatorF = findActivatorField(fields);
+  const officeF = findOfficeField(fields);
   // Fall back to report-530 schema if metadata is absent.
   const phoneKey = phoneF ? String(phoneF.id) : "48";
   const dateKey = dateF ? String(dateF.id) : "-1";
   const activatorKey = activatorF ? String(activatorF.id) : null;
+  const officeKey = officeF ? String(officeF.id) : null;
 
   const rows: BookingRow[] = [];
   for (const r of resp.data ?? []) {
     const rawPhone = r[phoneKey]?.value;
     const addedRaw = r[dateKey]?.value;
     const activatorRaw = activatorKey ? r[activatorKey]?.value : undefined;
+    const officeRaw = officeKey ? r[officeKey]?.value : undefined;
     if (typeof rawPhone !== "string") continue;
     const digits = rawPhone.replace(/\D/g, "");
     if (digits.length < 10) continue;
@@ -116,6 +131,7 @@ export function normalizeBookingRowsDetailed(
       phoneRaw: rawPhone,
       addedDate: typeof addedRaw === "string" ? addedRaw : null,
       activator: typeof activatorRaw === "string" ? activatorRaw : null,
+      office: typeof officeRaw === "string" ? officeRaw : null,
     });
   }
   return {
@@ -123,6 +139,7 @@ export function normalizeBookingRowsDetailed(
     phoneFieldId: phoneKey,
     dateFieldId: dateF ? dateKey : null,
     activatorFieldId: activatorKey,
+    officeFieldId: officeKey,
   };
 }
 

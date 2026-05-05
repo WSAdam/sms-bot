@@ -148,6 +148,55 @@ Deno.test("non-ODR activator outside window still skips", async () => {
   assertEquals(r.skippedOlderThan7Days, 1);
 });
 
+Deno.test("office=ODR counts even outside window (with appointment)", async () => {
+  const db = setup();
+  seedHistory(db, "9999998810", 30);
+  const r = await processSaleMatches([{
+    phone10: "9999998810",
+    office: "ODR",
+  }]);
+  assertEquals(r.matched, 1);
+  assertEquals(r.matchedByOdr, 1);
+  assertEquals(r.matches[0].matchReason, "odr_office");
+});
+
+Deno.test("office=ODR with no appointment record does not count", async () => {
+  setup();
+  const r = await processSaleMatches([{
+    phone10: "9999998811",
+    office: "ODR",
+  }]);
+  assertEquals(r.matched, 0);
+  assertEquals(r.skippedNoInjection, 1);
+});
+
+Deno.test("office set to non-ODR (e.g. 'CR') does not bypass window", async () => {
+  const db = setup();
+  seedHistory(db, "9999998812", 30);
+  const r = await processSaleMatches([{
+    phone10: "9999998812",
+    office: "CR",
+  }]);
+  assertEquals(r.matched, 0);
+  assertEquals(r.skippedOlderThan7Days, 1);
+});
+
+Deno.test("matched run cleans up any stale salesoutsidewindow doc", async () => {
+  const db = setup();
+  seedHistory(db, "9999998813", 30);
+  // Pre-seed a stale outside-window doc as if from a prior run.
+  db.docs.set(
+    "sms-bot/salesoutsidewindow/byPhone/9999998813",
+    { phone10: "9999998813", closestDaysDiff: 30 },
+  );
+  await processSaleMatches([{
+    phone10: "9999998813",
+    office: "ODR",
+  }]);
+  const stale = await db.get("sms-bot/salesoutsidewindow/byPhone/9999998813");
+  assertEquals(stale, null);
+});
+
 Deno.test("ODR match within window logs as within_window, not odr_activator", async () => {
   const db = setup();
   seedHistory(db, "9999998804", 2);

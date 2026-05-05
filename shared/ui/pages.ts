@@ -1679,10 +1679,10 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
 // Activations Outside Window drill-in. Reads salesoutsidewindow collection
 // via the existing /api/kv/list endpoint (same path the activated/answered
 // drills use). Each doc has activatedAt + closestAppointmentAt + closestDaysDiff.
-document.getElementById("outsideWindowCard").addEventListener("click", async function(){
+async function _loadOutsideWindowDrill(){
   drillReset();
   drillTitle.textContent = "Activations Outside Window";
-  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first.";
+  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first. Click Claim to override and credit a row to our funnel.";
   openDrill();
   drillLoading.style.display = "block";
   try{
@@ -1695,7 +1695,6 @@ document.getElementById("outsideWindowCard").addEventListener("click", async fun
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
     var items = (data.entries || []).map(function(e){ return e.value; });
-    // Default sort: closest miss first (smallest absolute daysDiff).
     items.sort(function(a, b){
       return Math.abs(a.closestDaysDiff || 0) - Math.abs(b.closestDaysDiff || 0);
     });
@@ -1704,12 +1703,45 @@ document.getElementById("outsideWindowCard").addEventListener("click", async fun
       { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
       { label: "Closest Appt", render: function(m){ return escapeHtml(formatTimestamp(m.closestAppointmentAt)); }, sortKey: function(m){ return m.closestAppointmentAt || ""; } },
       { label: "Days Off", render: function(m){ return '<span style="font-weight:900">' + (m.closestDaysDiff || 0) + 'd</span>'; }, sortKey: function(m){ return m.closestDaysDiff || 0; } },
-      { label: "Window", render: function(m){ return (m.windowDays || 8) + 'd'; }, cls: "muted" }
+      { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
+      { label: "Activator", render: function(m){ return escapeHtml(m.activator || ""); }, cls: "muted", sortKey: function(m){ return m.activator || ""; } },
+      { label: "Window", render: function(m){ return (m.windowDays || 8) + 'd'; }, cls: "muted" },
+      { label: "Action", render: function(m){
+        return '<button class="secondary claim-btn" data-claim-phone="' + escapeHtml(m.phone10 || "") + '">Claim</button>';
+      }}
     ]);
   } catch(err){
     drillLoading.style.display = "none";
     drillError.textContent = String(err.message || err);
     drillError.style.display = "block";
+  }
+}
+
+document.getElementById("outsideWindowCard").addEventListener("click", _loadOutsideWindowDrill);
+
+// Delegated handler for the per-row Claim button. Posts to the override
+// endpoint then re-loads the drill so the claimed row drops out.
+drillContent.addEventListener("click", async function(ev){
+  var btn = ev.target.closest && ev.target.closest("button[data-claim-phone]");
+  if(!btn) return;
+  var phone10 = btn.getAttribute("data-claim-phone");
+  if(!phone10) return;
+  if(!confirm("Claim sale credit for " + phone10 + "? This moves it from Outside Window into Activated/Within7d.")) return;
+  btn.disabled = true;
+  btn.textContent = "Claiming…";
+  try{
+    var res = await fetch("/api/sales/claim-outside-window", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone10: phone10 })
+    });
+    var data = await res.json();
+    if(!res.ok) throw new Error(data.error || "Failed");
+    await _loadOutsideWindowDrill();
+  } catch(err){
+    btn.disabled = false;
+    btn.textContent = "Claim";
+    alert("Claim failed: " + (err.message || err));
   }
 });
 

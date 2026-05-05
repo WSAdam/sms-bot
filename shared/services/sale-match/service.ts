@@ -18,6 +18,7 @@ import {
 } from "@shared/firestore/wrapper.ts";
 import type {
   ActivateFromReportSummary,
+  SaleMatchReason,
   SaleWithinWindowMarker,
 } from "@shared/types/sale.ts";
 import {
@@ -32,15 +33,24 @@ export interface SaleMatchInput {
   phone10: string;
   saleAt?: string; // when the sale was recorded (defaults to now)
   activator?: string; // QB activator field (e.g. "ODR - Rodger Gamble")
+  office?: string; // QB "Activating Office" field (e.g. "ODR")
 }
 
-// Activations by an ODR team member ALWAYS count as a sale, regardless
-// of the day-window check. The QB "Activator" field looks like
-// "ODR - {Name}" for ODR team members; we case-insensitively match
-// the "ODR -" prefix.
-function isOdrActivator(activator: string | undefined | null): boolean {
-  if (!activator) return false;
-  return activator.trim().toUpperCase().startsWith("ODR -");
+// ODR activations ALWAYS count as a sale regardless of the day-window check,
+// as long as we have an appointment record on file for the phone. ODR shows
+// up two ways in QB:
+//   - "Activator" field starts with "ODR -" (e.g. "ODR - Rodger Gamble")
+//   - "Activating Office" field is exactly "ODR"
+// Either signal counts. Returns the reason so we can record provenance.
+function odrReason(
+  activator: string | undefined | null,
+  office: string | undefined | null,
+): "odr_activator" | "odr_office" | null {
+  if (activator && activator.trim().toUpperCase().startsWith("ODR -")) {
+    return "odr_activator";
+  }
+  if (office && office.trim().toUpperCase() === "ODR") return "odr_office";
+  return null;
 }
 
 interface ApptCandidate {
@@ -107,7 +117,7 @@ export async function processSaleMatches(
   // One Firestore batch.commit() is essentially a single round trip.
   const writes: BatchOp[] = [];
 
-  for (const { phone10, saleAt, activator } of inputs) {
+  for (const { phone10, saleAt, activator, office } of inputs) {
     if (phone10.length !== 10) {
       summary.skippedNoInjection++;
       summary.skippedNoInjectionList?.push({
@@ -128,7 +138,7 @@ export async function processSaleMatches(
     }
 
     const candidates = apptMap.get(phone10) ?? [];
-    const odrBypass = isOdrActivator(activator);
+    const odrKind = odrReason(activator, office);
 
     // Pick the closest in-window candidate (if any). Day-level diff in ET so
     // a same-day activation doesn't false-reject.
@@ -164,7 +174,7 @@ export async function processSaleMatches(
     //   4. No appointments → skippedNoInjection (silent, regardless of ODR)
     let appointmentAt: string | null;
     let withinDays: number | null;
-    let matchReason: "within_window" | "odr_activator";
+    let matchReason: SaleMatchReason;
 
     if (best) {
       appointmentAt = best.eventTime;
@@ -182,21 +192,22 @@ export async function processSaleMatches(
         activatedAt: new Date(saleMs).toISOString(),
       });
       continue;
-    } else if (odrBypass) {
-      // Has appointment(s) but outside the 8d window AND ODR activator → count.
+    } else if (odrKind) {
+      // Has appointment(s) but outside the 8d window AND ODR (by activator
+      // or activating office) → count.
       const ref = candidates.slice().sort((a, b) =>
         Math.abs(dayDiff(a.eventTimeMs, saleMs)) -
         Math.abs(dayDiff(b.eventTimeMs, saleMs))
       )[0];
       appointmentAt = ref.eventTime;
       withinDays = dayDiff(ref.eventTimeMs, saleMs);
-      matchReason = "odr_activator";
+      matchReason = odrKind;
       console.log(
-        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator}" → matched (ODR bypass, ${withinDays}d)`,
+        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → matched (${odrKind}, ${withinDays}d)`,
       );
     } else {
       console.log(
-        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
+        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
       );
       summary.skippedOlderThan7Days++;
       const candidateDetails = candidates.map((c) => ({
@@ -221,6 +232,7 @@ export async function processSaleMatches(
           closestDaysDiff: closest?.daysDiff ?? null,
           candidates: candidateDetails,
           activator: activator ?? null,
+          office: office ?? null,
           windowDays: SALE_MATCH_WINDOW_DAYS,
           updatedAt: new Date().toISOString(),
         },
@@ -238,6 +250,7 @@ export async function processSaleMatches(
       withinDays,
       matchReason,
       ...(activator ? { activator } : {}),
+      ...(office ? { office } : {}),
       updatedAt,
     };
     writes.push({
@@ -255,11 +268,21 @@ export async function processSaleMatches(
         eventTime: appointmentAt,
         matchReason,
         ...(activator ? { activator } : {}),
+        ...(office ? { office } : {}),
       },
+    });
+    // If this phone was previously parked in salesoutsidewindow (e.g. earlier
+    // run before we knew about the office field), clean that up so the drill-in
+    // doesn't keep showing it as a near-miss after we've now counted it.
+    writes.push({
+      type: "delete",
+      path: salesOutsideWindowDocPath(phone10),
     });
 
     summary.matched++;
-    if (matchReason === "odr_activator") summary.matchedByOdr++;
+    if (matchReason === "odr_activator" || matchReason === "odr_office") {
+      summary.matchedByOdr++;
+    }
     summary.matches.push({
       phone10,
       appointmentAt,
@@ -267,6 +290,7 @@ export async function processSaleMatches(
       withinDays,
       matchReason,
       ...(activator ? { activator } : {}),
+      ...(office ? { office } : {}),
     });
   }
 

@@ -60,11 +60,15 @@ export async function runDailyQbSaleMatch(
       }`,
     );
   }
-  const { rows, phoneFieldId, dateFieldId } = normalizeBookingRowsDetailed(
-    report,
-  );
+  const {
+    rows,
+    phoneFieldId,
+    dateFieldId,
+    activatorFieldId,
+    officeFieldId,
+  } = normalizeBookingRowsDetailed(report);
   console.log(
-    `[sale-match] using phoneFieldId=${phoneFieldId} dateFieldId=${dateFieldId ?? "(none)"} → ${rows.length} usable phones (dropped ${rawCount - rows.length})`,
+    `[sale-match] using phoneFieldId=${phoneFieldId} dateFieldId=${dateFieldId ?? "(none)"} activatorFieldId=${activatorFieldId ?? "(none)"} officeFieldId=${officeFieldId ?? "(none)"} → ${rows.length} usable phones (dropped ${rawCount - rows.length})`,
   );
   if (rows.length > 0) {
     const sample = rows.slice(0, 3).map((r) =>
@@ -81,6 +85,7 @@ export async function runDailyQbSaleMatch(
       phone10: r.phone10,
       ...(r.addedDate ? { saleAt: r.addedDate } : {}),
       ...(r.activator ? { activator: r.activator } : {}),
+      ...(r.office ? { office: r.office } : {}),
     })),
     undefined,
     { verbose: options.verbose },
