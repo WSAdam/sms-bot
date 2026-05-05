@@ -65,6 +65,7 @@ class FirebaseAdminClient implements FirestoreClient {
   }
 
   async delete(path: DocPath): Promise<void> {
+    auditCriticalDelete(path);
     const db = await getDb();
     await db.doc(path).delete();
   }
@@ -97,6 +98,9 @@ class FirebaseAdminClient implements FirestoreClient {
 
   async batch(ops: BatchOp[]): Promise<void> {
     if (ops.length === 0) return;
+    for (const op of ops) {
+      if (op.type === "delete") auditCriticalDelete(op.path);
+    }
     const db = await getDb();
     for (let i = 0; i < ops.length; i += MAX_BATCH) {
       const chunk = ops.slice(i, i + MAX_BATCH);
@@ -140,4 +144,20 @@ export function getFirestoreClient(): FirestoreClient {
 
 export function setFirestoreClientForTests(c: FirestoreClient | null): void {
   cached = c;
+}
+
+// Critical collections we want to trace deletes from. Lifetime stat counts
+// (Activated, etc.) silently lose entries when something deletes here, so
+// any delete must leave a stack-trace breadcrumb in Deno Deploy logs.
+const CRITICAL_DELETE_PATHS = [
+  "guestactivated/byPhone",
+  "saleswithin7d/byPhone",
+];
+
+function auditCriticalDelete(path: string): void {
+  if (!CRITICAL_DELETE_PATHS.some((p) => path.includes(p))) return;
+  const stack = new Error("delete trace").stack ?? "(no stack)";
+  console.warn(
+    `🚨 [firestore.delete] CRITICAL path=${path}\n${stack.split("\n").slice(2, 8).join("\n")}`,
+  );
 }

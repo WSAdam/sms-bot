@@ -6,9 +6,14 @@
 // POST body: { phone10: string, note?: string }
 
 import { define } from "@/utils.ts";
-import { SALE_MATCH_WINDOW_DAYS } from "@shared/config/constants.ts";
 import {
+  isExcludedFromReporting,
+  SALE_MATCH_WINDOW_DAYS,
+} from "@shared/config/constants.ts";
+import {
+  guestActivatedCollection,
   guestActivatedDocPath,
+  salesOutsideWindowCollection,
   salesOutsideWindowDocPath,
   salesWithin7dDocPath,
 } from "@shared/firestore/paths.ts";
@@ -70,6 +75,17 @@ export const handler = define.handlers({
       },
     };
 
+    // Diagnostic: did this phone already exist in guestactivated? If yes,
+    // the dashboard count won't go up after this claim — useful to surface
+    // so we can stop debugging "missing" totals that aren't actually missing.
+    const preActivated = await db.get(guestActivatedDocPath(phone10));
+    const preActivatedList = await db.list(guestActivatedCollection, {
+      limit: 50_000,
+    });
+    const preActivatedCount = preActivatedList.filter((e) =>
+      !isExcludedFromReporting(e.id)
+    ).length;
+
     await db.batch([
       {
         type: "set",
@@ -92,10 +108,45 @@ export const handler = define.handlers({
       { type: "delete", path: salesOutsideWindowDocPath(phone10) },
     ]);
 
+    // Verify the write actually persisted before responding so the UI can
+    // show a real before/after delta instead of the user wondering whether
+    // the claim "worked".
+    const postActivated = await db.get(guestActivatedDocPath(phone10));
+    const postActivatedList = await db.list(guestActivatedCollection, {
+      limit: 50_000,
+    });
+    const postActivatedCount = postActivatedList.filter((e) =>
+      !isExcludedFromReporting(e.id)
+    ).length;
+    const postOutsideList = await db.list(salesOutsideWindowCollection, {
+      limit: 50_000,
+    });
+    const postOutsideCount = postOutsideList.filter((e) =>
+      !isExcludedFromReporting(e.id)
+    ).length;
+
+    const excluded = isExcludedFromReporting(phone10);
+    const phoneAlreadyActivated = preActivated !== null;
+    const phoneNowActivated = postActivated !== null;
+    const delta = postActivatedCount - preActivatedCount;
+
     console.log(
-      `[claim-outside-window] ✅ ${phone10} appt=${closestAppointmentAt ?? "?"} (${closestDaysDiff ?? "?"}d) office="${office ?? ""}" activator="${activator ?? ""}"`,
+      `[claim-outside-window] ✅ ${phone10} appt=${closestAppointmentAt ?? "?"} (${closestDaysDiff ?? "?"}d) office="${office ?? ""}" activator="${activator ?? ""}" — activatedCount ${preActivatedCount}→${postActivatedCount} (delta=${delta}) phoneAlreadyActivated=${phoneAlreadyActivated} excludedFromReporting=${excluded}`,
     );
 
-    return Response.json({ success: true, phone10, marker });
+    return Response.json({
+      success: true,
+      phone10,
+      marker,
+      diagnostic: {
+        excludedFromReporting: excluded,
+        phoneAlreadyActivated,
+        phoneNowActivated,
+        activatedCountBefore: preActivatedCount,
+        activatedCountAfter: postActivatedCount,
+        activatedDelta: delta,
+        outsideWindowCountAfter: postOutsideCount,
+      },
+    });
   },
 });

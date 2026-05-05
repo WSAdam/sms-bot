@@ -1737,6 +1737,20 @@ drillContent.addEventListener("click", async function(ev){
     });
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
+    var diag = data.diagnostic || {};
+    var msg = "";
+    if(diag.excludedFromReporting){
+      msg = "Claim recorded for " + phone10 + " but this phone is in EXCLUDED_REPORTING_PHONES — it WILL NOT show up in dashboard counts. (Activated total " + diag.activatedCountAfter + " unchanged.)";
+    } else if(diag.phoneAlreadyActivated && diag.activatedDelta === 0){
+      msg = "Claim recorded but " + phone10 + " was ALREADY in guestactivated (likely from a prior cron / claim). Total stays at " + diag.activatedCountAfter + " — no double-count.";
+    } else if(diag.activatedDelta === 1){
+      msg = "✅ Claimed " + phone10 + ". Activated total: " + diag.activatedCountBefore + " → " + diag.activatedCountAfter + ".";
+    } else if(diag.activatedDelta < 0){
+      msg = "⚠️ Activated count went DOWN (" + diag.activatedCountBefore + " → " + diag.activatedCountAfter + "). Something else removed a doc concurrently. Check logs.";
+    } else {
+      msg = "Claim recorded. Activated " + diag.activatedCountBefore + " → " + diag.activatedCountAfter + ", Outside Window now " + diag.outsideWindowCountAfter + ".";
+    }
+    alert(msg);
     // Refresh both the drill (so the row drops) AND the main dashboard
     // cards behind it (so Activated/SalesWithin7d/OutsideWindow tiles
     // reflect the new totals). Without this, the user sees stale numbers.
@@ -2157,7 +2171,9 @@ async function toggleGuestStatus(type){
     const actData = await actRes.json();
 
     if(actData.value && actData.value.Activated){
-      // Remove
+      // Removing an activation drops the lifetime Activated count by 1 —
+      // the most common cause of "I lost a sale" reports. Hard-confirm.
+      if(!confirm("REMOVE activation for " + phone + "? This will subtract 1 from the lifetime Activated total.")) return;
       await fetch("/api/kv/delete?key=" + encodeURIComponent(JSON.stringify(["guestactivated", phone])), { method: "DELETE" });
     } else {
       // Activate
@@ -2178,7 +2194,7 @@ async function toggleGuestStatus(type){
     const ansData = await ansRes.json();
 
     if(ansData.value && ansData.value.answered){
-      // Remove
+      if(!confirm("REMOVE answered status for " + phone + "?")) return;
       await fetch("/api/kv/delete?key=" + encodeURIComponent(JSON.stringify(["guestanswered", phone])), { method: "DELETE" });
     } else {
       // Mark answered
