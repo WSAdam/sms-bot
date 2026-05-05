@@ -5,6 +5,7 @@
 
 import { SALE_MATCH_WINDOW_DAYS } from "@shared/config/constants.ts";
 import {
+  guestActivatedCollection,
   guestActivatedDocPath,
   injectionHistoryCollection,
   salesOutsideWindowDocPath,
@@ -83,10 +84,14 @@ export async function processSaleMatches(
   // (scheduledinjections, deleted on fire) and historical (injectionhistory,
   // append-only). A phone can appear multiple times across rebookings, so we
   // collect every eventTime we know about and pick the best one per match.
-  const [pendingDocs, historyDocs] = await Promise.all([
+  // Also load already-activated phones so we don't re-park them in
+  // salesoutsidewindow once they've been credited as a sale.
+  const [pendingDocs, historyDocs, activatedDocs] = await Promise.all([
     client.list(scheduledInjectionsCollection, { limit: 50_000 }),
     client.list(injectionHistoryCollection, { limit: 50_000 }),
+    client.list(guestActivatedCollection, { limit: 50_000 }),
   ]);
+  const alreadyActivated = new Set<string>(activatedDocs.map((e) => e.id));
 
   const apptMap = new Map<string, ApptCandidate[]>();
   function add(rawPhone: unknown, rawEventTime: unknown) {
@@ -206,6 +211,19 @@ export async function processSaleMatches(
         `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → matched (${odrKind}, ${withinDays}d)`,
       );
     } else {
+      // Already credited as a sale (manual claim, prior cron match, etc.) —
+      // do NOT re-park them in the outside-window drill. Also clean up any
+      // pre-existing salesoutsidewindow doc so the drill stops showing them.
+      if (alreadyActivated.has(phone10)) {
+        console.log(
+          `[sale-match] ⏭ ${phone10} sale=${saleDay} → already activated; skipping outside-window write`,
+        );
+        writes.push({
+          type: "delete",
+          path: salesOutsideWindowDocPath(phone10),
+        });
+        continue;
+      }
       console.log(
         `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
       );

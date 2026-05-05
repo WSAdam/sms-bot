@@ -1565,38 +1565,37 @@ document.getElementById("peopleRepliedCard").addEventListener("click", async fun
   }
 });
 
-// Activated drill-in
+// Activated drill-in (lifetime). Date filter intentionally NOT applied —
+// this is wired to a Lifetime card, so it shows every guestactivated doc
+// ever written (test phones excluded server-side). Sorted newest first.
 document.getElementById("activatedCard").addEventListener("click", async function(){
   drillReset();
-  drillTitle.textContent = "Activated Guests";
-  var sd = document.getElementById("startDate").value;
-  var ed = document.getElementById("endDate").value;
-  drillSubtitle.textContent = "Guests marked as sale via SHA phone match (" + (sd || "all") + " to " + (ed || "all") + ")";
+  drillTitle.textContent = "Activated Guests (lifetime)";
+  drillSubtitle.textContent = "Every guest ever marked as activated — manual claims, daily QB sale-match cron, and SHA phone-hash activations. Independent of the date picker.";
   openDrill();
   drillLoading.style.display = "block";
   try{
     var res = await fetch("/api/kv/list", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: ["guestactivated"], limit: 500 })
+      body: JSON.stringify({ prefix: ["guestactivated"], limit: 50000 })
     });
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
     var items = (data.entries || []).map(function(e){ return e.value; });
-    // Date filter client-side using ET boundaries
-    if(sd){
-      var startMs = new Date(sd + "T00:00:00-04:00").getTime();
-      items = items.filter(function(m){ return !m.activatedAt || new Date(m.activatedAt).getTime() >= startMs; });
-    }
-    if(ed){
-      var endMs = new Date(ed + "T23:59:59-04:00").getTime();
-      items = items.filter(function(m){ return !m.activatedAt || new Date(m.activatedAt).getTime() <= endMs; });
-    }
+    items.sort(function(a, b){
+      var at = a.activatedAt ? new Date(a.activatedAt).getTime() : 0;
+      var bt = b.activatedAt ? new Date(b.activatedAt).getTime() : 0;
+      return bt - at;
+    });
     renderDrillTable(items, [
-      { label: "Phone", render: function(m){ return phoneLink(m.phone10); } },
-      { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted" },
-      { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); } },
+      { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
+      { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
+      { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); }, sortKey: function(m){ return m.eventTime || ""; } },
+      { label: "Match Reason", render: function(m){ return escapeHtml(m.matchReason || ""); }, cls: "muted", sortKey: function(m){ return m.matchReason || ""; } },
+      { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
+      { label: "Activator", render: function(m){ return escapeHtml(m.activator || ""); }, cls: "muted", sortKey: function(m){ return m.activator || ""; } },
       { label: "Status", render: function(m){ return m.Activated ? '<span class="badge ok">Activated</span>' : '-'; } }
     ]);
   } catch(err){
@@ -1606,37 +1605,31 @@ document.getElementById("activatedCard").addEventListener("click", async functio
   }
 });
 
-// Answered drill-in
+// Answered drill-in (lifetime). Same lifetime treatment as Activated.
 document.getElementById("answeredCard").addEventListener("click", async function(){
   drillReset();
-  drillTitle.textContent = "Answered Guests";
-  var sd = document.getElementById("startDate").value;
-  var ed = document.getElementById("endDate").value;
-  drillSubtitle.textContent = "Guests who answered the confirmation call (" + (sd || "all") + " to " + (ed || "all") + ")";
+  drillTitle.textContent = "Answered Guests (lifetime)";
+  drillSubtitle.textContent = "Every guest who answered an inbound call from the dialer (POST /api/guests/answered). Independent of the date picker.";
   openDrill();
   drillLoading.style.display = "block";
   try{
     var res = await fetch("/api/kv/list", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: ["guestanswered"], limit: 500 })
+      body: JSON.stringify({ prefix: ["guestanswered"], limit: 50000 })
     });
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
     var items = (data.entries || []).map(function(e){ return e.value; });
-    // Date filter client-side using ET boundaries
-    if(sd){
-      var startMs = new Date(sd + "T00:00:00-04:00").getTime();
-      items = items.filter(function(m){ return !m.answeredAt || new Date(m.answeredAt).getTime() >= startMs; });
-    }
-    if(ed){
-      var endMs = new Date(ed + "T23:59:59-04:00").getTime();
-      items = items.filter(function(m){ return !m.answeredAt || new Date(m.answeredAt).getTime() <= endMs; });
-    }
+    items.sort(function(a, b){
+      var at = a.answeredAt ? new Date(a.answeredAt).getTime() : 0;
+      var bt = b.answeredAt ? new Date(b.answeredAt).getTime() : 0;
+      return bt - at;
+    });
     renderDrillTable(items, [
-      { label: "Phone", render: function(m){ return phoneLink(m.phone10); } },
-      { label: "Answered At", render: function(m){ return escapeHtml(formatTimestamp(m.answeredAt)); }, cls: "muted" },
+      { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
+      { label: "Answered At", render: function(m){ return escapeHtml(formatTimestamp(m.answeredAt)); }, cls: "muted", sortKey: function(m){ return m.answeredAt || ""; } },
       { label: "Status", render: function(m){ return m.answered ? '<span class="badge ok">Answered</span>' : '-'; } }
     ]);
   } catch(err){
@@ -1682,19 +1675,41 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
 async function _loadOutsideWindowDrill(){
   drillReset();
   drillTitle.textContent = "Activations Outside Window";
-  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first. Click Claim to override and credit a row to our funnel.";
+  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first. Already-credited phones are filtered out so Claim always moves the count.";
   openDrill();
   drillLoading.style.display = "block";
   try{
-    var res = await fetch("/api/kv/list", {
+    // Load both outside-window AND guestactivated in parallel. We filter out
+    // any outside-window row whose phone is already in guestactivated — those
+    // are stale (already counted as a sale) and Claiming them is a no-op,
+    // which is what made the count appear "stuck". The cron will eventually
+    // delete the stale docs but this filter makes the drill correct on load.
+    var outsideRes = await fetch("/api/kv/list", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prefix: ["salesoutsidewindow"], limit: 1000 })
     });
-    var data = await res.json();
-    if(!res.ok) throw new Error(data.error || "Failed");
+    var activatedRes = await fetch("/api/kv/list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prefix: ["guestactivated"], limit: 50000 })
+    });
+    var outsideData = await outsideRes.json();
+    var activatedData = await activatedRes.json();
+    if(!outsideRes.ok) throw new Error(outsideData.error || "Failed (outside)");
+    if(!activatedRes.ok) throw new Error(activatedData.error || "Failed (activated)");
     drillLoading.style.display = "none";
-    var items = (data.entries || []).map(function(e){ return e.value; });
+    var activatedSet = new Set();
+    (activatedData.entries || []).forEach(function(e){
+      var key = e.key;
+      if(Array.isArray(key) && key.length >= 2) activatedSet.add(String(key[1]));
+    });
+    var rawItems = (outsideData.entries || []).map(function(e){ return e.value; });
+    var items = rawItems.filter(function(m){ return !activatedSet.has(String(m.phone10)); });
+    var hiddenCount = rawItems.length - items.length;
+    if(hiddenCount > 0){
+      drillSubtitle.textContent += " (" + hiddenCount + " stale row" + (hiddenCount === 1 ? "" : "s") + " hidden — already credited; cron will clean them up.)";
+    }
     items.sort(function(a, b){
       return Math.abs(a.closestDaysDiff || 0) - Math.abs(b.closestDaysDiff || 0);
     });
