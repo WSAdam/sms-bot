@@ -1,6 +1,10 @@
 import { App, staticFiles } from "fresh";
 import { type State } from "./utils.ts";
 import { sweepScheduledInjections } from "@shared/services/injections/sweep.ts";
+import {
+  runNightlyReport,
+  yesterdayEasternDateString,
+} from "@shared/services/report/nightly.ts";
 import { runDailyQbSaleMatch } from "@shared/services/sale-match/cron.ts";
 
 export const app = new App<State>();
@@ -37,10 +41,11 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
     }
   });
 
-  // Once a day at 14:00 UTC (10am ET / 9am EDT). Pulls today's QB bookings
-  // and writes saleswithin7d markers for any matched scheduled injections.
-  // To change the schedule, edit the cron expression below: "min hour day mon dow"
-  denoCron("daily-qb-sale-match", "0 14 * * *", async () => {
+  // Once a day at 09:00 UTC = 4 AM EST (5 AM EDT during summer). Pulls
+  // today's QB bookings and writes saleswithin7d markers for any matched
+  // scheduled injections. To change the schedule, edit the cron expression:
+  // "min hour day mon dow" — UTC time.
+  denoCron("daily-qb-sale-match", "0 9 * * *", async () => {
     try {
       const r = await runDailyQbSaleMatch();
       if (!r.ok) {
@@ -54,6 +59,22 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
       }
     } catch (e) {
       console.error(`❌ daily QB cron threw: ${(e as Error).message}`);
+    }
+  });
+
+  // Once a day at 09:15 UTC = 4:15 AM EST. Runs after the QB sale-match cron
+  // so the report reflects the freshly-computed activations from yesterday.
+  // Subject is prefixed with [REPORT] for easy mailbox filtering.
+  denoCron("nightly-report", "15 9 * * *", async () => {
+    try {
+      const date = yesterdayEasternDateString();
+      const r = await runNightlyReport(date);
+      console.log(
+        `⏰ nightly report: date=${r.date} texts=${r.counts.texts} phones=${r.counts.phones} ` +
+          `appts=${r.counts.appts} activated=${r.counts.activated} answered=${r.counts.answered}`,
+      );
+    } catch (e) {
+      console.error(`❌ nightly report cron threw: ${(e as Error).message}`);
     }
   });
 }
