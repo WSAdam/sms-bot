@@ -1682,7 +1682,7 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
 document.getElementById("outsideWindowCard").addEventListener("click", async function(){
   drillReset();
   drillTitle.textContent = "Activations Outside Window";
-  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 7 days). Sorted by closest miss first.";
+  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first.";
   openDrill();
   drillLoading.style.display = "block";
   try{

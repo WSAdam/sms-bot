@@ -19,6 +19,7 @@ import {
   leadPointerDocPath,
   orchestratorEventDocPath,
   rateLimitDocPath,
+  salesOutsideWindowDocPath,
   salesWithin7dDocPath,
   scheduledInjectionDocPath,
   smsFlowContextDocPath,
@@ -74,6 +75,10 @@ export function legacyKeyToDocPath(key: LegacyKey): LegacyDocPath | null {
 
     case "saleswithin7d":
       if (rest.length === 1) return { path: salesWithin7dDocPath(rest[0]) };
+      return null;
+
+    case "salesoutsidewindow":
+      if (rest.length === 1) return { path: salesOutsideWindowDocPath(rest[0]) };
       return null;
 
     case "injectionhistory":
@@ -165,6 +170,8 @@ export function legacyKeyToCollectionPath(prefix: LegacyKey): LegacyCollectionPa
       return { parent: `${ROOT_COLLECTION}/guestanswered/byPhone` };
     case "saleswithin7d":
       return { parent: `${ROOT_COLLECTION}/saleswithin7d/byPhone` };
+    case "salesoutsidewindow":
+      return { parent: `${ROOT_COLLECTION}/salesoutsidewindow/byPhone` };
     case "injectionhistory":
       if (rest.length >= 1) {
         const phone = rest[0];
