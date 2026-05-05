@@ -10,6 +10,7 @@ import {
   QUICKBASE_BOOKINGS_REPORT_ID,
   QUICKBASE_BOOKINGS_TABLE_ID,
 } from "@shared/config/constants.ts";
+import { getCronConfig } from "@shared/services/config/cron-config.ts";
 import { getQuickbaseClient } from "@shared/services/quickbase/client.ts";
 import { normalizeBookingRowsDetailed } from "@shared/services/quickbase/report.ts";
 import { processSaleMatches } from "@shared/services/sale-match/service.ts";
@@ -22,16 +23,24 @@ export interface DailyCronResult {
 }
 
 export async function runDailyQbSaleMatch(
-  reportId: string = QUICKBASE_BOOKINGS_REPORT_ID,
-  tableId: string = QUICKBASE_BOOKINGS_TABLE_ID,
-  options: { verbose?: boolean } = {},
+  reportId?: string,
+  tableId?: string,
+  options: { verbose?: boolean; forceRun?: boolean } = {},
 ): Promise<DailyCronResult> {
+  // Pull cron config so explicit caller args win, then config, then constants.
+  const cfg = (await getCronConfig()).qbSaleMatch;
+  if (!cfg.enabled && !options.forceRun) {
+    console.log(`[sale-match] ⏭ skipped — qbSaleMatch.enabled=false`);
+    return { ok: false, reason: "disabled in cron config" };
+  }
+  const useReportId = reportId ?? cfg.reportId ?? QUICKBASE_BOOKINGS_REPORT_ID;
+  const useTableId = tableId ?? cfg.tableId ?? QUICKBASE_BOOKINGS_TABLE_ID;
   console.log(
-    `[sale-match] starting: tableId=${tableId} reportId=${reportId}`,
+    `[sale-match] starting: tableId=${useTableId} reportId=${useReportId}`,
   );
   let report;
   try {
-    report = await getQuickbaseClient().getReport(tableId, reportId);
+    report = await getQuickbaseClient().getReport(useTableId, useReportId);
   } catch (e) {
     console.error(`[sale-match] ❌ QB fetch failed: ${(e as Error).message}`);
     return { ok: false, reason: `Quickbase fetch failed: ${(e as Error).message}` };
@@ -71,12 +80,13 @@ export async function runDailyQbSaleMatch(
     rows.map((r) => ({
       phone10: r.phone10,
       ...(r.addedDate ? { saleAt: r.addedDate } : {}),
+      ...(r.activator ? { activator: r.activator } : {}),
     })),
     undefined,
     { verbose: options.verbose },
   );
   console.log(
-    `[sale-match] done: matched=${summary.matched} ` +
+    `[sale-match] done: matched=${summary.matched} (odrBypass=${summary.matchedByOdr}) ` +
       `skippedNoInjection=${summary.skippedNoInjection} ` +
       `skippedOlderThan7Days=${summary.skippedOlderThan7Days}`,
   );

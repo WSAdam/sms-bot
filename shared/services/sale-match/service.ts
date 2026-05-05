@@ -30,6 +30,16 @@ import { normalizePhone } from "@shared/util/phone.ts";
 export interface SaleMatchInput {
   phone10: string;
   saleAt?: string; // when the sale was recorded (defaults to now)
+  activator?: string; // QB activator field (e.g. "ODR - Rodger Gamble")
+}
+
+// Activations by an ODR team member ALWAYS count as a sale, regardless
+// of the day-window check. The QB "Activator" field looks like
+// "ODR - {Name}" for ODR team members; we case-insensitively match
+// the "ODR -" prefix.
+function isOdrActivator(activator: string | undefined | null): boolean {
+  if (!activator) return false;
+  return activator.trim().toUpperCase().startsWith("ODR -");
 }
 
 interface ApptCandidate {
@@ -50,6 +60,7 @@ export async function processSaleMatches(
     success: true,
     fetchedFromReport: inputs.length,
     matched: 0,
+    matchedByOdr: 0,
     skippedNoInjection: 0,
     skippedOlderThan7Days: 0,
     matches: [],
@@ -89,18 +100,8 @@ export async function processSaleMatches(
     `[sale-match] loaded ${pendingDocs.length} pending + ${historyDocs.length} history = ${apptMap.size} unique phones with appointments`,
   );
 
-  for (const { phone10, saleAt } of inputs) {
+  for (const { phone10, saleAt, activator } of inputs) {
     if (phone10.length !== 10) {
-      summary.skippedNoInjection++;
-      summary.skippedNoInjectionList?.push({
-        phone10,
-        activatedAt: saleAt ?? "",
-      });
-      continue;
-    }
-
-    const candidates = apptMap.get(phone10);
-    if (!candidates || candidates.length === 0) {
       summary.skippedNoInjection++;
       summary.skippedNoInjectionList?.push({
         phone10,
@@ -119,10 +120,11 @@ export async function processSaleMatches(
       continue;
     }
 
-    // Pick the candidate that matches the day-level window. We compare
-    // calendar days in ET, not raw timestamps, so a same-day activation
-    // doesn't false-reject when the appointment is later in the day than
-    // midnight-UTC of the activation date.
+    const candidates = apptMap.get(phone10) ?? [];
+    const odrBypass = isOdrActivator(activator);
+
+    // Pick the closest in-window candidate (if any). Day-level diff in ET so
+    // a same-day activation doesn't false-reject.
     let best: ApptCandidate | null = null;
     let bestWithinDays = Infinity;
     for (const c of candidates) {
@@ -136,21 +138,54 @@ export async function processSaleMatches(
       }
     }
 
-    // Detailed per-phone log — only fires for phones that actually have
-    // appointment records (~hundreds at scale, not the full QB report).
-    // Lets you eyeball whether a near-miss should have matched.
     const saleDay = easternDateString(new Date(saleMs));
     const apptSummary = candidates
       .slice(0, 5)
-      .map((c) => `${easternDateString(new Date(c.eventTimeMs))}(d=${dayDiff(c.eventTimeMs, saleMs)})`)
+      .map((c) =>
+        `${easternDateString(new Date(c.eventTimeMs))}(d=${dayDiff(c.eventTimeMs, saleMs)})`
+      )
       .join(",");
+
+    // Decision tree:
+    //   1. In-window appointment match → write as "within_window"
+    //   2. No in-window match BUT ODR activator → write as "odr_activator"
+    //      (counts even with no appointment; ODR is our funnel by definition)
+    //   3. Has appointment(s) but none in window AND non-ODR → skippedOlderThan7Days
+    //   4. No appointments AND non-ODR → skippedNoInjection (silent)
+    let appointmentAt: string | null;
+    let withinDays: number | null;
+    let matchReason: "within_window" | "odr_activator";
+
     if (best) {
+      appointmentAt = best.eventTime;
+      withinDays = bestWithinDays;
+      matchReason = "within_window";
       console.log(
         `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] → matched ${easternDateString(new Date(best.eventTimeMs))} (${bestWithinDays}d)`,
       );
+    } else if (odrBypass) {
+      // No in-window appt, but ODR activator → still count.
+      // Use the closest (any direction) candidate as a reference if we have one.
+      const ref = candidates.slice().sort((a, b) =>
+        Math.abs(dayDiff(a.eventTimeMs, saleMs)) -
+        Math.abs(dayDiff(b.eventTimeMs, saleMs))
+      )[0];
+      appointmentAt = ref?.eventTime ?? null;
+      withinDays = ref ? dayDiff(ref.eventTimeMs, saleMs) : null;
+      matchReason = "odr_activator";
+      console.log(
+        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator}" → matched (ODR bypass)`,
+      );
+    } else if (candidates.length === 0) {
+      summary.skippedNoInjection++;
+      summary.skippedNoInjectionList?.push({
+        phone10,
+        activatedAt: new Date(saleMs).toISOString(),
+      });
+      continue;
     } else {
       console.log(
-        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
+        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
       );
       summary.skippedOlderThan7Days++;
       const candidateDetails = candidates.map((c) => ({
@@ -162,8 +197,6 @@ export async function processSaleMatches(
         activatedAt: new Date(saleMs).toISOString(),
         candidates: candidateDetails,
       });
-      // Persist so the dashboard can surface "activations that slipped past
-      // the reminder window". Closest miss = smallest abs(daysDiff).
       const closest = candidateDetails.slice().sort((a, b) =>
         Math.abs(a.daysDiff) - Math.abs(b.daysDiff)
       )[0];
@@ -173,6 +206,7 @@ export async function processSaleMatches(
         closestAppointmentAt: closest?.appointmentAt ?? null,
         closestDaysDiff: closest?.daysDiff ?? null,
         candidates: candidateDetails,
+        activator: activator ?? null,
         windowDays: SALE_MATCH_WINDOW_DAYS,
         updatedAt: new Date().toISOString(),
       });
@@ -183,10 +217,12 @@ export async function processSaleMatches(
     const marker: SaleWithinWindowMarker = {
       phone10,
       phone11: `1${phone10}`,
-      appointmentAt: best.eventTime,
+      appointmentAt,
       saleAt: new Date(saleMs).toISOString(),
       windowDays: SALE_MATCH_WINDOW_DAYS,
-      withinDays: bestWithinDays,
+      withinDays,
+      matchReason,
+      ...(activator ? { activator } : {}),
       updatedAt,
     };
     await client.set(
@@ -197,15 +233,20 @@ export async function processSaleMatches(
       phone10,
       Activated: true,
       activatedAt: updatedAt,
-      eventTime: best.eventTime,
+      eventTime: appointmentAt,
+      matchReason,
+      ...(activator ? { activator } : {}),
     });
 
     summary.matched++;
+    if (matchReason === "odr_activator") summary.matchedByOdr++;
     summary.matches.push({
       phone10,
-      appointmentAt: best.eventTime,
+      appointmentAt,
       activatedAt: marker.saleAt,
-      withinDays: bestWithinDays,
+      withinDays,
+      matchReason,
+      ...(activator ? { activator } : {}),
     });
   }
 

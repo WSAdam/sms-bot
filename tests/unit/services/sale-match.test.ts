@@ -109,7 +109,55 @@ Deno.test("phone with multiple history entries picks closest within window", asy
   const r = await processSaleMatches([{ phone10: "9999999996" }]);
   assertEquals(r.matched, 1);
   // withinDays should reflect the 2d match, not the 30d one
-  assertEquals(Math.round(r.matches[0].withinDays), 2);
+  assertEquals(Math.round(r.matches[0].withinDays ?? 0), 2);
+});
+
+Deno.test("ODR activator counts even outside window (with appointment)", async () => {
+  const db = setup();
+  // Appointment 30d ago — way outside the 8d window
+  seedHistory(db, "9999998801", 30);
+  const r = await processSaleMatches([{
+    phone10: "9999998801",
+    activator: "ODR - Rodger Gamble",
+  }]);
+  assertEquals(r.matched, 1);
+  assertEquals(r.matchedByOdr, 1);
+  assertEquals(r.matches[0].matchReason, "odr_activator");
+});
+
+Deno.test("ODR activator counts even with no appointment record", async () => {
+  setup();
+  const r = await processSaleMatches([{
+    phone10: "9999998802",
+    activator: "ODR - Random Agent",
+  }]);
+  assertEquals(r.matched, 1);
+  assertEquals(r.matchedByOdr, 1);
+  assertEquals(r.matches[0].matchReason, "odr_activator");
+  assertEquals(r.matches[0].appointmentAt, null);
+});
+
+Deno.test("non-ODR activator outside window still skips", async () => {
+  const db = setup();
+  seedHistory(db, "9999998803", 30);
+  const r = await processSaleMatches([{
+    phone10: "9999998803",
+    activator: "Booksi - Some Other Agent",
+  }]);
+  assertEquals(r.matched, 0);
+  assertEquals(r.skippedOlderThan7Days, 1);
+});
+
+Deno.test("ODR match within window logs as within_window, not odr_activator", async () => {
+  const db = setup();
+  seedHistory(db, "9999998804", 2);
+  const r = await processSaleMatches([{
+    phone10: "9999998804",
+    activator: "ODR - Rodger Gamble",
+  }]);
+  assertEquals(r.matched, 1);
+  assertEquals(r.matchedByOdr, 0); // within-window takes precedence
+  assertEquals(r.matches[0].matchReason, "within_window");
 });
 
 Deno.test("same-day appointment + activation matches (date-only saleAt)", async () => {

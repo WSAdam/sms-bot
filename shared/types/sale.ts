@@ -1,10 +1,14 @@
+export type SaleMatchReason = "within_window" | "odr_activator";
+
 export interface SaleWithinWindowMarker {
   phone10: string;
   phone11: string;
-  appointmentAt: string;
+  appointmentAt: string | null;
   saleAt: string;
   windowDays: number;
-  withinDays: number;
+  withinDays: number | null;
+  matchReason: SaleMatchReason;
+  activator?: string | null;
   updatedAt: string;
   meta?: Record<string, unknown>;
 }
@@ -13,13 +17,16 @@ export interface ActivateFromReportSummary {
   success: true;
   fetchedFromReport: number;
   matched: number;
+  matchedByOdr: number;
   skippedNoInjection: number;
   skippedOlderThan7Days: number;
   matches: Array<{
     phone10: string;
-    appointmentAt: string;
+    appointmentAt: string | null;
     activatedAt: string;
-    withinDays: number;
+    withinDays: number | null;
+    matchReason: SaleMatchReason;
+    activator?: string | null;
   }>;
   // Phones that had at least one appointment record but no candidate fell
   // inside the configured window. Always included — small set, near-miss

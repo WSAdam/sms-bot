@@ -10,6 +10,7 @@
 import { ROOT_COLLECTION } from "@shared/config/constants.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { getCronConfig } from "@shared/services/config/cron-config.ts";
 import { sendReport } from "@shared/services/postmark/client.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
 import { easternDateString } from "@shared/util/time.ts";
@@ -119,14 +120,33 @@ async function build(date: string) {
   };
 }
 
+export interface NightlyReportOptions {
+  /** When true, runs even if cron config has report.enabled=false. */
+  forceSend?: boolean;
+}
+
 export async function runNightlyReport(
   date?: string,
-): Promise<NightlyReportResult> {
+  options: NightlyReportOptions = {},
+): Promise<NightlyReportResult & { skipped?: boolean; reason?: string }> {
   const reportDate = date ?? easternDateString();
+  const cfg = (await getCronConfig()).report;
+
+  if (!cfg.enabled && !options.forceSend) {
+    console.log(`[report] ⏭ skipped — report.enabled=false in cron config`);
+    return {
+      date: reportDate,
+      counts: { texts: 0, phones: 0, sched: 0, appts: 0, activated: 0, answered: 0 },
+      skipped: true,
+      reason: "disabled in cron config",
+    };
+  }
+
   const r = await build(reportDate);
 
   await sendReport({
-    subject: `[REPORT] SMS Bot — ${reportDate}`,
+    to: cfg.recipients,
+    subject: `${cfg.subjectPrefix} SMS Bot — ${reportDate}`,
     htmlBody: r.html,
     textBody: r.text,
     attachments: [{
@@ -136,6 +156,9 @@ export async function runNightlyReport(
     }],
   });
 
+  console.log(
+    `[report] ✅ sent to "${cfg.recipients}" subject="${cfg.subjectPrefix} SMS Bot — ${reportDate}"`,
+  );
   return { date: reportDate, counts: r.counts };
 }
 

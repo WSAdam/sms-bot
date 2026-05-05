@@ -53,6 +53,7 @@ export interface BookingRow {
   phone10: string;
   phoneRaw: string;
   addedDate: string | null;
+  activator: string | null;
 }
 
 // Auto-detect phone + date column IDs from the report's fields metadata.
@@ -71,10 +72,23 @@ function findDateField(fields: QuickbaseField[]): QuickbaseField | undefined {
     fields.find((f) => /date|added|arrival|activated/i.test(f.label ?? ""));
 }
 
+function findActivatorField(
+  fields: QuickbaseField[],
+): QuickbaseField | undefined {
+  // The "activator" / "activated by" column — the agent who marked the lead
+  // as a sale. Looking for fields like "Activator", "Activated By", "Agent",
+  // "User". Used to detect "ODR - {Name}" so we can count those as sales
+  // regardless of the day-window check.
+  return fields.find((f) =>
+    /activator|activated\s*by|agent|user/i.test(f.label ?? "")
+  );
+}
+
 export interface NormalizationResult {
   rows: BookingRow[];
   phoneFieldId: string;
   dateFieldId: string | null;
+  activatorFieldId: string | null;
 }
 
 export function normalizeBookingRowsDetailed(
@@ -83,14 +97,17 @@ export function normalizeBookingRowsDetailed(
   const fields = resp.fields ?? [];
   const phoneF = findPhoneField(fields);
   const dateF = findDateField(fields);
+  const activatorF = findActivatorField(fields);
   // Fall back to report-530 schema if metadata is absent.
   const phoneKey = phoneF ? String(phoneF.id) : "48";
   const dateKey = dateF ? String(dateF.id) : "-1";
+  const activatorKey = activatorF ? String(activatorF.id) : null;
 
   const rows: BookingRow[] = [];
   for (const r of resp.data ?? []) {
     const rawPhone = r[phoneKey]?.value;
     const addedRaw = r[dateKey]?.value;
+    const activatorRaw = activatorKey ? r[activatorKey]?.value : undefined;
     if (typeof rawPhone !== "string") continue;
     const digits = rawPhone.replace(/\D/g, "");
     if (digits.length < 10) continue;
@@ -98,9 +115,15 @@ export function normalizeBookingRowsDetailed(
       phone10: digits.slice(-10),
       phoneRaw: rawPhone,
       addedDate: typeof addedRaw === "string" ? addedRaw : null,
+      activator: typeof activatorRaw === "string" ? activatorRaw : null,
     });
   }
-  return { rows, phoneFieldId: phoneKey, dateFieldId: dateF ? dateKey : null };
+  return {
+    rows,
+    phoneFieldId: phoneKey,
+    dateFieldId: dateF ? dateKey : null,
+    activatorFieldId: activatorKey,
+  };
 }
 
 // Backwards-compat alias for the existing call sites + tests.

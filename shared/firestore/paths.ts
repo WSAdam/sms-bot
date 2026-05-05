@@ -71,6 +71,10 @@ export const dncCollection = `${dncContainer}/byPhone`;
 export const configContainer = `${R}/config`;
 export const configSettingsCollection = `${configContainer}/settings`;
 
+export function cronConfigDocPath(): string {
+  return `${configSettingsCollection}/cronConfig`;
+}
+
 // Doc-path helpers
 export function conversationDocPath(docId: string): string {
   return `${conversationsCollection}/${docId}`;

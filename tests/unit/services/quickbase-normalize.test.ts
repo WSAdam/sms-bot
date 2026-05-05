@@ -95,3 +95,21 @@ Deno.test("normalizeBookingRowsDetailed falls back to legacy 48/-1 when no metad
   assertEquals(result.dateFieldId, null);
   assertEquals(result.rows[0].phone10, "5559991234");
 });
+
+Deno.test("normalizeBookingRowsDetailed picks up activator field by label", () => {
+  const resp: QuickbaseReportResponse = {
+    fields: [
+      { id: -1, label: "Phone", type: "phone" },
+      { id: 8, label: "Date Activated", type: "date" },
+      { id: 200, label: "Activator", type: "user" },
+    ],
+    data: [{
+      "-1": { value: "(555) 555-5555" },
+      "8": { value: "2026-05-04" },
+      "200": { value: "ODR - Rodger Gamble" },
+    }],
+  };
+  const result = normalizeBookingRowsDetailed(resp);
+  assertEquals(result.activatorFieldId, "200");
+  assertEquals(result.rows[0].activator, "ODR - Rodger Gamble");
+});

@@ -3539,6 +3539,28 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="cron-config" style="grid-column: 1 / -1">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">⚙️ Cron Config <span class="tag">live-edit</span></div>
+            <div class="ep-desc">Live-editable settings for the daily QB sale-match cron + nightly Postmark report. Schedule times are display-only (Deno.cron registers at deploy time — code change required to move them).</div>
+          </div>
+          <span class="ep-method method-GET">GET/POST</span>
+        </div>
+        <code class="path">/api/config/cron</code>
+        <div id="cronConfigBody" class="params" style="margin-top:10px">
+          <div class="muted">Click Load to fetch current config…</div>
+        </div>
+        <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:10px">
+          <button onclick="loadCronConfig(this)">Load Config</button>
+          <button onclick="saveCronConfig(this)">💾 Save</button>
+          <button onclick="sendReportNow(this)" class="secondary">📧 Send Report Now</button>
+          <button onclick="runQbCronNow(this)" class="secondary">▶️ Run QB Cron Now</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="bland-list-today">
         <div class="ep-head">
           <div>
@@ -4027,6 +4049,87 @@ async function runActivateFromReport(btn){
 async function runListToday(btn){
   const card = btn.closest(".endpoint-card");
   await runRequest(card, { method: "GET", url: "/sms-callback/list-today" });
+}
+
+// ---- Cron Config ----
+async function loadCronConfig(btn){
+  const card = btn.closest(".endpoint-card");
+  const body = card.querySelector("#cronConfigBody");
+  body.innerHTML = '<div class="muted">Loading…</div>';
+  try{
+    const res = await fetch("/api/config/cron");
+    const cfg = await res.json();
+    if(!res.ok) throw new Error(cfg.error || "load failed");
+    body.innerHTML = renderCronConfigForm(cfg);
+  } catch(err){
+    body.innerHTML = '<div class="error">Load failed: ' + escapeHtml(String(err.message || err)) + '</div>';
+  }
+}
+
+function renderCronConfigForm(cfg){
+  const r = cfg.report || {};
+  const q = cfg.qbSaleMatch || {};
+  return ''
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
+    +   '<div>'
+    +     '<h4 style="color:var(--accentHi);margin-bottom:8px">📧 Nightly Report</h4>'
+    +     '<label>Recipients (comma-separated)<input type="text" data-cfg="report.recipients" value="' + escapeHtml(r.recipients || "") + '" placeholder="adamp@monsterrg.com, x@y.com"></label>'
+    +     '<label>Subject Prefix<input type="text" data-cfg="report.subjectPrefix" value="' + escapeHtml(r.subjectPrefix || "") + '" placeholder="[REPORT]"></label>'
+    +     '<label class="checkbox-label"><input type="checkbox" data-cfg="report.enabled"' + (r.enabled ? ' checked' : '') + '> Enabled (cron sends email)</label>'
+    +     '<label>Schedule (display only)<input type="text" data-cfg="report.scheduleNote" value="' + escapeHtml(r.scheduleNote || "") + '"></label>'
+    +     '<div class="muted small" style="margin-top:6px">⚠ Schedule changes require a code change in main.ts (Deno.cron registers at deploy).</div>'
+    +   '</div>'
+    +   '<div>'
+    +     '<h4 style="color:var(--accentHi);margin-bottom:8px">🔄 QB Sale-Match</h4>'
+    +     '<label>Report ID<input type="text" data-cfg="qbSaleMatch.reportId" value="' + escapeHtml(q.reportId || "") + '" placeholder="678"></label>'
+    +     '<label>Table ID<input type="text" data-cfg="qbSaleMatch.tableId" value="' + escapeHtml(q.tableId || "") + '" placeholder="bpb28qsnn"></label>'
+    +     '<label class="checkbox-label"><input type="checkbox" data-cfg="qbSaleMatch.enabled"' + (q.enabled ? ' checked' : '') + '> Enabled (cron pulls QB)</label>'
+    +     '<label>Schedule (display only)<input type="text" data-cfg="qbSaleMatch.scheduleNote" value="' + escapeHtml(q.scheduleNote || "") + '"></label>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '</div>';
+}
+
+function readCronConfigForm(card){
+  const out = { report: {}, qbSaleMatch: {} };
+  card.querySelectorAll('[data-cfg]').forEach(function(el){
+    const path = el.getAttribute("data-cfg").split(".");
+    const val = el.type === "checkbox" ? el.checked : el.value;
+    out[path[0]][path[1]] = val;
+  });
+  return out;
+}
+
+async function saveCronConfig(btn){
+  const card = btn.closest(".endpoint-card");
+  const payload = readCronConfigForm(card);
+  if(!Object.keys(payload.report).length && !Object.keys(payload.qbSaleMatch).length){
+    alert("Click Load first to fetch the current config.");
+    return;
+  }
+  await runRequest(card, {
+    method: "POST", url: "/api/config/cron",
+    headers: { "content-type": "application/json" },
+    body: payload,
+  });
+  // Re-render with the saved values.
+  setTimeout(function(){ loadCronConfig(btn); }, 500);
+}
+
+async function sendReportNow(btn){
+  if(!confirm("Send the nightly report email now using the saved config?")) return;
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, { method: "POST", url: "/api/report/nightly" });
+}
+
+async function runQbCronNow(btn){
+  if(!confirm("Run the QB sale-match cron now using the saved config?")) return;
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, {
+    method: "POST", url: "/api/guests/activate-from-report",
+    headers: { "content-type": "application/json" },
+    body: {},
+  });
 }
 async function runDashboardStats(btn){
   const card = btn.closest(".endpoint-card");
