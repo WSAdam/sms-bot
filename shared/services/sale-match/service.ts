@@ -155,10 +155,13 @@ export async function processSaleMatches(
 
     // Decision tree:
     //   1. In-window appointment match → write as "within_window"
-    //   2. No in-window match BUT ODR activator → write as "odr_activator"
-    //      (counts even with no appointment; ODR is our funnel by definition)
+    //   2. ODR activator AND we have AT LEAST ONE appointment for them →
+    //      write as "odr_activator" even if outside the 8-day window.
+    //      The phone MUST have a scheduled-injection record (we sent them
+    //      through our SMS funnel). ODR activations of phones we never
+    //      touched do NOT count — that's just ODR doing their other work.
     //   3. Has appointment(s) but none in window AND non-ODR → skippedOlderThan7Days
-    //   4. No appointments AND non-ODR → skippedNoInjection (silent)
+    //   4. No appointments → skippedNoInjection (silent, regardless of ODR)
     let appointmentAt: string | null;
     let withinDays: number | null;
     let matchReason: "within_window" | "odr_activator";
@@ -170,26 +173,27 @@ export async function processSaleMatches(
       console.log(
         `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] → matched ${easternDateString(new Date(best.eventTimeMs))} (${bestWithinDays}d)`,
       );
-    } else if (odrBypass) {
-      // No in-window appt, but ODR activator → still count.
-      // Use the closest (any direction) candidate as a reference if we have one.
-      const ref = candidates.slice().sort((a, b) =>
-        Math.abs(dayDiff(a.eventTimeMs, saleMs)) -
-        Math.abs(dayDiff(b.eventTimeMs, saleMs))
-      )[0];
-      appointmentAt = ref?.eventTime ?? null;
-      withinDays = ref ? dayDiff(ref.eventTimeMs, saleMs) : null;
-      matchReason = "odr_activator";
-      console.log(
-        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator}" → matched (ODR bypass)`,
-      );
     } else if (candidates.length === 0) {
+      // No appointment record — skip even if ODR activated. We can't claim
+      // credit for an ODR activation if we never sent them an SMS.
       summary.skippedNoInjection++;
       summary.skippedNoInjectionList?.push({
         phone10,
         activatedAt: new Date(saleMs).toISOString(),
       });
       continue;
+    } else if (odrBypass) {
+      // Has appointment(s) but outside the 8d window AND ODR activator → count.
+      const ref = candidates.slice().sort((a, b) =>
+        Math.abs(dayDiff(a.eventTimeMs, saleMs)) -
+        Math.abs(dayDiff(b.eventTimeMs, saleMs))
+      )[0];
+      appointmentAt = ref.eventTime;
+      withinDays = dayDiff(ref.eventTimeMs, saleMs);
+      matchReason = "odr_activator";
+      console.log(
+        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator}" → matched (ODR bypass, ${withinDays}d)`,
+      );
     } else {
       console.log(
         `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" → outside ${SALE_MATCH_WINDOW_DAYS}d window`,

@@ -125,16 +125,16 @@ Deno.test("ODR activator counts even outside window (with appointment)", async (
   assertEquals(r.matches[0].matchReason, "odr_activator");
 });
 
-Deno.test("ODR activator counts even with no appointment record", async () => {
+Deno.test("ODR activator does NOT count if we have no appointment record", async () => {
   setup();
   const r = await processSaleMatches([{
     phone10: "9999998802",
     activator: "ODR - Random Agent",
   }]);
-  assertEquals(r.matched, 1);
-  assertEquals(r.matchedByOdr, 1);
-  assertEquals(r.matches[0].matchReason, "odr_activator");
-  assertEquals(r.matches[0].appointmentAt, null);
+  // No scheduled injection → can't claim credit even with ODR activator.
+  assertEquals(r.matched, 0);
+  assertEquals(r.matchedByOdr, 0);
+  assertEquals(r.skippedNoInjection, 1);
 });
 
 Deno.test("non-ODR activator outside window still skips", async () => {

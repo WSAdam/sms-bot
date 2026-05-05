@@ -14,6 +14,7 @@
     "migrate": "deno run -A --env-file=env/local scripts/migrate-kv-to-firestore.ts",
     "dedupe-conversations": "deno run -A --env-file=env/local scripts/dedupe-conversations.ts",
     "import-call-dispositions": "deno run -A --env-file=env/local scripts/import-call-dispositions.ts",
+    "rollback-odr-activations": "deno run -A --env-file=env/local scripts/rollback-odr-activations.ts",
     "shape-check": "deno run -A scripts/shape-check.ts"
   },
   "lint": {
