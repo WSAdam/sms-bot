@@ -2,6 +2,10 @@ import { App, staticFiles } from "fresh";
 import { type State } from "./utils.ts";
 import { sweepScheduledInjections } from "@shared/services/injections/sweep.ts";
 import {
+  reseedConversationsByDateRange,
+  yesterdayEasternRange,
+} from "@shared/services/conversations/reseed.ts";
+import {
   runNightlyReport,
   yesterdayEasternDateString,
 } from "@shared/services/report/nightly.ts";
@@ -38,6 +42,26 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
       console.log(`⏰ sweep: scanned=${r.scanned} fired=${r.fired} errors=${r.errors.length}`);
     } catch (e) {
       console.error(`❌ sweep failed: ${(e as Error).message}`);
+    }
+  });
+
+  // Once a day at 07:00 UTC = 2 AM EST (3 AM EDT). Pulls every Bland
+  // conversation from the previous ET day and re-syncs each one against
+  // Firestore. The reseed is safe: if Bland has fewer messages than we
+  // have stored, we leave the existing docs alone.
+  denoCron("nightly-conversation-reseed", "0 7 * * *", async () => {
+    try {
+      const { fromIso, toIso } = yesterdayEasternRange();
+      const r = await reseedConversationsByDateRange(fromIso, toIso);
+      console.log(
+        `⏰ nightly conversation reseed: bland=${r.blandConversations} ` +
+          `reseeded=${r.reseeded} skipped=${r.skippedFewer} errored=${r.errored} ` +
+          `delta=+${r.netMessagesAdded}`,
+      );
+    } catch (e) {
+      console.error(
+        `❌ nightly conversation reseed threw: ${(e as Error).message}`,
+      );
     }
   });
 

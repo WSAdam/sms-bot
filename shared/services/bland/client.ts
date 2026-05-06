@@ -92,9 +92,25 @@ export async function listConversationsToday(): Promise<
 > {
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
-  const filters = JSON.stringify([
-    { field: "created_at", operator: "gte", value: todayStart.toISOString() },
-  ]);
+  const r = await listConversationsByDateRange(todayStart.toISOString());
+  return { from: todayStart.toISOString(), conversations: r.conversations };
+}
+
+// Page through Bland's conversations API for a custom date range. Used by
+// the nightly conversation reseed cron — pulls every conversation Bland
+// saw in the window so we can re-fetch its messages and overwrite our
+// (potentially out-of-date) Firestore copy.
+export async function listConversationsByDateRange(
+  fromIso: string,
+  toIso?: string,
+): Promise<{ from: string; to: string | null; conversations: BlandListItem[] }> {
+  const filters: Array<Record<string, unknown>> = [
+    { field: "created_at", operator: "gte", value: fromIso },
+  ];
+  if (toIso) {
+    filters.push({ field: "created_at", operator: "lte", value: toIso });
+  }
+  const filterParam = JSON.stringify(filters);
 
   const all: BlandListItem[] = [];
   let page = 1;
@@ -104,7 +120,7 @@ export async function listConversationsToday(): Promise<
     url.searchParams.set("pageSize", "100");
     url.searchParams.set("sortBy", "created_at");
     url.searchParams.set("sortDir", "asc");
-    url.searchParams.set("filters", filters);
+    url.searchParams.set("filters", filterParam);
 
     const res = await fetch(url.toString(), { headers: authHeader() });
     const json = await res.json();
@@ -115,5 +131,5 @@ export async function listConversationsToday(): Promise<
     if (page >= (json.extra?.pagination?.totalPages ?? 1)) break;
     page++;
   }
-  return { from: todayStart.toISOString(), conversations: all };
+  return { from: fromIso, to: toIso ?? null, conversations: all };
 }
