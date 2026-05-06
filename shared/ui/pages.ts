@@ -3707,6 +3707,44 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="repopulate-injections">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🩹 Repopulate scheduled injections</div>
+            <div class="ep-desc">Walks every "appointment scheduled" message, parses the appointment time, and writes a scheduledinjections doc for any phone whose appointment is in the future and has no pending or fired injection record. Skips past appointments.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/admin/repopulate-injections</code>
+        <div class="row">
+          <label class="checkbox-label"><input type="checkbox" data-input="dryRun" checked> dry-run (preview only, no writes)</label>
+        </div>
+        <div class="actions">
+          <button onclick="runRepopulateInjections(this)">Run repopulate</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="conversation-reseed">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🔄 Reseed conversations from Bland</div>
+            <div class="ep-desc">Pulls every Bland conversation in the date range and overwrites Firestore docs only when Bland has more messages than we have stored. Default: yesterday in ET (matches the 2 AM nightly cron). Set days=N to reseed last N days.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/conversations/reseed</code>
+        <div class="row">
+          <label>days (optional)<input type="text" data-input="days" placeholder="blank = yesterday only"></label>
+        </div>
+        <div class="actions">
+          <button onclick="runConversationReseed(this)">Reseed</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="cron-config" style="grid-column: 1 / -1">
         <div class="ep-head">
           <div>
@@ -4210,6 +4248,31 @@ async function runActivateFromReport(btn){
   if(verbose) body.verbose = true;
   await runRequest(card, {
     method: "POST", url: "/api/guests/activate-from-report",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+}
+async function runRepopulateInjections(btn){
+  const card = btn.closest(".endpoint-card");
+  const dryRun = card.querySelector('[data-input="dryRun"]').checked;
+  if(!dryRun){
+    if(!confirm("This writes scheduledinjections for every future appointment that doesn't already have one. Continue?")) return;
+  }
+  await runRequest(card, {
+    method: "POST", url: "/api/admin/repopulate-injections",
+    headers: { "content-type": "application/json" },
+    body: { dryRun },
+  });
+}
+async function runConversationReseed(btn){
+  const card = btn.closest(".endpoint-card");
+  const daysRaw = card.querySelector('[data-input="days"]').value.trim();
+  const days = daysRaw ? parseInt(daysRaw, 10) : 0;
+  if(days > 7 && !confirm("Reseeding " + days + " days will hit Bland for every conversation in that window. Continue?")) return;
+  const body = {};
+  if(days > 0) body.days = days;
+  await runRequest(card, {
+    method: "POST", url: "/api/conversations/reseed",
     headers: { "content-type": "application/json" },
     body,
   });
