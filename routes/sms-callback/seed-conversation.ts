@@ -34,6 +34,20 @@ export const handler = define.handlers({
     const phone10 = phone.replace(/\D/g, "").slice(-10);
     const messages = r.json.data.messages ?? [];
 
+    // SAFETY: if Bland returned no messages, do NOT delete existing docs —
+    // we'd silently nuke real data. Bland aging conversations out of their
+    // API while we still have the only copy is a real risk during re-seeds.
+    if (messages.length === 0) {
+      return Response.json({
+        status: "empty",
+        conversationId,
+        phone: phone10,
+        stored: 0,
+        skipped: 0,
+        errors: ["Bland returned 0 messages — existing docs preserved"],
+      });
+    }
+
     await deleteConversationsByCallId(phone10, conversationId);
 
     let stored = 0;

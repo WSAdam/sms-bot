@@ -836,10 +836,10 @@ ${sharedThemeCss}
           <thead>
             <tr>
               <th>Phone</th>
-              <th>Scheduled For</th>
-              <th>Matched At</th>
+              <th>Appointment</th>
+              <th>Injection</th>
+              <th>Booked At</th>
               <th>Sender</th>
-              <th>nodeTag</th>
               <th>Message</th>
             </tr>
           </thead>
@@ -1173,15 +1173,30 @@ async function loadAppointments(page){
     apptTable.style.display = "table";
     for(const it of uniqueItems){
       const row = document.createElement("tr");
-      const scheduledForHtml = it.scheduledFor
-        ? '<span style="color:var(--accentHi);font-weight:900">' + escapeHtml(formatTimestamp(it.scheduledFor)) + '</span>'
-        : '<span class="muted">No injection found</span>';
+      // Booked appointment time, parsed from the message text by the
+      // appointments endpoint. e.g. "Apr 30, 3:00 PM".
+      const apptHtml = it.appointmentText
+        ? '<span style="color:var(--accentHi);font-weight:900">' + escapeHtml(it.appointmentText) + '</span>'
+        : '<span class="muted">-</span>';
+      // Injection record summary: when it fired (or scheduled-for if pending),
+      // plus a status badge. "No injection found" only when truly nothing.
+      var injHtml;
+      if(it.injectionFiredAt){
+        var statusBadge = it.injectionStatus === "success"
+          ? '<span class="badge ok">success</span>'
+          : '<span class="badge err">' + escapeHtml(it.injectionStatus || "?") + '</span>';
+        injHtml = '<span class="muted">fired ' + escapeHtml(formatTimestamp(it.injectionFiredAt)) + '</span> ' + statusBadge;
+      } else if(it.scheduledFor){
+        injHtml = '<span class="muted">scheduled ' + escapeHtml(formatTimestamp(it.scheduledFor)) + '</span>';
+      } else {
+        injHtml = '<span class="muted">No injection found</span>';
+      }
       row.innerHTML =
         '<td>' + phoneLink(it.phoneNumber) + '</td>' +
-        '<td>' + scheduledForHtml + '</td>' +
+        '<td>' + apptHtml + '</td>' +
+        '<td>' + injHtml + '</td>' +
         '<td class="muted">' + escapeHtml(it.timestamp ? formatTimestamp(it.timestamp) : "-") + '</td>' +
         '<td>' + escapeHtml(it.sender || "-") + '</td>' +
-        '<td class="muted">' + escapeHtml(it.nodeTag || "-") + '</td>' +
         '<td class="muted" title="' + escapeHtml(it.message || "") + '">' + escapeHtml(truncate(it.message || "", 120)) + '</td>';
       apptTbody.appendChild(row);
     }
