@@ -2036,14 +2036,19 @@ async function searchConversations(){
     const data = await response.json();
     if(!response.ok) throw new Error(data.error || "Search failed");
 
-    if(!data.conversations || data.conversations.length === 0){
+    // search2 returns { phone, count, messages: [...] } — the older code
+    // looked for data.conversations which never exists, so every search
+    // silently failed with "No results found" even when matches were
+    // returned. Tolerate both shapes in case anything else hits this.
+    const items = data.messages || data.conversations || [];
+    if(items.length === 0){
       statusText.textContent = "No results found";
       searchBtn.disabled = false;
       return;
     }
 
     statusWrap.style.display = "none";
-    renderResults(phone, data.conversations, data.optedOut);
+    renderResults(phone, items, data.optedOut);
   } catch(err){
     statusWrap.style.display = "none";
     errorDiv.textContent = (err && err.message) ? err.message : String(err);
