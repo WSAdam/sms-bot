@@ -2778,8 +2778,20 @@ ${sharedThemeCss}
   display:inline-block;background:rgba(25,195,125,.16);border:1px solid rgba(25,195,125,.35);
   color:#b8ffe2;font-size:.7rem;padding:2px 8px;border-radius:999px;margin-left:8px;font-weight:900;
 }
-.msg .msg-text{line-height:1.45;color:var(--text)}
+.msg .msg-text{line-height:1.45;color:var(--text);white-space:pre-wrap;word-wrap:break-word}
 .msg .msg-time{font-size:.75rem;color:var(--muted2);margin-top:6px}
+.msg .callid-chip{
+  display:inline-block;background:rgba(99,102,241,.16);border:1px solid rgba(99,102,241,.35);
+  color:#c4b5fd;font-size:.7rem;padding:2px 8px;border-radius:999px;margin-left:8px;font-weight:700;
+  text-decoration:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.msg .callid-chip:hover{background:rgba(99,102,241,.3)}
+.resp-meta .inj-chip{
+  display:inline-block;padding:3px 10px;border-radius:999px;
+  font-size:.78rem;font-weight:800;
+  background:rgba(99,102,241,.18);color:#c4b5fd;border:1px solid rgba(99,102,241,.35);
+}
+.resp-meta .inj-chip.error{background:rgba(255,71,87,.18);color:#ffd1d7;border-color:rgba(255,71,87,.45)}
 .empty-state{text-align:center;padding:40px;color:var(--muted)}
 </style>
 </head>
@@ -2838,6 +2850,42 @@ function truncate(str, len){
   return str.length <= len ? str : str.substring(0, len) + "...";
 }
 
+// Collapse historical (callId, sender, message) duplicates AND merge bursts of
+// same-sender messages on the same call within 30s into one bubble. Bland's
+// pathway often fires multiple "send SMS" steps per node — to the customer
+// they read as one logical reply, so we render them stacked in a single
+// bubble (text joined with blank lines; pre-wrap CSS handles display).
+function dedupeAndGroupMessages(msgs){
+  var sorted = (msgs || []).slice().sort(function(a, b){
+    return new Date(a.timestamp) - new Date(b.timestamp);
+  });
+  var seen = new Set();
+  var deduped = [];
+  for(var i = 0; i < sorted.length; i++){
+    var m = sorted[i];
+    var key = (m.callId || "") + "__" + (m.sender || "") + "__" + (m.message || "");
+    if(seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(m);
+  }
+  var WINDOW_MS = 30000;
+  var grouped = [];
+  for(var j = 0; j < deduped.length; j++){
+    var cur = deduped[j];
+    var prev = grouped[grouped.length - 1];
+    if(prev
+       && prev.callId === cur.callId
+       && prev.sender === cur.sender
+       && prev.phoneNumber === cur.phoneNumber
+       && (new Date(cur.timestamp) - new Date(prev.timestamp)) <= WINDOW_MS){
+      prev.message = (prev.message || "") + "\\n\\n" + (cur.message || "");
+      continue;
+    }
+    grouped.push(Object.assign({}, cur));
+  }
+  return grouped;
+}
+
 async function loadReview(){
   const date = document.getElementById("reviewDate").value;
   const loading = document.getElementById("reviewLoading");
@@ -2854,13 +2902,36 @@ async function loadReview(){
     const params = new URLSearchParams();
     params.append("startDate", date);
     params.append("endDate", date);
-    // Fetch all messages for the date
-    const res = await fetch("/api/dashboard/drill?" + params.toString());
-    const data = await res.json();
-    if(!res.ok) throw new Error(data.error || "Failed");
+    // Fetch messages + injection history in parallel. Injection events live
+    // in their own collection so we need a second hop; legacy-key-map maps
+    // prefix=["injectionhistory"] → sms-bot/injectionhistory/byPhone.
+    const [drillResp, injResp] = await Promise.all([
+      fetch("/api/dashboard/drill?" + params.toString()),
+      fetch("/api/kv/list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix: ["injectionhistory"], limit: 50000 })
+      })
+    ]);
+    const data = await drillResp.json();
+    if(!drillResp.ok) throw new Error(data.error || "Failed");
+    const injData = injResp.ok ? await injResp.json() : { entries: [] };
 
     loading.style.display = "none";
-    const allMsgs = data.items || [];
+    const allMsgs = dedupeAndGroupMessages(data.items || []);
+
+    // Build per-phone injection summary { total, errors }.
+    const injByPhone = {};
+    (injData.entries || []).forEach(function(e){
+      var key = e.key;
+      var docId = Array.isArray(key) && key.length >= 2 ? String(key[1]) : "";
+      var sep = docId.indexOf("__");
+      var phone = sep >= 0 ? docId.slice(0, sep) : docId;
+      if(!phone) return;
+      if(!injByPhone[phone]) injByPhone[phone] = { total: 0, errors: 0 };
+      injByPhone[phone].total++;
+      if(e.value && e.value.status === "error") injByPhone[phone].errors++;
+    });
 
     // Find phones where a Guest replied
     const guestPhones = new Set();
@@ -2913,6 +2984,13 @@ async function loadReview(){
       html += '</div>';
       html += '<div class="resp-meta">';
       html += '<span class="chip">' + pd.guestMsgCount + ' repl' + (pd.guestMsgCount !== 1 ? 'ies' : 'y') + '</span>';
+      var injInfo = injByPhone[phone] || { total: 0, errors: 0 };
+      if(injInfo.total > 0){
+        var injCls = injInfo.errors > 0 ? 'inj-chip error' : 'inj-chip';
+        var injTxt = '📤 ' + injInfo.total + ' inject' + (injInfo.total !== 1 ? 'ions' : 'ion');
+        if(injInfo.errors > 0) injTxt += ' (⚠️ ' + injInfo.errors + ')';
+        html += '<span class="' + injCls + '">' + injTxt + '</span>';
+      }
       html += '<span class="muted">' + (latestMsg ? escapeHtml(formatTimestamp(latestMsg.timestamp)) : "-") + '</span>';
       html += '<div class="resp-links">';
       if(blandUrl) html += '<a href="' + escapeHtml(blandUrl) + '" target="_blank" class="link-bland" onclick="event.stopPropagation()">Bland SMS</a>';
@@ -2929,6 +3007,10 @@ async function loadReview(){
         html += '<div class="msg ' + (isGuest ? "guest" : "ai") + '">';
         html += '<div class="msg-sender">' + escapeHtml(m.sender || "Unknown");
         if(m.nodeTag) html += '<span class="msg-tag">' + escapeHtml(m.nodeTag) + '</span>';
+        if(m.callId){
+          var blandHref = "https://app.bland.ai/dashboard/sms/" + encodeURIComponent(m.callId) + "?tab=conversations";
+          html += '<a class="callid-chip" href="' + escapeHtml(blandHref) + '" target="_blank" rel="noopener" title="' + escapeHtml(m.callId) + '" onclick="event.stopPropagation()">' + escapeHtml(String(m.callId).slice(0, 8)) + '…</a>';
+        }
         html += '</div>';
         html += '<div class="msg-text">' + escapeHtml(m.message || "") + '</div>';
         html += '<div class="msg-time">' + escapeHtml(formatTimestamp(m.timestamp)) + '</div>';

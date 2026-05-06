@@ -104,7 +104,11 @@ export async function getAllConversations(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<ConversationMessage[]> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  const all = await client.list(conversationsCollection, { limit: 500 });
+  // Conversations collection has 7K+ docs; the old limit:500 silently
+  // returned "no results" for any phone whose docs weren't in the first
+  // arbitrary 500 returned by Firestore. 50K matches the cap we already
+  // use across the dashboard endpoints.
+  const all = await client.list(conversationsCollection, { limit: 50_000 });
   return all
     .filter((e) => e.id.startsWith(`${phone}__`))
     .map((e) => e.data as unknown as ConversationMessage)
