@@ -10,6 +10,7 @@ import {
 import {
   guestActivatedCollection,
   guestActivatedDocPath,
+  guestAnsweredDocPath,
   injectionHistoryCollection,
   salesOutsideWindowDocPath,
   salesWithin7dDocPath,
@@ -302,6 +303,14 @@ export async function processSaleMatches(
         ...(activator ? { activator } : {}),
         ...(office ? { office } : {}),
       },
+    });
+    // Auto-write guestanswered too — a closed sale implies the dialer
+    // spoke with the customer. Without this, dashboard would show
+    // activated > answered (impossible relationship).
+    writes.push({
+      type: "set",
+      path: guestAnsweredDocPath(phone10),
+      data: { phone10, answered: true, answeredAt: saleAtIso },
     });
     // If this phone was previously parked in salesoutsidewindow (e.g. earlier
     // run before we knew about the office field), clean that up so the drill-in

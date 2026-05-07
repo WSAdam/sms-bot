@@ -13,6 +13,7 @@ import {
 import {
   guestActivatedCollection,
   guestActivatedDocPath,
+  guestAnsweredDocPath,
   salesOutsideWindowCollection,
   salesOutsideWindowDocPath,
   salesWithin7dDocPath,
@@ -111,6 +112,13 @@ export const handler = define.handlers({
           ...(activator ? { activator } : {}),
           ...(office ? { office } : {}),
         },
+      },
+      // Auto-write guestanswered — every claimed sale implies the dialer
+      // spoke with this customer. Keeps activated ⊆ answered invariant.
+      {
+        type: "set",
+        path: guestAnsweredDocPath(phone10),
+        data: { phone10, answered: true, answeredAt: activatedAt },
       },
       { type: "delete", path: salesOutsideWindowDocPath(phone10) },
     ]);
