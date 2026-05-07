@@ -2,6 +2,7 @@ export type SaleMatchReason =
   | "within_window"
   | "odr_activator"
   | "odr_office"
+  | "second_chance_activator"
   | "manual_override";
 
 export interface SaleWithinWindowMarker {

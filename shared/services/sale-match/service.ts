@@ -50,9 +50,15 @@ export interface SaleMatchInput {
 function odrReason(
   activator: string | undefined | null,
   office: string | undefined | null,
-): "odr_activator" | "odr_office" | null {
+): "odr_activator" | "odr_office" | "second_chance_activator" | null {
   if (activator && activator.trim().toUpperCase().startsWith("ODR -")) {
     return "odr_activator";
+  }
+  // 2nd Chance leads share the dialer with ODR — a 2ND TM closing them is
+  // operationally equivalent to an ODR TM closing, so the same window-bypass
+  // rule applies. Distinct matchReason for analytics.
+  if (activator && activator.trim().toUpperCase().startsWith("2ND -")) {
+    return "second_chance_activator";
   }
   if (office && office.trim().toUpperCase() === "ODR") return "odr_office";
   return null;
@@ -321,7 +327,11 @@ export async function processSaleMatches(
     });
 
     summary.matched++;
-    if (matchReason === "odr_activator" || matchReason === "odr_office") {
+    if (
+      matchReason === "odr_activator" ||
+      matchReason === "odr_office" ||
+      matchReason === "second_chance_activator"
+    ) {
       summary.matchedByOdr++;
     }
     summary.matches.push({
