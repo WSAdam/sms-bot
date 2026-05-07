@@ -18,6 +18,7 @@
 // Apply rules: skip phones that already have a pending scheduledinjection
 // OR a fired injectionhistory doc. Idempotent — safe to re-run.
 
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
   injectionHistoryCollection,
   injectionHistoryDocPath,
@@ -262,6 +263,17 @@ export async function scanConversationsForBookings(
     const phone10 = phoneRaw.length >= 10 ? phoneRaw.slice(-10) : phoneRaw;
     const callId = c.id;
     if (!phone10 || phone10.length !== 10 || !callId) continue;
+
+    // Test/excluded phones (Adam's, Edwin's, etc.) must never get a real
+    // scheduledinjection — the cron sweep would fire the dialer at the
+    // operator. Skip BEFORE any write/read.
+    if (isExcludedFromReporting(phone10)) {
+      summary.skippedExisting++;
+      console.log(
+        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (excluded test phone)`,
+      );
+      continue;
+    }
 
     if (recoveredDocIdByCallId.has(callId) && !force) {
       summary.skippedExisting++;

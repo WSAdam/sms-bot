@@ -18,6 +18,7 @@
     "reconcile-activated": "deno run -A --env-file=env/local scripts/reconcile-activated.ts",
     "reseed-answered-conversations": "deno run -A --env-file=env/local scripts/reseed-answered-conversations.ts",
     "run-booking-scan": "deno run -A --env-file=env/local scripts/run-booking-scan.ts",
+    "cleanup-excluded-phones": "deno run -A --env-file=env/local scripts/cleanup-excluded-phones.ts",
     "shape-check": "deno run -A scripts/shape-check.ts"
   },
   "lint": {

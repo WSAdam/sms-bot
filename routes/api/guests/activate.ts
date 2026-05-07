@@ -4,7 +4,10 @@
 // guestactivated/byPhone/{phone10}.
 
 import { define } from "@/utils.ts";
-import { SALE_MATCH_WINDOW_DAYS } from "@shared/config/constants.ts";
+import {
+  isExcludedFromReporting,
+  SALE_MATCH_WINDOW_DAYS,
+} from "@shared/config/constants.ts";
 import {
   guestActivatedDocPath,
   scheduledInjectionsCollection,
@@ -33,6 +36,8 @@ export const handler = define.handlers({
     for (const e of all) {
       const inj = e.data as unknown as FutureInjection;
       if (new Date(inj.eventTime).getTime() < cutoffMs) continue;
+      // Skip excluded test phones — they should never be marked activated.
+      if (isExcludedFromReporting(e.id)) continue;
       const hash = await sha256Hex(e.id);
       if (!incoming.has(hash)) continue;
       await db.set(guestActivatedDocPath(e.id), {

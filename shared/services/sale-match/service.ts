@@ -3,7 +3,10 @@
 // within `windowDays` of when the injection was scheduled, mark a sale and
 // activate the guest.
 
-import { SALE_MATCH_WINDOW_DAYS } from "@shared/config/constants.ts";
+import {
+  isExcludedFromReporting,
+  SALE_MATCH_WINDOW_DAYS,
+} from "@shared/config/constants.ts";
 import {
   guestActivatedCollection,
   guestActivatedDocPath,
@@ -129,6 +132,13 @@ export async function processSaleMatches(
         phone10,
         activatedAt: saleAt ?? "",
       });
+      continue;
+    }
+    // Excluded test phones (Adam's, Edwin's, etc.) must never get sale-match
+    // docs written — they'd pollute the dashboard counts and could fire the
+    // dialer at the operator. Treat as silently skipped.
+    if (isExcludedFromReporting(phone10)) {
+      summary.skippedNoInjection++;
       continue;
     }
 

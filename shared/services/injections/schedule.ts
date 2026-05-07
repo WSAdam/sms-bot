@@ -1,5 +1,6 @@
 // Scheduled injection storage (set + cancel + lookup).
 
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import { scheduledInjectionDocPath } from "@shared/firestore/paths.ts";
 import {
   type FirestoreClient,
@@ -17,6 +18,17 @@ export async function scheduleInjection(
 ): Promise<void> {
   const phone = normalizePhone(rawPhone);
   if (!phone) throw new Error("invalid phone");
+  // Hard guard — test phones (Adam's, Edwin's, etc.) must NEVER end up in
+  // scheduledinjections. Otherwise the every-minute cron sweep dials the
+  // operator. Centralized here so every call site (cal/schedule, Cal.com
+  // appointment-booked, booking-scan, repopulate-injections) inherits the
+  // protection automatically.
+  if (isExcludedFromReporting(phone)) {
+    console.warn(
+      `[scheduleInjection] ⏭ refused excluded test phone ${phone}`,
+    );
+    return;
+  }
   const isoTime = typeof eventTime === "string" ? eventTime : eventTime.toISOString();
   const data: FutureInjection = {
     phone,

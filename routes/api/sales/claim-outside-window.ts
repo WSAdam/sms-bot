@@ -33,6 +33,11 @@ export const handler = define.handlers({
         status: 400,
       });
     }
+    if (isExcludedFromReporting(phone10)) {
+      return Response.json({
+        error: `${phone10} is in EXCLUDED_REPORTING_PHONES — refusing claim`,
+      }, { status: 400 });
+    }
 
     const db = getFirestoreClient();
     const outside = await db.get(salesOutsideWindowDocPath(phone10));
