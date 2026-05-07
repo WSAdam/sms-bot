@@ -1,6 +1,7 @@
 import { App, staticFiles } from "fresh";
 import { type State } from "./utils.ts";
 import { sweepScheduledInjections } from "@shared/services/injections/sweep.ts";
+import { scanConversationsForBookings } from "@shared/services/conversations/booking-scan.ts";
 import {
   reseedConversationsByDateRange,
   yesterdayEasternRange,
@@ -50,8 +51,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // Firestore. The reseed is safe: if Bland has fewer messages than we
   // have stored, we leave the existing docs alone.
   denoCron("nightly-conversation-reseed", "0 7 * * *", async () => {
+    const { fromIso, toIso } = yesterdayEasternRange();
     try {
-      const { fromIso, toIso } = yesterdayEasternRange();
       const r = await reseedConversationsByDateRange(fromIso, toIso);
       console.log(
         `⏰ nightly conversation reseed: bland=${r.blandConversations} ` +
@@ -61,6 +62,23 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
     } catch (e) {
       console.error(
         `❌ nightly conversation reseed threw: ${(e as Error).message}`,
+      );
+    }
+    // Booking-scan catchup: chained right after the reseed so it works
+    // against fresh Bland data. Writes scheduledinjection docs for any
+    // booking-confirmation we detect that didn't already get one through
+    // the Cal.com webhook (defense-in-depth — if the webhook fails, the
+    // nightly scan recovers).
+    try {
+      const s = await scanConversationsForBookings(fromIso, toIso, true);
+      console.log(
+        `⏰ nightly booking scan: bland=${s.blandConversations} ` +
+          `proposed=${s.proposed} applied=${s.applied} ` +
+          `skippedExisting=${s.skippedExisting} skippedNoTime=${s.skippedNoTime} errored=${s.errored}`,
+      );
+    } catch (e) {
+      console.error(
+        `❌ nightly booking scan threw: ${(e as Error).message}`,
       );
     }
   });

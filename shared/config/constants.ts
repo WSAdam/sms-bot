@@ -10,7 +10,10 @@ export const BLAND_API_BASE = "https://api.bland.ai/v1/sms/conversations";
 export const QUICKBASE_GET_REPORTS_URL =
   "https://us-central1-crm-sdk.cloudfunctions.net/getReports";
 export const QUICKBASE_BOOKINGS_TABLE_ID = "bpb28qsnn";
-export const QUICKBASE_BOOKINGS_REPORT_ID = "530";
+// Report 678 is the active sale-match feed (was 530 historically). The
+// daily-qb-sale-match cron uses this as a fallback when the live-edit
+// cron config doc doesn't exist or omits qbSaleMatch.reportId.
+export const QUICKBASE_BOOKINGS_REPORT_ID = "678";
 
 // Direct Quickbase REST API (used for reservation lookups + DNC writes).
 // Hardcoded — only the user token comes from env (QUICKBASE_USER_TOKEN).

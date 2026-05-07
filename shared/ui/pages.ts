@@ -837,10 +837,9 @@ ${sharedThemeCss}
             <tr>
               <th>Phone</th>
               <th>Appointment</th>
-              <th>Injection</th>
+              <th>Status</th>
               <th>Booked At</th>
-              <th>Sender</th>
-              <th>Message</th>
+              <th>Source</th>
             </tr>
           </thead>
           <tbody id="apptTbody"></tbody>
@@ -1173,31 +1172,33 @@ async function loadAppointments(page){
     apptTable.style.display = "table";
     for(const it of uniqueItems){
       const row = document.createElement("tr");
-      // Booked appointment time, parsed from the message text by the
-      // appointments endpoint. e.g. "Apr 30, 3:00 PM".
-      const apptHtml = it.appointmentText
-        ? '<span style="color:var(--accentHi);font-weight:900">' + escapeHtml(it.appointmentText) + '</span>'
+      // Appointment time from the canonical injection record's eventTime.
+      const apptHtml = it.eventTime
+        ? '<span style="color:var(--accentHi);font-weight:900">' + escapeHtml(formatTimestamp(it.eventTime)) + '</span>'
         : '<span class="muted">-</span>';
-      // Injection record summary: when it fired (or scheduled-for if pending),
-      // plus a status badge. "No injection found" only when truly nothing.
-      var injHtml;
-      if(it.injectionFiredAt){
-        var statusBadge = it.injectionStatus === "success"
-          ? '<span class="badge ok">success</span>'
-          : '<span class="badge err">' + escapeHtml(it.injectionStatus || "?") + '</span>';
-        injHtml = '<span class="muted">fired ' + escapeHtml(formatTimestamp(it.injectionFiredAt)) + '</span> ' + statusBadge;
-      } else if(it.scheduledFor){
-        injHtml = '<span class="muted">scheduled ' + escapeHtml(formatTimestamp(it.scheduledFor)) + '</span>';
+      // Status badge derived from pipeline state: scheduled (pending),
+      // fired (sweep injected to dialer), errored (sweep failed).
+      var statusHtml;
+      if(it.status === "scheduled"){
+        statusHtml = '<span class="badge">scheduled</span>';
+      } else if(it.status === "fired"){
+        statusHtml = '<span class="badge ok">fired' + (it.firedBy ? ' (' + escapeHtml(it.firedBy) + ')' : '') + '</span>';
+      } else if(it.status === "errored"){
+        statusHtml = '<span class="badge err">' + escapeHtml(it.injectionStatus || "errored") + '</span>';
       } else {
-        injHtml = '<span class="muted">No injection found</span>';
+        statusHtml = '<span class="muted">' + escapeHtml(it.status || "?") + '</span>';
       }
+      // Source distinguishes Cal.com path (scheduledinjections) from a
+      // historical fire (injectionhistory) or a backfill from booking-scan.
+      var sourceLabel = it.source === "scheduledinjections" ? "scheduled" :
+                        it.source === "injectionhistory" ? "history" :
+                        (it.source || "-");
       row.innerHTML =
         '<td>' + phoneLink(it.phoneNumber) + '</td>' +
         '<td>' + apptHtml + '</td>' +
-        '<td>' + injHtml + '</td>' +
-        '<td class="muted">' + escapeHtml(it.timestamp ? formatTimestamp(it.timestamp) : "-") + '</td>' +
-        '<td>' + escapeHtml(it.sender || "-") + '</td>' +
-        '<td class="muted" title="' + escapeHtml(it.message || "") + '">' + escapeHtml(truncate(it.message || "", 120)) + '</td>';
+        '<td>' + statusHtml + '</td>' +
+        '<td class="muted">' + escapeHtml(it.bookedAt ? formatTimestamp(it.bookedAt) : "-") + '</td>' +
+        '<td class="muted">' + escapeHtml(sourceLabel) + '</td>';
       apptTbody.appendChild(row);
     }
 
@@ -3707,6 +3708,26 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="scan-bookings">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🔍 Scan Bland for missed bookings</div>
+            <div class="ep-desc">Walks Bland conversations in the date range, looks for booking-confirmation patterns ("locked in", "Appointment Scheduled:"), extracts the appointment time from adjacent context, and writes scheduledinjection docs for any phone that's missing one. Recovers bookings the Cal.com webhook didn't catch. Skips phones already in scheduledinjections or injectionhistory.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/admin/scan-bookings</code>
+        <div class="row">
+          <label>days (optional)<input type="text" data-input="days" placeholder="blank = yesterday only"></label>
+          <label class="checkbox-label"><input type="checkbox" data-input="dryRun" checked> dry-run (preview only, no writes)</label>
+        </div>
+        <div class="actions">
+          <button onclick="runScanBookings(this)">Scan</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="repopulate-injections">
         <div class="ep-head">
           <div>
@@ -4248,6 +4269,23 @@ async function runActivateFromReport(btn){
   if(verbose) body.verbose = true;
   await runRequest(card, {
     method: "POST", url: "/api/guests/activate-from-report",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+}
+async function runScanBookings(btn){
+  const card = btn.closest(".endpoint-card");
+  const daysRaw = card.querySelector('[data-input="days"]').value.trim();
+  const days = daysRaw ? parseInt(daysRaw, 10) : 0;
+  const dryRun = card.querySelector('[data-input="dryRun"]').checked;
+  if(!dryRun){
+    if(!confirm("This writes scheduledinjections for every booking-confirmation pattern found that doesn't already have one. Continue?")) return;
+  }
+  if(days > 14 && !confirm("Scanning " + days + " days will hit Bland for every conversation in that window. Continue?")) return;
+  const body = { dryRun };
+  if(days > 0) body.days = days;
+  await runRequest(card, {
+    method: "POST", url: "/api/admin/scan-bookings",
     headers: { "content-type": "application/json" },
     body,
   });
