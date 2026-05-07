@@ -96,6 +96,12 @@ export const handler = define.handlers({
     // Activated count headline = QUALIFYING subset (sales within the
     // SALE_MATCH_WINDOW_DAYS window). The breakdown.guestactivated.count
     // stays as the raw lifetime number for the modal's Lifetime tab.
+    //
+    // withinDays isn't persisted on the guestactivated doc (only on the
+    // saleswithin7d marker), so we derive it from activatedAt - eventTime.
+    // matchReason === "within_window" is always qualifying (the cron already
+    // validated the window before writing); the gap-from-appointment test
+    // is the fallback for ODR/2ND/manual_override rows.
     const activatedList = await db.list(
       `${ROOT_COLLECTION}/guestactivated/byPhone`,
       { limit: LIST_LIMIT },
@@ -103,8 +109,22 @@ export const handler = define.handlers({
     const activatedQualifyingCount = activatedList
       .filter((e) => !isExcludedFromReporting(docIdToPhone10(e.id)))
       .filter((e) => {
-        const wd = (e.data as Record<string, unknown>).withinDays;
-        return typeof wd === "number" && wd <= SALE_MATCH_WINDOW_DAYS;
+        const data = e.data as Record<string, unknown>;
+        if (data.matchReason === "within_window") return true;
+        const wd = data.withinDays;
+        if (typeof wd === "number") return wd <= SALE_MATCH_WINDOW_DAYS;
+        const activatedAt = typeof data.activatedAt === "string"
+          ? data.activatedAt
+          : null;
+        const eventTime = typeof data.eventTime === "string"
+          ? data.eventTime
+          : null;
+        if (!activatedAt || !eventTime) return false;
+        const aMs = new Date(activatedAt).getTime();
+        const eMs = new Date(eventTime).getTime();
+        if (!Number.isFinite(aMs) || !Number.isFinite(eMs)) return false;
+        const days = Math.abs(aMs - eMs) / 86_400_000;
+        return days <= SALE_MATCH_WINDOW_DAYS;
       }).length;
 
     // Conversation-derived stats: dedupe + drop excluded phones + date-filter.

@@ -1610,15 +1610,30 @@ document.getElementById("activatedCard").addEventListener("click", async functio
       var bt = b.activatedAt ? new Date(b.activatedAt).getTime() : 0;
       return bt - at;
     });
-    var qualifyingItems = allItems.filter(function(m){
-      return typeof m.withinDays === "number" && m.withinDays <= 8;
-    });
+    // withinDays isn't stored on the guestactivated doc — derive from
+    // activatedAt - eventTime. matchReason === "within_window" always
+    // qualifies (cron already validated). Same logic as server-side
+    // activatedQualifyingCount in /api/dashboard/stats.
+    function effectiveWithinDays(m){
+      if(typeof m.withinDays === "number") return m.withinDays;
+      if(!m.activatedAt || !m.eventTime) return null;
+      var aMs = new Date(m.activatedAt).getTime();
+      var eMs = new Date(m.eventTime).getTime();
+      if(!isFinite(aMs) || !isFinite(eMs)) return null;
+      return Math.round(Math.abs(aMs - eMs) / 86400000 * 10) / 10;
+    }
+    function isQualifying(m){
+      if(m.matchReason === "within_window") return true;
+      var wd = effectiveWithinDays(m);
+      return typeof wd === "number" && wd <= 8;
+    }
+    var qualifyingItems = allItems.filter(isQualifying);
 
     var columns = [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
       { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
       { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); }, sortKey: function(m){ return m.eventTime || ""; } },
-      { label: "Within Days", render: function(m){ return typeof m.withinDays === "number" ? String(m.withinDays) : '-'; }, cls: "muted", sortKey: function(m){ return typeof m.withinDays === "number" ? m.withinDays : 9999; } },
+      { label: "Within Days", render: function(m){ var wd = effectiveWithinDays(m); return wd == null ? '-' : String(wd); }, cls: "muted", sortKey: function(m){ var wd = effectiveWithinDays(m); return wd == null ? 9999 : wd; } },
       { label: "Match Reason", render: function(m){ return escapeHtml(m.matchReason || ""); }, cls: "muted", sortKey: function(m){ return m.matchReason || ""; } },
       { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
       { label: "Activator", render: function(m){ return escapeHtml(m.activator || ""); }, cls: "muted", sortKey: function(m){ return m.activator || ""; } },
