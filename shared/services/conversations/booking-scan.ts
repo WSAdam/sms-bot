@@ -20,11 +20,13 @@
 
 import {
   injectionHistoryCollection,
+  injectionHistoryDocPath,
   scheduledInjectionDocPath,
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import * as bland from "@shared/services/bland/client.ts";
 import { scheduleInjection } from "@shared/services/injections/schedule.ts";
+import { injectionHistoryDocId } from "@shared/util/id.ts";
 
 const MONTHS: Record<string, number> = {
   jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
@@ -122,13 +124,17 @@ export async function scanConversationsForBookings(
   apply: boolean,
 ): Promise<BookingScanSummary> {
   const db = getFirestoreClient();
-  // Pre-load fired-injection phones so we can short-circuit phones we've
-  // already credited and avoid duplicate writes.
+  // Pre-load (phone, callId) pairs we've already recovered via this scan,
+  // so re-runs are idempotent. Cron-fired injections (firedBy="cron") and
+  // manual fires don't block recovery — multiple bookings per phone over
+  // time are real and shouldn't be collapsed.
   const history = await db.list(injectionHistoryCollection, { limit: 50_000 });
-  const phonesWithFired = new Set<string>();
+  const recoveredCallIds = new Set<string>();
   for (const e of history) {
-    const sep = e.id.indexOf("__");
-    if (sep > 0) phonesWithFired.add(e.id.slice(0, sep));
+    const data = e.data as Record<string, unknown>;
+    if (data.firedBy === "booking-scan-recovery" && typeof data.recoveredFromCallId === "string") {
+      recoveredCallIds.add(data.recoveredFromCallId);
+    }
   }
 
   const list = await bland.listConversationsByDateRange(fromIso, toIso);
@@ -149,21 +155,24 @@ export async function scanConversationsForBookings(
     errors: [],
   };
 
+  let processed = 0;
   for (const c of list.conversations) {
+    processed++;
     const phoneRaw = String(c.user_number ?? "").replace(/\D/g, "");
     const phone10 = phoneRaw.length >= 10 ? phoneRaw.slice(-10) : phoneRaw;
     const callId = c.id;
     if (!phone10 || phone10.length !== 10 || !callId) continue;
 
-    if (phonesWithFired.has(phone10)) {
+    if (recoveredCallIds.has(callId)) {
       summary.skippedExisting++;
+      console.log(
+        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already recovered)`,
+      );
       continue;
     }
-    const pending = await db.get(scheduledInjectionDocPath(phone10));
-    if (pending) {
-      summary.skippedExisting++;
-      continue;
-    }
+    console.log(
+      `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  fetching ${callId.slice(0, 8)}…`,
+    );
 
     let r;
     try {
@@ -199,22 +208,25 @@ export async function scanConversationsForBookings(
     }
     if (!signalInfo || signalIdx < 0) continue;
 
-    // Walk backward to find an AI Bot message containing a date+time. Cap
-    // the look-back at 6 messages — the booking time should be in the
-    // immediate context, not 50 messages earlier.
+    // Walk backward through the FULL conversation looking for a date+time
+    // in any message — bot OR user. The new Bland pathway often confirms
+    // bookings with "You're locked in!" alone, leaving the negotiated time
+    // in earlier messages (often the customer's own reply).
     let eventTime: string | null = null;
     let eventTimeSource: string | null = null;
-    const lookbackStart = Math.max(0, signalIdx - 6);
-    for (let i = signalIdx; i >= lookbackStart; i--) {
+    for (let i = signalIdx; i >= 0; i--) {
       const candidate = msgs[i];
-      if (!candidate || (candidate.sender ?? "").toUpperCase() === "USER") continue;
+      if (!candidate) continue;
       const parsed = parseDateFromText(
         candidate.message ?? "",
         candidate.created_at ?? signalInfo.signalAt,
       );
       if (parsed) {
         eventTime = parsed;
-        eventTimeSource = (candidate.message ?? "").slice(0, 80);
+        const who = (candidate.sender ?? "").toUpperCase() === "USER"
+          ? "guest"
+          : "bot";
+        eventTimeSource = `[${who}] ${(candidate.message ?? "").slice(0, 80)}`;
         break;
       }
     }
@@ -226,25 +238,55 @@ export async function scanConversationsForBookings(
       signalAt: signalInfo.signalAt,
       eventTime,
       eventTimeSource,
-      reason: eventTime ? undefined : "no parseable date in lookback window",
+      reason: eventTime ? undefined : "no parseable date in any prior message",
     };
     summary.proposals.push(proposal);
     summary.proposed++;
 
+    // Recovery write: when "locked in" hits, the booking is real even if
+    // we can't parse the exact time. Cal.com knows the actual time but
+    // didn't fire its webhook to us, so we'll never know it. Write to
+    // injectionhistory (NOT scheduledinjections) — that records the
+    // booking for the dashboard count without risking a wrong-time fire
+    // by the cron sweep.
+    const eventTimeFinal = eventTime ?? signalInfo.signalAt;
     if (!eventTime) {
       summary.skippedNoTime++;
-      continue;
+      // Still log the convo for visibility — useful when auditing why
+      // a booking was recovered with a placeholder eventTime.
+      console.log(
+        `[booking-scan] [no-time placeholder] ${phone10}/${callId.slice(0, 8)} — convo:`,
+      );
+      for (const m of msgs) {
+        const who = (m.sender ?? "").toUpperCase() === "USER" ? "guest" : "bot";
+        console.log(
+          `    [${(m.created_at ?? "").slice(11, 19)}] ${who}: ${(m.message ?? "").slice(0, 140)}`,
+        );
+      }
     }
     if (apply) {
       try {
-        await scheduleInjection(phone10, eventTime, false);
+        const firedAt = signalInfo.signalAt;
+        const docId = injectionHistoryDocId(phone10, firedAt);
+        await db.set(injectionHistoryDocPath(docId), {
+          phone: phone10,
+          eventTime: eventTimeFinal,
+          scheduledAt: new Date(firedAt).getTime(),
+          isTest: false,
+          firedAt,
+          firedBy: "booking-scan-recovery",
+          status: "recovered",
+          recoveredFromCallId: callId,
+          recoveredSignal: signalInfo.signal,
+          recoveredEventTimeSource: eventTimeSource,
+        });
         summary.applied++;
         console.log(
-          `[booking-scan] ✅ ${phone10} eventTime=${eventTime} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
+          `[booking-scan] ✅ ${phone10} eventTime=${eventTimeFinal}${eventTime ? "" : " (placeholder)"} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
         );
       } catch (e) {
         summary.errored++;
-        summary.errors.push(`${phone10}: scheduleInjection ${(e as Error).message}`);
+        summary.errors.push(`${phone10}: history write ${(e as Error).message}`);
       }
     }
   }

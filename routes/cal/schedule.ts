@@ -5,7 +5,14 @@
 // injection, stores the "appointment scheduled" message, logs orchestrator
 // events, and updates the lead pointer to SCHEDULED_FOR_ODR.
 //
-// Body: { phone, email, name, startTime, timeZone?, conversationId? }
+// Accepts BOTH naming conventions:
+//   - Legacy:    { phone, email, name, startTime, timeZone? }
+//   - Bland/Cal: { inviteePhone, inviteeEmail, inviteeName, startTime, timezone? }
+//
+// Bland's pathway switched to inviteeXxx + lowercase `timezone` around
+// 2026-05-01, which silently 400'd every booking until this normalization
+// was added. That gap is the root cause of the appointment-pipeline outage
+// (no scheduledinjections written → no injectionhistory → empty dashboard).
 
 import { define } from "@/utils.ts";
 import { CAL_HOLDING_CAMPAIGN_ID } from "@shared/config/constants.ts";
@@ -18,20 +25,27 @@ import { normalizePhone } from "@shared/util/phone.ts";
 
 export const handler = define.handlers({
   async POST(ctx) {
-    const body = await ctx.req.json().catch(() => null) as
-      | {
-        phone?: string;
-        email?: string;
-        name?: string;
-        startTime?: string;
-        timeZone?: string;
-        conversationId?: string;
-      }
+    const raw = await ctx.req.json().catch(() => null) as
+      | Record<string, unknown>
       | null;
+
+    const body = raw
+      ? {
+        phone: (raw.phone ?? raw.inviteePhone) as string | undefined,
+        email: (raw.email ?? raw.inviteeEmail) as string | undefined,
+        name: (raw.name ?? raw.inviteeName) as string | undefined,
+        startTime: raw.startTime as string | undefined,
+        timeZone: (raw.timeZone ?? raw.timezone) as string | undefined,
+        conversationId: raw.conversationId as string | undefined,
+      }
+      : null;
 
     if (!body?.phone || !body?.email || !body?.name || !body?.startTime) {
       return Response.json(
-        { error: "Body must include {phone, email, name, startTime}" },
+        {
+          error:
+            "Body must include {phone|inviteePhone, email|inviteeEmail, name|inviteeName, startTime}",
+        },
         { status: 400 },
       );
     }
