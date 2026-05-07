@@ -727,7 +727,7 @@ ${sharedThemeCss}
         <div class="icon">✅</div>
         <div class="value" id="activatedCount">-</div>
         <div class="label">Activated (qualifying)</div>
-        <div class="explain">Sales credited within the 8-day window of the booked appointment — what mathematically counts. Click for full lifetime including ODR/2ND bypass + manual claims (<span id="activatedLifetimeChip">-</span> total).</div>
+        <div class="explain">Sales credited within the configured window of the booked appointment — what mathematically counts. Click to drill in and adjust the window (defaults to <span id="activatedWindowChip">7</span>d). Full lifetime including ODR/2ND bypass + manual claims: <span id="activatedLifetimeChip">-</span>.</div>
         <div class="hint">Click to drill in</div>
       </div>
 
@@ -984,6 +984,12 @@ function renderDashboard(data){
   // Lifetime stats (date-filter-independent)
   document.getElementById("activatedCount").textContent = (data.stats.activatedCount || 0).toLocaleString();
   document.getElementById("activatedLifetimeChip").textContent = (data.stats.activatedLifetimeCount || 0).toLocaleString();
+  // Expose configured window so the activated drill defaults its filter
+  // input to the same value used for the headline count.
+  window.__saleMatchWindowDays = (typeof data.stats.saleMatchWindowDays === "number" && data.stats.saleMatchWindowDays > 0)
+    ? data.stats.saleMatchWindowDays
+    : 7;
+  document.getElementById("activatedWindowChip").textContent = String(window.__saleMatchWindowDays);
   document.getElementById("answeredCount").textContent = (data.stats.answeredCount || 0).toLocaleString();
   document.getElementById("lifetimeAppointments").textContent = (data.stats.lifetimeAppointmentsBooked || 0).toLocaleString();
   document.getElementById("lifetimeOutsideWindow").textContent = (data.stats.lifetimeActivationsOutsideWindow || 0).toLocaleString();
@@ -1583,9 +1589,9 @@ document.getElementById("peopleRepliedCard").addEventListener("click", async fun
 });
 
 // Activated drill-in. Two tabs:
-//   • Qualifying — sales whose activation landed within the 8-day window of
-//     the booked appointment (withinDays <= 8). These are the ones that
-//     mathematically "count" — the credit-eligible subset.
+//   • Qualifying — sales whose activation landed within the configured
+//     window of the booked appointment (defaults to SALE_MATCH_WINDOW_DAYS;
+//     adjustable live via a number input). The credit-eligible subset.
 //   • Lifetime — every guestactivated doc ever written, including ODR/2ND
 //     bypass sales outside the window and manual_override claims with no
 //     appointment. This is the operational total.
@@ -1611,9 +1617,8 @@ document.getElementById("activatedCard").addEventListener("click", async functio
       return bt - at;
     });
     // withinDays isn't stored on the guestactivated doc — derive from
-    // activatedAt - eventTime. matchReason === "within_window" always
-    // qualifies (cron already validated). Same logic as server-side
-    // activatedQualifyingCount in /api/dashboard/stats.
+    // activatedAt - eventTime. Strict numeric math (matchReason is
+    // informational); changing the threshold reclassifies records live.
     function effectiveWithinDays(m){
       if(typeof m.withinDays === "number") return m.withinDays;
       if(!m.activatedAt || !m.eventTime) return null;
@@ -1622,12 +1627,6 @@ document.getElementById("activatedCard").addEventListener("click", async functio
       if(!isFinite(aMs) || !isFinite(eMs)) return null;
       return Math.round(Math.abs(aMs - eMs) / 86400000 * 10) / 10;
     }
-    function isQualifying(m){
-      if(m.matchReason === "within_window") return true;
-      var wd = effectiveWithinDays(m);
-      return typeof wd === "number" && wd <= 8;
-    }
-    var qualifyingItems = allItems.filter(isQualifying);
 
     var columns = [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
@@ -1647,24 +1646,50 @@ document.getElementById("activatedCard").addEventListener("click", async functio
 
     var tabBtnBase = 'background:transparent;border:1px solid rgba(195,204,209,.35);color:var(--silver);padding:6px 14px;border-radius:999px;font-size:.78rem;font-weight:700;letter-spacing:.02em;cursor:pointer;height:auto;margin-right:6px;';
     var tabBtnActive = 'background:rgba(25,195,125,.18);border-color:rgba(25,195,125,.55);color:#b8ffe2;';
+    var inputStyle = 'width:54px;padding:4px 6px;border:1px solid rgba(195,204,209,.35);border-radius:6px;background:transparent;color:var(--silver);font-size:.82rem;font-weight:700;text-align:center;margin:0 4px;';
 
-    function renderTab(which){
-      var qualSel = which === "qualifying";
+    var threshold = window.__saleMatchWindowDays || 7;
+    var currentTab = "qualifying";
+
+    function qualifyingFor(t){
+      return allItems.filter(function(m){
+        var wd = effectiveWithinDays(m);
+        return typeof wd === "number" && wd <= t;
+      });
+    }
+
+    function renderTab(){
+      var qualSel = currentTab === "qualifying";
+      var qItems = qualifyingFor(threshold);
       drillSubtitle.innerHTML =
         '<div style="margin-bottom:8px">' +
         (qualSel
-          ? "Sales credited within the 8-day window of the booked appointment. This is the credit-eligible subset — what mathematically counts."
-          : "Every guest ever marked as activated — manual claims, daily QB sale-match cron, ODR/2ND bypass sales (any age), and SHA phone-hash activations. Independent of the date picker.") +
+          ? 'Sales credited within the configured window of the booked appointment. Adjust the threshold to see how the credit-eligible count shifts.'
+          : 'Every guest ever marked as activated — manual claims, daily QB sale-match cron, ODR/2ND bypass sales (any age), and SHA phone-hash activations. Independent of the date picker.') +
         '</div>' +
-        '<div>' +
-        '<button id="actTabQual" type="button" style="' + tabBtnBase + (qualSel ? tabBtnActive : "") + '">Qualifying (within 8d) · ' + qualifyingItems.length + '</button>' +
+        '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">' +
+        '<button id="actTabQual" type="button" style="' + tabBtnBase + (qualSel ? tabBtnActive : "") + '">Qualifying (within ' + threshold + 'd) · ' + qItems.length + '</button>' +
         '<button id="actTabAll" type="button" style="' + tabBtnBase + (!qualSel ? tabBtnActive : "") + '">Lifetime · ' + allItems.length + '</button>' +
+        '<span class="muted" style="font-size:.78rem;margin-left:8px">Window (days):</span>' +
+        '<input id="actThreshold" type="number" min="0" max="365" step="0.5" value="' + threshold + '" style="' + inputStyle + '">' +
         '</div>';
-      drillSubtitle.querySelector("#actTabQual").addEventListener("click", function(){ renderTab("qualifying"); });
-      drillSubtitle.querySelector("#actTabAll").addEventListener("click", function(){ renderTab("all"); });
-      renderDrillTable(qualSel ? qualifyingItems : allItems, columns);
+      drillSubtitle.querySelector("#actTabQual").addEventListener("click", function(){ currentTab = "qualifying"; renderTab(); });
+      drillSubtitle.querySelector("#actTabAll").addEventListener("click", function(){ currentTab = "all"; renderTab(); });
+      var input = drillSubtitle.querySelector("#actThreshold");
+      input.addEventListener("input", function(){
+        var v = parseFloat(input.value);
+        if(!isFinite(v) || v < 0) return;
+        threshold = v;
+        renderTab();
+        // Keep focus + caret position so typing feels continuous.
+        var el = drillSubtitle.querySelector("#actThreshold");
+        el.focus();
+        var len = el.value.length;
+        el.setSelectionRange(len, len);
+      });
+      renderDrillTable(qualSel ? qItems : allItems, columns);
     }
-    renderTab("qualifying");
+    renderTab();
   } catch(err){
     drillLoading.style.display = "none";
     drillError.textContent = String(err.message || err);

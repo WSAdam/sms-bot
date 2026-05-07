@@ -52,12 +52,12 @@ export const GLOBAL_DAILY_SMS_CAP = 100;
 export const RATE_LIMIT_WINDOW_DAYS = 30;
 export const ATTEMPTS_GATEKEEPER_THRESHOLD = 40;
 
-// Sale match. Bumped 7 → 8 on 2026-05-04 after a sale-match run showed
-// multiple Apr-16 appointments activating exactly 8 days later (Apr 24);
-// Adam confirmed 8d should count. The Firestore collection name
-// `saleswithin7d` stays as-is for path stability — the constant is the
-// source of truth for the window math.
-export const SALE_MATCH_WINDOW_DAYS = 8;
+// Sale match. 8 → 7 on 2026-05-07 — Adam reverted to 7d as the canonical
+// "what counts" threshold; boundary 8d cases now go to salesoutsidewindow
+// and need a manual claim. ODR/2ND activator-prefix sales bypass this
+// window regardless. The Firestore collection name `saleswithin7d` stays
+// as-is for path stability — the constant is the source of truth.
+export const SALE_MATCH_WINDOW_DAYS = 7;
 
 // Phones excluded from dashboard reporting. Test traffic on these numbers
 // shouldn't inflate Total Texts, People Replied, Appointments Booked, etc.

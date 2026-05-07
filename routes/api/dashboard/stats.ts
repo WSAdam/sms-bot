@@ -94,14 +94,11 @@ export const handler = define.handlers({
     }
 
     // Activated count headline = QUALIFYING subset (sales within the
-    // SALE_MATCH_WINDOW_DAYS window). The breakdown.guestactivated.count
-    // stays as the raw lifetime number for the modal's Lifetime tab.
-    //
-    // withinDays isn't persisted on the guestactivated doc (only on the
-    // saleswithin7d marker), so we derive it from activatedAt - eventTime.
-    // matchReason === "within_window" is always qualifying (the cron already
-    // validated the window before writing); the gap-from-appointment test
-    // is the fallback for ODR/2ND/manual_override rows.
+    // SALE_MATCH_WINDOW_DAYS window of the appointment). withinDays isn't
+    // persisted on the guestactivated doc (only on the saleswithin7d marker),
+    // so we derive it from |activatedAt - eventTime|. Strict numeric math —
+    // matchReason is informational only; changing the constant immediately
+    // reclassifies records without needing a migration.
     const activatedList = await db.list(
       `${ROOT_COLLECTION}/guestactivated/byPhone`,
       { limit: LIST_LIMIT },
@@ -110,7 +107,6 @@ export const handler = define.handlers({
       .filter((e) => !isExcludedFromReporting(docIdToPhone10(e.id)))
       .filter((e) => {
         const data = e.data as Record<string, unknown>;
-        if (data.matchReason === "within_window") return true;
         const wd = data.withinDays;
         if (typeof wd === "number") return wd <= SALE_MATCH_WINDOW_DAYS;
         const activatedAt = typeof data.activatedAt === "string"
@@ -238,6 +234,9 @@ export const handler = define.handlers({
         totalKvEntries: totalKv,
         activatedCount: activatedQualifyingCount,
         activatedLifetimeCount: breakdown.guestactivated?.count ?? 0,
+        // Surface the configured window so the dashboard modal can default
+        // its "Window (days)" filter to the same value the headline uses.
+        saleMatchWindowDays: SALE_MATCH_WINDOW_DAYS,
         answeredCount: breakdown.guestanswered?.count ?? 0,
         lifetimeAppointmentsBooked,
         lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
