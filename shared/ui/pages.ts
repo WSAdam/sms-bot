@@ -1631,7 +1631,12 @@ document.getElementById("activatedCard").addEventListener("click", async functio
 
     var columns = [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
-      { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
+      { label: "Activated At", render: function(m){
+          if(!m.activatedAt) return "-";
+          var d = new Date(m.activatedAt);
+          if(isNaN(d.getTime())) return "-";
+          return escapeHtml(d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric", timeZone:"America/New_York" }));
+        }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
       { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); }, sortKey: function(m){ return m.eventTime || ""; } },
       { label: "Within Days", render: function(m){ var wd = effectiveWithinDays(m); return wd == null ? '-' : String(wd); }, cls: "muted", sortKey: function(m){ var wd = effectiveWithinDays(m); return wd == null ? 9999 : wd; } },
       { label: "Match Reason", render: function(m){ return escapeHtml(m.matchReason || ""); }, cls: "muted", sortKey: function(m){ return m.matchReason || ""; } },
@@ -1777,7 +1782,12 @@ async function _loadOutsideWindowDrill(){
     });
     renderDrillTable(items, [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
-      { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
+      { label: "Activated At", render: function(m){
+          if(!m.activatedAt) return "-";
+          var d = new Date(m.activatedAt);
+          if(isNaN(d.getTime())) return "-";
+          return escapeHtml(d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric", timeZone:"America/New_York" }));
+        }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
       { label: "Closest Appt", render: function(m){ return escapeHtml(formatTimestamp(m.closestAppointmentAt)); }, sortKey: function(m){ return m.closestAppointmentAt || ""; } },
       { label: "Days Off", render: function(m){ return '<span style="font-weight:900">' + (m.closestDaysDiff || 0) + 'd</span>'; }, sortKey: function(m){ return m.closestDaysDiff || 0; } },
       { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
