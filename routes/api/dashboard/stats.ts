@@ -1,6 +1,8 @@
-// Aggregated dashboard stats. Intentionally pragmatic — counts are derived by
-// listing each container collection and tallying. For very large datasets
-// these reads get expensive; consider precomputing into a `stats` doc later.
+// Aggregated dashboard stats. All collection reads happen in a single
+// Promise.all so we pay one Firestore round trip for the slowest list
+// instead of N sequential ones, and the raw lists are reused across
+// breakdown / activated-qualifying / appointments-booked aggregations
+// (no double reads).
 
 import { define } from "@/utils.ts";
 import {
@@ -55,6 +57,11 @@ interface BreakdownEntry {
   latest: string | null;
 }
 
+interface ListEntry {
+  id: string;
+  data: Record<string, unknown>;
+}
+
 export const handler = define.handlers({
   async GET(ctx) {
     const url = new URL(ctx.req.url);
@@ -70,17 +77,28 @@ export const handler = define.handlers({
       : null;
 
     const db = getFirestoreClient();
+
+    // Fan out every collection read in parallel. Each entry in `lists`
+    // matches the same index in PREFIXES.
+    const lists = await Promise.all(
+      PREFIXES.map(([container, sub]) =>
+        db.list(`${ROOT_COLLECTION}/${container}/${sub}`, {
+          limit: LIST_LIMIT,
+        })
+      ),
+    );
+    const byContainer = new Map<string, ListEntry[]>();
+    PREFIXES.forEach(([container], idx) => {
+      byContainer.set(container, lists[idx] as ListEntry[]);
+    });
+
+    // Build per-container breakdown from the cached lists. For per-phone
+    // containers, exclude test phones from the count so dashboard totals
+    // don't reflect Adam's own SMS traffic.
     const breakdown: Record<string, BreakdownEntry> = {};
     let totalKv = 0;
-
-    // Each container's docs. For per-phone containers, exclude test phones
-    // from the count so dashboard totals don't reflect Adam's own SMS traffic.
-    // audit/auditstage/conversations are NOT filtered here — they're raw
-    // storage counts (the conversations stat is derived separately below).
-    for (const [container, sub] of PREFIXES) {
-      const list = await db.list(`${ROOT_COLLECTION}/${container}/${sub}`, {
-        limit: LIST_LIMIT,
-      });
+    for (const [container] of PREFIXES) {
+      const list = byContainer.get(container) ?? [];
       const filteredList = PER_PHONE_CONTAINERS.has(container)
         ? list.filter((e) => !isExcludedFromReporting(docIdToPhone10(e.id)))
         : list;
@@ -99,14 +117,11 @@ export const handler = define.handlers({
     // so we derive it from |activatedAt - eventTime|. Strict numeric math —
     // matchReason is informational only; changing the constant immediately
     // reclassifies records without needing a migration.
-    const activatedList = await db.list(
-      `${ROOT_COLLECTION}/guestactivated/byPhone`,
-      { limit: LIST_LIMIT },
-    );
+    const activatedList = byContainer.get("guestactivated") ?? [];
     const activatedQualifyingCount = activatedList
       .filter((e) => !isExcludedFromReporting(docIdToPhone10(e.id)))
       .filter((e) => {
-        const data = e.data as Record<string, unknown>;
+        const data = e.data;
         const wd = data.withinDays;
         if (typeof wd === "number") return wd <= SALE_MATCH_WINDOW_DAYS;
         const activatedAt = typeof data.activatedAt === "string"
@@ -124,10 +139,7 @@ export const handler = define.handlers({
       }).length;
 
     // Conversation-derived stats: dedupe + drop excluded phones + date-filter.
-    const allMessages = await db.list(
-      `${ROOT_COLLECTION}/conversations/messages`,
-      { limit: LIST_LIMIT },
-    );
+    const allMessages = byContainer.get("conversations") ?? [];
     const allMsgs = (allMessages.map((e) =>
       e.data as unknown as ConversationMessage
     )).filter((m) => !isExcludedFromReporting(m.phoneNumber));
@@ -143,25 +155,19 @@ export const handler = define.handlers({
     }
     const initialTextsSent = phonesSeen.size;
 
-    // Appointment counts now come from the canonical injection records
+    // Appointment counts come from the canonical injection records
     // (scheduledinjections + injectionhistory), keyed by phone10. The old
     // conversation-message-tag heuristic broke when Bland's pathway stopped
     // sending the "Appointment Scheduled: X" template, masking real bookings.
-    const [pendingList, historyList] = await Promise.all([
-      db.list(`${ROOT_COLLECTION}/scheduledinjections/byPhone`, {
-        limit: LIST_LIMIT,
-      }),
-      db.list(`${ROOT_COLLECTION}/injectionhistory/byPhone`, {
-        limit: LIST_LIMIT,
-      }),
-    ]);
+    const pendingList = byContainer.get("scheduledinjections") ?? [];
+    const historyList = byContainer.get("injectionhistory") ?? [];
     interface ApptRow {
       phone10: string;
       bookedAtMs: number | null;
     }
     const apptRows: ApptRow[] = [];
     for (const e of pendingList) {
-      const data = e.data as Record<string, unknown>;
+      const data = e.data;
       const phone10 = String(data.phone ?? e.id);
       if (!phone10 || phone10.length !== 10) continue;
       if (isExcludedFromReporting(phone10)) continue;
@@ -178,7 +184,7 @@ export const handler = define.handlers({
       const phone10 = sep >= 0 ? e.id.slice(0, sep) : e.id;
       if (!phone10 || phone10.length !== 10) continue;
       if (isExcludedFromReporting(phone10)) continue;
-      const data = e.data as Record<string, unknown>;
+      const data = e.data;
       const fa = data.firedAt;
       const t = typeof fa === "string" ? new Date(fa).getTime() : null;
       apptRows.push({ phone10, bookedAtMs: t });
@@ -205,7 +211,9 @@ export const handler = define.handlers({
       appointmentsSet++;
     }
     // If neither date filter is set, daily and lifetime should match.
-    if (startMs == null && endMs == null) appointmentsSet = lifetimeAppointmentsBooked;
+    if (startMs == null && endMs == null) {
+      appointmentsSet = lifetimeAppointmentsBooked;
+    }
 
     // Recent activity also needs dedupe (the user was seeing 4× of the same
     // line in the table). Don't apply the date filter here — recent activity
@@ -240,7 +248,8 @@ export const handler = define.handlers({
         answeredCount: breakdown.guestanswered?.count ?? 0,
         lifetimeAppointmentsBooked,
         lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
-        lifetimeActivationsOutsideWindow: breakdown.salesoutsidewindow?.count ?? 0,
+        lifetimeActivationsOutsideWindow:
+          breakdown.salesoutsidewindow?.count ?? 0,
         lifetimeUniqueGuests: new Set(deduped.map((m) => m.phoneNumber)).size,
       },
       kvBreakdown: breakdown,
