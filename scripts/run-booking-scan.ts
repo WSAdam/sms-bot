@@ -5,11 +5,12 @@
 // Default: dry-run, yesterday-only (ET) window.
 //
 // Run:
-//   deno task run-booking-scan                              # dry-run, yesterday
-//   deno task run-booking-scan -- --apply                   # apply, yesterday
-//   deno task run-booking-scan -- --date=2026-05-05         # specific ET day, dry-run
-//   deno task run-booking-scan -- --date=2026-05-05 --apply # specific ET day, apply
-//   deno task run-booking-scan -- --days=3                  # rolling last 3 days, dry-run
+//   deno task run-booking-scan                                          # dry-run, yesterday
+//   deno task run-booking-scan -- --apply                               # apply, yesterday
+//   deno task run-booking-scan -- --date=2026-05-05                     # specific ET day, dry-run
+//   deno task run-booking-scan -- --date=2026-05-05 --apply             # specific ET day, apply
+//   deno task run-booking-scan -- --date=2026-05-06 --apply --force     # re-process even if already recovered (deletes stale doc)
+//   deno task run-booking-scan -- --days=3                              # rolling last 3 days, dry-run
 
 import {
   scanConversationsForBookings,
@@ -19,6 +20,7 @@ import {
 const args = Deno.args;
 const apply = args.includes("--apply");
 const dryRun = !apply;
+const force = args.includes("--force");
 const daysArg = args.find((a) => a.startsWith("--days="));
 const days = daysArg ? parseInt(daysArg.split("=")[1], 10) : 0;
 const dateArg = args.find((a) => a.startsWith("--date="));
@@ -47,11 +49,12 @@ if (dateStr) {
 
 console.log(`🔍 booking-scan`);
 console.log(`   apply  = ${apply}`);
+console.log(`   force  = ${force}`);
 console.log(`   from   = ${fromIso}`);
 console.log(`   to     = ${toIso ?? "(now)"}`);
 console.log("");
 
-const summary = await scanConversationsForBookings(fromIso, toIso, apply);
+const summary = await scanConversationsForBookings(fromIso, toIso, apply, force);
 
 console.log("");
 console.log("=== Proposals ===");

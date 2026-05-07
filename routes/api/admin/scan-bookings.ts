@@ -16,6 +16,7 @@ export const handler = define.handlers({
     const body = await ctx.req.json().catch(() => null) as
       | {
         dryRun?: boolean;
+        force?: boolean;
         days?: number;
         fromIso?: string;
         toIso?: string;
@@ -37,7 +38,13 @@ export const handler = define.handlers({
     }
 
     const apply = body?.dryRun !== true;
-    const summary = await scanConversationsForBookings(fromIso, toIso, apply);
-    return Response.json({ success: true, dryRun: !apply, ...summary });
+    const force = body?.force === true;
+    const summary = await scanConversationsForBookings(
+      fromIso,
+      toIso,
+      apply,
+      force,
+    );
+    return Response.json({ success: true, dryRun: !apply, force, ...summary });
   },
 });

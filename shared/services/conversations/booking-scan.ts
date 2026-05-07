@@ -219,18 +219,21 @@ export async function scanConversationsForBookings(
   fromIso: string,
   toIso: string | undefined,
   apply: boolean,
+  force: boolean = false,
 ): Promise<BookingScanSummary> {
   const db = getFirestoreClient();
-  // Pre-load (phone, callId) pairs we've already recovered via this scan,
-  // so re-runs are idempotent. Cron-fired injections (firedBy="cron") and
-  // manual fires don't block recovery — multiple bookings per phone over
-  // time are real and shouldn't be collapsed.
+  // Pre-load (phone, callId) pairs we've already recovered via this scan
+  // so re-runs are idempotent. With force=true we'll re-process them
+  // anyway and DELETE the stale recovery doc before writing the new one,
+  // so the count doesn't double. Cron-fired injections (firedBy="cron")
+  // and manual fires don't block recovery — multiple bookings per phone
+  // over time are real and shouldn't be collapsed.
   const history = await db.list(injectionHistoryCollection, { limit: 50_000 });
-  const recoveredCallIds = new Set<string>();
+  const recoveredDocIdByCallId = new Map<string, string>();
   for (const e of history) {
     const data = e.data as Record<string, unknown>;
     if (data.firedBy === "booking-scan-recovery" && typeof data.recoveredFromCallId === "string") {
-      recoveredCallIds.add(data.recoveredFromCallId);
+      recoveredDocIdByCallId.set(data.recoveredFromCallId, e.id);
     }
   }
 
@@ -260,7 +263,7 @@ export async function scanConversationsForBookings(
     const callId = c.id;
     if (!phone10 || phone10.length !== 10 || !callId) continue;
 
-    if (recoveredCallIds.has(callId)) {
+    if (recoveredDocIdByCallId.has(callId) && !force) {
       summary.skippedExisting++;
       console.log(
         `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already recovered)`,
@@ -269,10 +272,10 @@ export async function scanConversationsForBookings(
     }
     // Also skip if there's already a pending scheduledinjection — the
     // proper Cal.com path or a previous scan run already wrote one and
-    // the sweep is going to handle it. Avoids overwriting a real
-    // Cal.com-derived eventTime with our parsed-from-conversation guess.
+    // the sweep is going to handle it. With --force we still overwrite
+    // (set is non-merge anyway) so a re-parse can correct a stale guess.
     const existingPending = await db.get(scheduledInjectionDocPath(phone10));
-    if (existingPending) {
+    if (existingPending && !force) {
       summary.skippedExisting++;
       console.log(
         `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already pending)`,
@@ -387,6 +390,15 @@ export async function scanConversationsForBookings(
     }
     if (apply) {
       try {
+        // With --force, drop the stale recovery doc first so the dashboard
+        // count doesn't double up (history-placeholder + new write).
+        if (force && recoveredDocIdByCallId.has(callId)) {
+          const oldId = recoveredDocIdByCallId.get(callId)!;
+          await db.delete(`${injectionHistoryCollection}/${oldId}`);
+          console.log(
+            `[booking-scan] [force] deleted stale recovery ${oldId.slice(0, 30)}…`,
+          );
+        }
         if (eventTimeIsFuture && eventTime) {
           // Real future time — write a pending scheduledinjection so the
           // every-minute cron sweep fires the dialer at appointment time.
