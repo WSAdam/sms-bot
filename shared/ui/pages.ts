@@ -726,8 +726,8 @@ ${sharedThemeCss}
       <div class="stat-card clickable" id="activatedCard" title="Click to view activated guests">
         <div class="icon">✅</div>
         <div class="value" id="activatedCount">-</div>
-        <div class="label">Activated (lifetime)</div>
-        <div class="explain">Guests marked as a sale — either via the daily QB sale-match cron or manual /api/sales/record calls.</div>
+        <div class="label">Activated (qualifying)</div>
+        <div class="explain">Sales credited within the 8-day window of the booked appointment — what mathematically counts. Click for full lifetime including ODR/2ND bypass + manual claims (<span id="activatedLifetimeChip">-</span> total).</div>
         <div class="hint">Click to drill in</div>
       </div>
 
@@ -983,6 +983,7 @@ function renderDashboard(data){
 
   // Lifetime stats (date-filter-independent)
   document.getElementById("activatedCount").textContent = (data.stats.activatedCount || 0).toLocaleString();
+  document.getElementById("activatedLifetimeChip").textContent = (data.stats.activatedLifetimeCount || 0).toLocaleString();
   document.getElementById("answeredCount").textContent = (data.stats.answeredCount || 0).toLocaleString();
   document.getElementById("lifetimeAppointments").textContent = (data.stats.lifetimeAppointmentsBooked || 0).toLocaleString();
   document.getElementById("lifetimeOutsideWindow").textContent = (data.stats.lifetimeActivationsOutsideWindow || 0).toLocaleString();
@@ -1581,13 +1582,17 @@ document.getElementById("peopleRepliedCard").addEventListener("click", async fun
   }
 });
 
-// Activated drill-in (lifetime). Date filter intentionally NOT applied —
-// this is wired to a Lifetime card, so it shows every guestactivated doc
-// ever written (test phones excluded server-side). Sorted newest first.
+// Activated drill-in. Two tabs:
+//   • Qualifying — sales whose activation landed within the 8-day window of
+//     the booked appointment (withinDays <= 8). These are the ones that
+//     mathematically "count" — the credit-eligible subset.
+//   • Lifetime — every guestactivated doc ever written, including ODR/2ND
+//     bypass sales outside the window and manual_override claims with no
+//     appointment. This is the operational total.
+// Server-side excludes test phones in both cases. Default tab is Qualifying.
 document.getElementById("activatedCard").addEventListener("click", async function(){
   drillReset();
-  drillTitle.textContent = "Activated Guests (lifetime)";
-  drillSubtitle.textContent = "Every guest ever marked as activated — manual claims, daily QB sale-match cron, and SHA phone-hash activations. Independent of the date picker.";
+  drillTitle.textContent = "Activated Guests";
   openDrill();
   drillLoading.style.display = "block";
   try{
@@ -1599,21 +1604,47 @@ document.getElementById("activatedCard").addEventListener("click", async functio
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
-    var items = (data.entries || []).map(function(e){ return e.value; });
-    items.sort(function(a, b){
+    var allItems = (data.entries || []).map(function(e){ return e.value; });
+    allItems.sort(function(a, b){
       var at = a.activatedAt ? new Date(a.activatedAt).getTime() : 0;
       var bt = b.activatedAt ? new Date(b.activatedAt).getTime() : 0;
       return bt - at;
     });
-    renderDrillTable(items, [
+    var qualifyingItems = allItems.filter(function(m){
+      return typeof m.withinDays === "number" && m.withinDays <= 8;
+    });
+
+    var columns = [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
       { label: "Activated At", render: function(m){ return escapeHtml(formatTimestamp(m.activatedAt)); }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
       { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); }, sortKey: function(m){ return m.eventTime || ""; } },
+      { label: "Within Days", render: function(m){ return typeof m.withinDays === "number" ? String(m.withinDays) : '-'; }, cls: "muted", sortKey: function(m){ return typeof m.withinDays === "number" ? m.withinDays : 9999; } },
       { label: "Match Reason", render: function(m){ return escapeHtml(m.matchReason || ""); }, cls: "muted", sortKey: function(m){ return m.matchReason || ""; } },
       { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
       { label: "Activator", render: function(m){ return escapeHtml(m.activator || ""); }, cls: "muted", sortKey: function(m){ return m.activator || ""; } },
       { label: "Status", render: function(m){ return m.Activated ? '<span class="badge ok">Activated</span>' : '-'; } }
-    ]);
+    ];
+
+    var tabBtnBase = 'background:transparent;border:1px solid rgba(195,204,209,.35);color:var(--silver);padding:6px 14px;border-radius:999px;font-size:.78rem;font-weight:700;letter-spacing:.02em;cursor:pointer;height:auto;margin-right:6px;';
+    var tabBtnActive = 'background:rgba(25,195,125,.18);border-color:rgba(25,195,125,.55);color:#b8ffe2;';
+
+    function renderTab(which){
+      var qualSel = which === "qualifying";
+      drillSubtitle.innerHTML =
+        '<div style="margin-bottom:8px">' +
+        (qualSel
+          ? "Sales credited within the 8-day window of the booked appointment. This is the credit-eligible subset — what mathematically counts."
+          : "Every guest ever marked as activated — manual claims, daily QB sale-match cron, ODR/2ND bypass sales (any age), and SHA phone-hash activations. Independent of the date picker.") +
+        '</div>' +
+        '<div>' +
+        '<button id="actTabQual" type="button" style="' + tabBtnBase + (qualSel ? tabBtnActive : "") + '">Qualifying (within 8d) · ' + qualifyingItems.length + '</button>' +
+        '<button id="actTabAll" type="button" style="' + tabBtnBase + (!qualSel ? tabBtnActive : "") + '">Lifetime · ' + allItems.length + '</button>' +
+        '</div>';
+      drillSubtitle.querySelector("#actTabQual").addEventListener("click", function(){ renderTab("qualifying"); });
+      drillSubtitle.querySelector("#actTabAll").addEventListener("click", function(){ renderTab("all"); });
+      renderDrillTable(qualSel ? qualifyingItems : allItems, columns);
+    }
+    renderTab("qualifying");
   } catch(err){
     drillLoading.style.display = "none";
     drillError.textContent = String(err.message || err);

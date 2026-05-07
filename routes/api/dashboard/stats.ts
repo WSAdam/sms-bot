@@ -6,6 +6,7 @@ import { define } from "@/utils.ts";
 import {
   isExcludedFromReporting,
   ROOT_COLLECTION,
+  SALE_MATCH_WINDOW_DAYS,
 } from "@shared/config/constants.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
@@ -91,6 +92,20 @@ export const handler = define.handlers({
       breakdown[container] = { count: filteredList.length, latest };
       totalKv += filteredList.length;
     }
+
+    // Activated count headline = QUALIFYING subset (sales within the
+    // SALE_MATCH_WINDOW_DAYS window). The breakdown.guestactivated.count
+    // stays as the raw lifetime number for the modal's Lifetime tab.
+    const activatedList = await db.list(
+      `${ROOT_COLLECTION}/guestactivated/byPhone`,
+      { limit: LIST_LIMIT },
+    );
+    const activatedQualifyingCount = activatedList
+      .filter((e) => !isExcludedFromReporting(docIdToPhone10(e.id)))
+      .filter((e) => {
+        const wd = (e.data as Record<string, unknown>).withinDays;
+        return typeof wd === "number" && wd <= SALE_MATCH_WINDOW_DAYS;
+      }).length;
 
     // Conversation-derived stats: dedupe + drop excluded phones + date-filter.
     const allMessages = await db.list(
@@ -201,7 +216,8 @@ export const handler = define.handlers({
         appointmentsSet,
         // Lifetime — date-filter-independent
         totalKvEntries: totalKv,
-        activatedCount: breakdown.guestactivated?.count ?? 0,
+        activatedCount: activatedQualifyingCount,
+        activatedLifetimeCount: breakdown.guestactivated?.count ?? 0,
         answeredCount: breakdown.guestanswered?.count ?? 0,
         lifetimeAppointmentsBooked,
         lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
