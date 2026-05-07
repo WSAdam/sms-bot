@@ -105,24 +105,76 @@ export const handler = define.handlers({
 
     const phonesSeen = new Set<string>();
     const phonesReplied = new Set<string>();
-    let appointmentsSet = 0;
 
     for (const m of filtered) {
       phonesSeen.add(m.phoneNumber);
       if (m.sender === "Guest") phonesReplied.add(m.phoneNumber);
-      if ((m.nodeTag ?? "").toLowerCase().includes("appointment scheduled")) {
-        appointmentsSet++;
-      }
     }
     const initialTextsSent = phonesSeen.size;
 
-    // Lifetime appointments — same heuristic, no date filter.
-    let lifetimeAppointmentsBooked = 0;
-    for (const m of deduped) {
-      if ((m.nodeTag ?? "").toLowerCase().includes("appointment scheduled")) {
-        lifetimeAppointmentsBooked++;
+    // Appointment counts now come from the canonical injection records
+    // (scheduledinjections + injectionhistory), keyed by phone10. The old
+    // conversation-message-tag heuristic broke when Bland's pathway stopped
+    // sending the "Appointment Scheduled: X" template, masking real bookings.
+    const [pendingList, historyList] = await Promise.all([
+      db.list(`${ROOT_COLLECTION}/scheduledinjections/byPhone`, {
+        limit: LIST_LIMIT,
+      }),
+      db.list(`${ROOT_COLLECTION}/injectionhistory/byPhone`, {
+        limit: LIST_LIMIT,
+      }),
+    ]);
+    interface ApptRow {
+      phone10: string;
+      bookedAtMs: number | null;
+    }
+    const apptRows: ApptRow[] = [];
+    for (const e of pendingList) {
+      const data = e.data as Record<string, unknown>;
+      const phone10 = String(data.phone ?? e.id);
+      if (!phone10 || phone10.length !== 10) continue;
+      if (isExcludedFromReporting(phone10)) continue;
+      const sa = data.scheduledAt;
+      const t = typeof sa === "number"
+        ? sa
+        : typeof sa === "string"
+        ? new Date(sa).getTime()
+        : null;
+      apptRows.push({ phone10, bookedAtMs: t });
+    }
+    for (const e of historyList) {
+      const sep = e.id.indexOf("__");
+      const phone10 = sep >= 0 ? e.id.slice(0, sep) : e.id;
+      if (!phone10 || phone10.length !== 10) continue;
+      if (isExcludedFromReporting(phone10)) continue;
+      const data = e.data as Record<string, unknown>;
+      const fa = data.firedAt;
+      const t = typeof fa === "string" ? new Date(fa).getTime() : null;
+      apptRows.push({ phone10, bookedAtMs: t });
+    }
+    // Dedupe by phone10 — keep the earliest bookedAt so the date filter
+    // captures the originating booking even if it later got rebooked.
+    const earliestByPhone = new Map<string, number | null>();
+    for (const r of apptRows) {
+      const cur = earliestByPhone.get(r.phone10);
+      if (cur === undefined) {
+        earliestByPhone.set(r.phone10, r.bookedAtMs);
+      } else if (
+        r.bookedAtMs != null && (cur == null || r.bookedAtMs < cur)
+      ) {
+        earliestByPhone.set(r.phone10, r.bookedAtMs);
       }
     }
+    const lifetimeAppointmentsBooked = earliestByPhone.size;
+    let appointmentsSet = 0;
+    for (const t of earliestByPhone.values()) {
+      if (t == null) continue;
+      if (startMs != null && t < startMs) continue;
+      if (endMs != null && t > endMs) continue;
+      appointmentsSet++;
+    }
+    // If neither date filter is set, daily and lifetime should match.
+    if (startMs == null && endMs == null) appointmentsSet = lifetimeAppointmentsBooked;
 
     // Recent activity also needs dedupe (the user was seeing 4× of the same
     // line in the table). Don't apply the date filter here — recent activity

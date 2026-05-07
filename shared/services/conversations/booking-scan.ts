@@ -67,6 +67,24 @@ export interface BookingScanSummary {
 const DATE_RE =
   /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:[a-z]{0,3})?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM|a\.?m\.?|p\.?m\.?)/i;
 
+// Match time-only patterns: "2:00 pm", "2pm", "11:30 a.m.", "noon", "midnight".
+const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM|a\.?m\.?|p\.?m\.?)\b/i;
+
+// Match common timezone hints. Default: ET. CST/CDT and PST/PDT etc. each
+// resolve to a fixed offset for the May→October DST window. Drift at DST
+// boundaries is acceptable — cron sweep tolerates ±1h.
+const TZ_RE =
+  /\b(eastern|et|edt|est|central|ct|cdt|cst|mountain|mt|mdt|mst|pacific|pt|pdt|pst)\b/i;
+
+function tzOffsetForToken(tok: string): string {
+  const t = tok.toLowerCase();
+  if (t === "pst" || t === "pdt" || t === "pacific" || t === "pt") return "-07:00";
+  if (t === "mst" || t === "mdt" || t === "mountain" || t === "mt") return "-06:00";
+  if (t === "cst" || t === "cdt" || t === "central" || t === "ct") return "-05:00";
+  // ET default
+  return "-04:00";
+}
+
 function parseDateFromText(text: string, refIso: string): string | null {
   const m = text.match(DATE_RE);
   if (!m) return null;
@@ -93,6 +111,85 @@ function parseDateFromText(text: string, refIso: string): string | null {
     if (dt.getTime() >= refDate.getTime() - 12 * 60 * 60 * 1000) {
       return dt.toISOString();
     }
+  }
+  return null;
+}
+
+// Walk the conversation messages and extract a {hour, minute, tz} from any
+// guest or bot message that mentions a time. Returns the NEXT occurrence of
+// that local time (in the inferred timezone) at or after the signal moment.
+// e.g. customer said "2:00 pm" + "CST" with bot's "locked in!" at 18:26 ET on
+// 5/6 → returns 2:00 PM CDT on 5/7 (the next available 2pm CDT slot).
+function nextOccurrenceFromMessages(
+  msgs: BlandMsg[],
+  signalIdx: number,
+):
+  | { eventTime: string; tzOffset: string; hh: number; mm: number; source: string }
+  | null {
+  let hh = -1;
+  let mm = 0;
+  let tz: string | null = null;
+  let source: string | null = null;
+  // Walk backward from signal to find a time and (separately) a timezone hint.
+  for (let i = signalIdx; i >= 0; i--) {
+    const text = msgs[i]?.message ?? "";
+    if (hh < 0) {
+      const tlower = text.toLowerCase();
+      if (/\bnoon\b/.test(tlower)) {
+        hh = 12;
+        mm = 0;
+        source = `[${(msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"}] ${text.slice(0, 80)}`;
+      } else if (/\bmidnight\b/.test(tlower)) {
+        hh = 0;
+        mm = 0;
+        source = `[${(msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"}] ${text.slice(0, 80)}`;
+      } else {
+        const tm = text.match(TIME_RE);
+        if (tm) {
+          let h = parseInt(tm[1], 10);
+          const minute = tm[2] ? parseInt(tm[2], 10) : 0;
+          const ampm = tm[3].toUpperCase().replace(/\./g, "").replace(/M$/, "M");
+          if (ampm.startsWith("P") && h < 12) h += 12;
+          if (ampm.startsWith("A") && h === 12) h = 0;
+          hh = h;
+          mm = minute;
+          source = `[${(msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"}] ${text.slice(0, 80)}`;
+        }
+      }
+    }
+    if (!tz) {
+      const tzm = text.match(TZ_RE);
+      if (tzm) tz = tzm[1];
+    }
+    if (hh >= 0 && tz) break;
+  }
+  if (hh < 0) return null;
+  const tzOffset = tzOffsetForToken(tz ?? "et");
+
+  // Compute the next occurrence of HH:MM in the target tz at or after now.
+  // We use the offset (e.g. -05:00) to map "today HH:MM in that tz" to UTC,
+  // then bump by 24h until it's in the future.
+  const nowMs = Date.now();
+  // Today's date in the target timezone (rough — we use UTC date offset).
+  // For tzOffset like "-05:00", UTC date matching local day requires
+  // adding the offset hours to UTC. Build a "today YYYY-MM-DD" relative to tz.
+  const tzHours = parseInt(tzOffset.slice(0, 3), 10); // -5 etc
+  const localNow = new Date(nowMs + tzHours * 60 * 60 * 1000);
+  let y = localNow.getUTCFullYear();
+  let m = localNow.getUTCMonth();
+  let d = localNow.getUTCDate();
+  for (let bump = 0; bump < 30; bump++) {
+    const isoLocal =
+      `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${tzOffset}`;
+    const dt = new Date(isoLocal);
+    if (Number.isFinite(dt.getTime()) && dt.getTime() > nowMs) {
+      return { eventTime: dt.toISOString(), tzOffset, hh, mm, source: source ?? "" };
+    }
+    // bump by 1 day
+    const next = new Date(Date.UTC(y, m, d + 1));
+    y = next.getUTCFullYear();
+    m = next.getUTCMonth();
+    d = next.getUTCDate();
   }
   return null;
 }
@@ -170,6 +267,18 @@ export async function scanConversationsForBookings(
       );
       continue;
     }
+    // Also skip if there's already a pending scheduledinjection — the
+    // proper Cal.com path or a previous scan run already wrote one and
+    // the sweep is going to handle it. Avoids overwriting a real
+    // Cal.com-derived eventTime with our parsed-from-conversation guess.
+    const existingPending = await db.get(scheduledInjectionDocPath(phone10));
+    if (existingPending) {
+      summary.skippedExisting++;
+      console.log(
+        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already pending)`,
+      );
+      continue;
+    }
     console.log(
       `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  fetching ${callId.slice(0, 8)}…`,
     );
@@ -208,12 +317,10 @@ export async function scanConversationsForBookings(
     }
     if (!signalInfo || signalIdx < 0) continue;
 
-    // Walk backward through the FULL conversation looking for a date+time
-    // in any message — bot OR user. The new Bland pathway often confirms
-    // bookings with "You're locked in!" alone, leaving the negotiated time
-    // in earlier messages (often the customer's own reply).
+    // 1) Walk backward looking for an explicit date+time match.
     let eventTime: string | null = null;
     let eventTimeSource: string | null = null;
+    let eventTimeIsFuture = false;
     for (let i = signalIdx; i >= 0; i--) {
       const candidate = msgs[i];
       if (!candidate) continue;
@@ -229,6 +336,20 @@ export async function scanConversationsForBookings(
         eventTimeSource = `[${who}] ${(candidate.message ?? "").slice(0, 80)}`;
         break;
       }
+    }
+    // 2) Fallback: time-only (e.g. "2:00 pm" + "CST") → next occurrence
+    //    of that local time at or after now. Customer said a time, Cal.com
+    //    picked the date — we re-pick the next available matching slot so
+    //    the cron sweep can actually inject them.
+    if (!eventTime) {
+      const next = nextOccurrenceFromMessages(msgs, signalIdx);
+      if (next) {
+        eventTime = next.eventTime;
+        eventTimeSource = `time-only ${next.hh}:${String(next.mm).padStart(2, "0")} ${next.tzOffset} from ${next.source}`;
+      }
+    }
+    if (eventTime && new Date(eventTime).getTime() > Date.now()) {
+      eventTimeIsFuture = true;
     }
 
     const proposal: BookingProposal = {
@@ -266,27 +387,40 @@ export async function scanConversationsForBookings(
     }
     if (apply) {
       try {
-        const firedAt = signalInfo.signalAt;
-        const docId = injectionHistoryDocId(phone10, firedAt);
-        await db.set(injectionHistoryDocPath(docId), {
-          phone: phone10,
-          eventTime: eventTimeFinal,
-          scheduledAt: new Date(firedAt).getTime(),
-          isTest: false,
-          firedAt,
-          firedBy: "booking-scan-recovery",
-          status: "recovered",
-          recoveredFromCallId: callId,
-          recoveredSignal: signalInfo.signal,
-          recoveredEventTimeSource: eventTimeSource,
-        });
-        summary.applied++;
-        console.log(
-          `[booking-scan] ✅ ${phone10} eventTime=${eventTimeFinal}${eventTime ? "" : " (placeholder)"} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
-        );
+        if (eventTimeIsFuture && eventTime) {
+          // Real future time — write a pending scheduledinjection so the
+          // every-minute cron sweep fires the dialer at appointment time.
+          await scheduleInjection(phone10, eventTime, false);
+          summary.applied++;
+          console.log(
+            `[booking-scan] ✅ ${phone10} scheduledinjection eventTime=${eventTime} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
+          );
+        } else {
+          // No parseable time OR time was in the past — record in history
+          // as a placeholder so the booking COUNTS without risking a stale
+          // sweep fire. Operator can manually claim or re-book.
+          const firedAt = signalInfo.signalAt;
+          const docId = injectionHistoryDocId(phone10, firedAt);
+          await db.set(injectionHistoryDocPath(docId), {
+            phone: phone10,
+            eventTime: eventTimeFinal,
+            scheduledAt: new Date(firedAt).getTime(),
+            isTest: false,
+            firedAt,
+            firedBy: "booking-scan-recovery",
+            status: "recovered",
+            recoveredFromCallId: callId,
+            recoveredSignal: signalInfo.signal,
+            recoveredEventTimeSource: eventTimeSource,
+          });
+          summary.applied++;
+          console.log(
+            `[booking-scan] ✅ ${phone10} history-placeholder eventTime=${eventTimeFinal} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
+          );
+        }
       } catch (e) {
         summary.errored++;
-        summary.errors.push(`${phone10}: history write ${(e as Error).message}`);
+        summary.errors.push(`${phone10}: write ${(e as Error).message}`);
       }
     }
   }
