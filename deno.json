@@ -19,6 +19,7 @@
     "reseed-answered-conversations": "deno run -A --env-file=env/local scripts/reseed-answered-conversations.ts",
     "run-booking-scan": "deno run -A --env-file=env/local scripts/run-booking-scan.ts",
     "cleanup-excluded-phones": "deno run -A --env-file=env/local scripts/cleanup-excluded-phones.ts",
+    "backfill-injection-from-answered": "deno run -A --env-file=env/local scripts/backfill-injection-from-answered.ts",
     "shape-check": "deno run -A scripts/shape-check.ts"
   },
   "lint": {
