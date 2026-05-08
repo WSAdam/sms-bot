@@ -1616,11 +1616,13 @@ document.getElementById("activatedCard").addEventListener("click", async functio
       var bt = b.activatedAt ? new Date(b.activatedAt).getTime() : 0;
       return bt - at;
     });
-    // withinDays isn't stored on the guestactivated doc — derive from
-    // activatedAt - eventTime. Strict numeric math (matchReason is
-    // informational); changing the threshold reclassifies records live.
+    // Use the cron-stored withinDays when present (canonical, computed from
+    // ms-precision Date objects so no TZ-string-parsing drift). Fall back to
+    // |activatedAt - eventTime| only when the field is missing. Always
+    // return absolute days — the cron stores SIGNED diff (sale - appt) but
+    // the dashboard cares about the gap, not the direction.
     function effectiveWithinDays(m){
-      if(typeof m.withinDays === "number") return m.withinDays;
+      if(typeof m.withinDays === "number") return Math.abs(m.withinDays);
       if(!m.activatedAt || !m.eventTime) return null;
       var aMs = new Date(m.activatedAt).getTime();
       var eMs = new Date(m.eventTime).getTime();

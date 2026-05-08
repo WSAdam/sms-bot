@@ -123,7 +123,12 @@ export const handler = define.handlers({
       .filter((e) => {
         const data = e.data;
         const wd = data.withinDays;
-        if (typeof wd === "number") return wd <= SALE_MATCH_WINDOW_DAYS;
+        // The cron stores SIGNED days (sale - appt), so a sale that landed
+        // before the appointment is negative. We care about the absolute
+        // gap when deciding if it's within the window.
+        if (typeof wd === "number") {
+          return Math.abs(wd) <= SALE_MATCH_WINDOW_DAYS;
+        }
         const activatedAt = typeof data.activatedAt === "string"
           ? data.activatedAt
           : null;
