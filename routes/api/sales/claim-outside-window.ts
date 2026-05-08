@@ -107,6 +107,9 @@ export const handler = define.handlers({
           // Preserve the actual QB activation date, not the claim-click time.
           activatedAt,
           eventTime: closestAppointmentAt,
+          // Mirror the marker's withinDays so the dashboard short-circuits
+          // on the stored value instead of re-parsing TZ-naive timestamps.
+          withinDays: closestDaysDiff,
           matchReason: "manual_override",
           recordedAt: updatedAt,
           ...(activator ? { activator } : {}),

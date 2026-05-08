@@ -304,6 +304,12 @@ export async function processSaleMatches(
         // Otherwise the drill shows every row with the same "today" timestamp.
         activatedAt: saleAtIso,
         eventTime: appointmentAt,
+        // Persist the computed window-days on the activated doc so the
+        // dashboard's qualifying filter (server stats + client modal) can
+        // short-circuit on it. Otherwise both sides re-parse `eventTime`
+        // strings and disagree on naive-ISO records (no TZ offset = parsed
+        // in server-local vs browser-local time).
+        withinDays,
         matchReason,
         recordedAt: updatedAt,
         ...(activator ? { activator } : {}),

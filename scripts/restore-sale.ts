@@ -80,6 +80,10 @@ const activated = {
   Activated: true,
   activatedAt: SALE_AT,
   eventTime: null,
+  // No appointment to compare against, so withinDays is unknowable. The
+  // dashboard's qualifying filter requires a number, so this row will be
+  // excluded from Qualifying and only show in Lifetime.
+  withinDays: null,
   matchReason: "manual_override",
   recordedAt: updatedAt,
   ...(ACTIVATOR ? { activator: ACTIVATOR } : {}),
