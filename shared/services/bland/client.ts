@@ -100,36 +100,87 @@ export async function listConversationsToday(): Promise<
 // the nightly conversation reseed cron — pulls every conversation Bland
 // saw in the window so we can re-fetch its messages and overwrite our
 // (potentially out-of-date) Firestore copy.
+//
+// IMPORTANT: Bland's `page` param is BROKEN — pages 2/3/N return the same
+// rows as page 1. Their `extra.pagination` block is also missing entirely
+// from the response. We paginate via a CURSOR on `created_at` instead:
+// shrink the upper bound to just before the earliest row of each page.
+const BLAND_PAGE_SIZE = 100;
+const BLAND_CURSOR_MAX_PAGES = 200; // safety cap → 20k convos
+
 export async function listConversationsByDateRange(
   fromIso: string,
   toIso?: string,
 ): Promise<{ from: string; to: string | null; conversations: BlandListItem[] }> {
-  const filters: Array<Record<string, unknown>> = [
+  const conversations = await cursorPaginate([
     { field: "created_at", operator: "gte", value: fromIso },
-  ];
-  if (toIso) {
-    filters.push({ field: "created_at", operator: "lte", value: toIso });
+    ...(toIso ? [{ field: "created_at", operator: "lte", value: toIso }] : []),
+  ], toIso ?? null);
+  return { from: fromIso, to: toIso ?? null, conversations };
+}
+
+// Search Bland for every conversation that ever existed for a single phone.
+// Used by the auto-pull recovery path: when sale-match writes a record with
+// `withinDays < 0` (sale recorded BEFORE the appointment), the originating
+// Bland conversation is almost certainly older than yesterday's reseed
+// window — fetch it directly so the dashboard's phone-link search works.
+//
+// `user_number contains <phone10>` is the filter that actually works
+// (eq/= return 400 — Bland's parser rejects exact matches on this field).
+export async function searchConversationsByPhone(
+  phone10: string,
+): Promise<BlandListItem[]> {
+  if (!/^\d{10}$/.test(phone10)) {
+    throw new Error(`searchConversationsByPhone: invalid phone "${phone10}"`);
   }
-  const filterParam = JSON.stringify(filters);
+  return await cursorPaginate([
+    { field: "user_number", operator: "contains", value: phone10 },
+  ], null);
+}
 
+// Shared cursor-pagination helper. Fetches up to BLAND_PAGE_SIZE rows,
+// then narrows the upper-bound to (earliest row's created_at - 1ms) and
+// repeats. Stops when a page returns < BLAND_PAGE_SIZE rows or when we
+// hit the safety cap.
+async function cursorPaginate(
+  baseFilters: Array<Record<string, unknown>>,
+  initialUpperIso: string | null,
+): Promise<BlandListItem[]> {
   const all: BlandListItem[] = [];
-  let page = 1;
-  while (true) {
+  let upperIso: string | null = initialUpperIso;
+  for (let i = 0; i < BLAND_CURSOR_MAX_PAGES; i++) {
+    const filters: Array<Record<string, unknown>> = [...baseFilters];
+    // Replace any existing created_at lte with our cursor bound.
+    if (upperIso) {
+      const idx = filters.findIndex((f) =>
+        f.field === "created_at" && f.operator === "lte"
+      );
+      const entry = { field: "created_at", operator: "lte", value: upperIso };
+      if (idx >= 0) filters[idx] = entry;
+      else filters.push(entry);
+    }
     const url = new URL(BLAND_API_BASE);
-    url.searchParams.set("page", String(page));
-    url.searchParams.set("pageSize", "100");
+    url.searchParams.set("page", "1");
+    url.searchParams.set("pageSize", String(BLAND_PAGE_SIZE));
     url.searchParams.set("sortBy", "created_at");
-    url.searchParams.set("sortDir", "asc");
-    url.searchParams.set("filters", filterParam);
-
+    url.searchParams.set("sortDir", "desc");
+    url.searchParams.set("filters", JSON.stringify(filters));
     const res = await fetch(url.toString(), { headers: authHeader() });
     const json = await res.json();
-    if (!res.ok || !json?.data) {
-      throw new Error(`Bland list ${res.status}: ${JSON.stringify(json?.errors ?? json)}`);
+    if (!res.ok) {
+      throw new Error(
+        `Bland list ${res.status}: ${
+          JSON.stringify(json?.errors ?? json).slice(0, 200)
+        }`,
+      );
     }
-    for (const c of json.data as BlandListItem[]) all.push(c);
-    if (page >= (json.extra?.pagination?.totalPages ?? 1)) break;
-    page++;
+    const data: BlandListItem[] = json?.data ?? [];
+    if (data.length === 0) break;
+    for (const c of data) all.push(c);
+    if (data.length < BLAND_PAGE_SIZE) break;
+    const earliest = data[data.length - 1].created_at;
+    if (!earliest) break;
+    upperIso = new Date(new Date(earliest).getTime() - 1).toISOString();
   }
-  return { from: fromIso, to: toIso ?? null, conversations: all };
+  return all;
 }

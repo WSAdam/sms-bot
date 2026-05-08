@@ -359,5 +359,35 @@ export async function processSaleMatches(
     await client.batch(writes);
   }
 
+  // Auto-pull conversations for any sale where withinDays < 0 (sale recorded
+  // BEFORE the appointment). The originating Bland conversation is older
+  // than yesterday's reseed window, so the dashboard's phone-link search
+  // would otherwise return nothing. Awaited so cron logs reflect what we
+  // actually pulled. Failures are logged, never thrown — partial recovery
+  // beats no recovery.
+  const negatives = summary.matches.filter((m) =>
+    typeof m.withinDays === "number" && m.withinDays < 0
+  );
+  if (negatives.length > 0) {
+    const { reseedConversationsForPhone } = await import(
+      "@shared/services/conversations/reseed.ts"
+    );
+    console.log(
+      `[sale-match] 🩹 ${negatives.length} sale(s) recorded before appt — auto-pulling Bland conversations: ${negatives.map((n) => n.phone10).join(", ")}`,
+    );
+    for (const n of negatives) {
+      try {
+        const r = await reseedConversationsForPhone(n.phone10);
+        console.log(
+          `[sale-match]   ↳ ${n.phone10}: bland=${r.blandConversations} reseeded=${r.reseeded} delta=+${r.netMessagesAdded}`,
+        );
+      } catch (e) {
+        console.error(
+          `[sale-match]   ↳ ${n.phone10}: pull failed — ${(e as Error).message}`,
+        );
+      }
+    }
+  }
+
   return summary;
 }

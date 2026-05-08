@@ -152,6 +152,78 @@ export async function reseedConversationsByDateRange(
   return summary;
 }
 
+// Pull EVERY conversation Bland has for a single phone, then reseed each
+// one. Used by the auto-recovery path triggered when sale-match writes a
+// record with `withinDays < 0` — the originating Bland conversation is
+// almost certainly older than the nightly reseed's 1-day window.
+//
+// Returns counts so the caller can log/respond meaningfully. Errors per
+// conversation are collected but never thrown — partial recovery is
+// preferable to no recovery.
+export interface PerPhonePullSummary {
+  phone10: string;
+  blandConversations: number;
+  reseeded: number;
+  skippedFewer: number;
+  errored: number;
+  netMessagesAdded: number;
+  errors: string[];
+}
+
+export async function reseedConversationsForPhone(
+  phone10: string,
+): Promise<PerPhonePullSummary> {
+  const conversations = await bland.searchConversationsByPhone(phone10);
+  const summary: PerPhonePullSummary = {
+    phone10,
+    blandConversations: conversations.length,
+    reseeded: 0,
+    skippedFewer: 0,
+    errored: 0,
+    netMessagesAdded: 0,
+    errors: [],
+  };
+  console.log(
+    `[reseed-by-phone] ${phone10}: Bland returned ${conversations.length} conversations`,
+  );
+  for (let i = 0; i < conversations.length; i += PARALLEL) {
+    const chunk = conversations.slice(i, i + PARALLEL);
+    const results = await Promise.all(
+      chunk.map(async (c) => {
+        const phone = String(c.user_number ?? "").replace(/\D/g, "");
+        const p10 = phone.length >= 10 ? phone.slice(-10) : phone;
+        // Sanity: Bland's `contains` filter is fuzzy; reject any row where
+        // the matched user_number doesn't actually end in our phone10.
+        if (p10 !== phone10) return { status: "fuzzy-mismatch" as const };
+        try {
+          return await reseedOne(phone10, c.id);
+        } catch (e) {
+          return {
+            status: "error" as const,
+            delta: 0,
+            reason: (e as Error).message,
+          };
+        }
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "reseeded") {
+        summary.reseeded++;
+        summary.netMessagesAdded += r.delta ?? 0;
+      } else if (r.status === "skipped") {
+        summary.skippedFewer++;
+      } else if (r.status === "error") {
+        summary.errored++;
+        if (r.reason) summary.errors.push(r.reason);
+      }
+    }
+  }
+  console.log(
+    `[reseed-by-phone] ${phone10}: reseeded=${summary.reseeded} skipped=${summary.skippedFewer} errored=${summary.errored} delta=+${summary.netMessagesAdded}`,
+  );
+  return summary;
+}
+
 // Convenience: re-seed YESTERDAY in Eastern Time. Used by the nightly cron.
 export function yesterdayEasternRange(): { fromIso: string; toIso: string } {
   // Build yesterday's start/end in ET, expressed as UTC for Bland's filter.
