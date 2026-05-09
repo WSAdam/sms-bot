@@ -1602,15 +1602,45 @@ document.getElementById("activatedCard").addEventListener("click", async functio
   openDrill();
   drillLoading.style.display = "block";
   try{
-    var res = await fetch("/api/kv/list", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: ["guestactivated"], limit: 50000 })
-    });
-    var data = await res.json();
-    if(!res.ok) throw new Error(data.error || "Failed");
+    // Parallel fetch: activated guests + leadpointers (for Campaign column)
+    // + calldispositions (for Confirmed Called + Last Disposition columns)
+    // + RM campaign-id→name map (for rendering campaign names instead of ids).
+    var responses = await Promise.all([
+      fetch("/api/kv/list", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ prefix: ["guestactivated"], limit: 50000 }) }),
+      fetch("/api/kv/list", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ prefix: ["leadpointer"], limit: 50000 }) }),
+      fetch("/api/kv/list", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ prefix: ["calldispositions"], limit: 50000 }) }),
+      fetch("/api/admin/readymode-campaigns")
+    ]);
+    var actData = await responses[0].json();
+    if(!responses[0].ok) throw new Error(actData.error || "Failed loading activated");
+    var pointerData = responses[1].ok ? await responses[1].json() : { entries: [] };
+    var dispoData = responses[2].ok ? await responses[2].json() : { entries: [] };
+    var rmCampaignsData = responses[3].ok ? await responses[3].json() : { campaigns: {} };
     drillLoading.style.display = "none";
-    var allItems = (data.entries || []).map(function(e){ return e.value; });
+
+    // Build per-phone lookups.
+    var pointerByPhone = {};
+    (pointerData.entries || []).forEach(function(e){
+      var v = e.value;
+      if(v && v.phone10) pointerByPhone[v.phone10] = v;
+    });
+    var rmCampaigns = rmCampaignsData.campaigns || {};
+
+    // For each phone, collect ALL dispositions and pick: earliest answered
+    // (for Confirmed Called timestamp) and most recent of any (for Last
+    // Disposition column). Doc id format: "{phone10}__{callLogId}".
+    var dispoByPhone = {};
+    (dispoData.entries || []).forEach(function(e){
+      var v = e.value; if(!v || !v.phone10) return;
+      var p = v.phone10;
+      var arr = dispoByPhone[p] || (dispoByPhone[p] = []);
+      arr.push(v);
+    });
+
+    var allItems = (actData.entries || []).map(function(e){ return e.value; });
     allItems.sort(function(a, b){
       var at = a.activatedAt ? new Date(a.activatedAt).getTime() : 0;
       var bt = b.activatedAt ? new Date(b.activatedAt).getTime() : 0;
@@ -1630,6 +1660,47 @@ document.getElementById("activatedCard").addEventListener("click", async functio
       return Math.round(Math.abs(aMs - eMs) / 86400000 * 10) / 10;
     }
 
+    // Confirmed-called signal: at least one calldisposition exists for the
+    // phone with callTime <= the sale's activatedAt (i.e. our dialer talked
+    // to them BEFORE the QB activation came through). Returns the earliest
+    // such call, or null if no qualifying call exists.
+    function earliestConfirmedCall(m){
+      var arr = dispoByPhone[m.phone10];
+      if(!arr || arr.length === 0) return null;
+      var saleMs = m.activatedAt ? new Date(m.activatedAt).getTime() : Infinity;
+      var best = null;
+      for(var i = 0; i < arr.length; i++){
+        var d = arr[i];
+        var t = d.callTime ? new Date(d.callTime).getTime() : NaN;
+        if(!isFinite(t)) continue;
+        if(t > saleMs) continue;
+        if(!best || t < new Date(best.callTime).getTime()) best = d;
+      }
+      return best;
+    }
+    // Most recent disposition before the sale — surfaces what the dialer
+    // last heard from this phone (e.g. "Sale (NO MCC)", "Not interested").
+    function lastDispoBeforeSale(m){
+      var arr = dispoByPhone[m.phone10];
+      if(!arr || arr.length === 0) return null;
+      var saleMs = m.activatedAt ? new Date(m.activatedAt).getTime() : Infinity;
+      var best = null;
+      for(var i = 0; i < arr.length; i++){
+        var d = arr[i];
+        var t = d.callTime ? new Date(d.callTime).getTime() : NaN;
+        if(!isFinite(t) || t > saleMs) continue;
+        if(!best || t > new Date(best.callTime).getTime()) best = d;
+      }
+      return best;
+    }
+    function campaignNameFor(m){
+      var p = pointerByPhone[m.phone10];
+      var cid = p && p.originalSource && p.originalSource.campaignId
+        ? String(p.originalSource.campaignId) : null;
+      if(!cid) return null;
+      return rmCampaigns[cid] || ("#" + cid);
+    }
+
     var columns = [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
       { label: "Activated At", render: function(m){
@@ -1640,8 +1711,21 @@ document.getElementById("activatedCard").addEventListener("click", async functio
         }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
       { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); }, sortKey: function(m){ return m.eventTime || ""; } },
       { label: "Within Days", render: function(m){ var wd = effectiveWithinDays(m); return wd == null ? '-' : String(wd); }, cls: "muted", sortKey: function(m){ var wd = effectiveWithinDays(m); return wd == null ? 9999 : wd; } },
+      { label: "Confirmed Called", render: function(m){
+          var c = earliestConfirmedCall(m);
+          if(!c) return '<span class="muted">-</span>';
+          var when = c.callTime ? formatTimestamp(c.callTime) : "?";
+          return '<span class="badge ok" title="' + escapeHtml(when) + '">✓ ' + escapeHtml(c.disposition || "called") + '</span>';
+        }, sortKey: function(m){ var c = earliestConfirmedCall(m); return c ? c.callTime : "zzz"; } },
+      { label: "Campaign", render: function(m){
+          var name = campaignNameFor(m);
+          return name ? escapeHtml(name) : '<span class="muted">organic</span>';
+        }, cls: "muted", sortKey: function(m){ return campaignNameFor(m) || "zzz_organic"; } },
+      { label: "Last Disposition", render: function(m){
+          var d = lastDispoBeforeSale(m);
+          return d ? escapeHtml(d.disposition || "?") : '<span class="muted">-</span>';
+        }, cls: "muted", sortKey: function(m){ var d = lastDispoBeforeSale(m); return d ? d.disposition : "zzz"; } },
       { label: "Match Reason", render: function(m){ return escapeHtml(m.matchReason || ""); }, cls: "muted", sortKey: function(m){ return m.matchReason || ""; } },
-      { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
       { label: "Activator", render: function(m){ return escapeHtml(m.activator || ""); }, cls: "muted", sortKey: function(m){ return m.activator || ""; } },
       { label: "Status", render: function(m){ return m.Activated ? '<span class="badge ok">Activated</span>' : '-'; } }
     ];
@@ -3811,6 +3895,27 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="pull-readymode">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🎯 Pull ReadyMode call dispositions</div>
+            <div class="ep-desc">Logs into the ReadyMode portal (RM_USER must be logged out elsewhere — RM enforces single-session-per-user), pulls the Call Log Report for the date range, writes each call to <code>calldispositions/byPhone/{phone10}__{callLogId}</code>, and upserts <code>guestanswered</code> for any non-No-Answer call. Idempotent — re-runs over the same range never double-write. The 5:30 AM ET cron does this automatically for yesterday; use this card to backfill arbitrary date ranges.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/admin/pull-readymode</code>
+        <div class="row">
+          <label>fromDate (MM/DD/YYYY)<input type="text" data-input="fromDate" placeholder="blank = yesterday"></label>
+          <label>toDate (MM/DD/YYYY)<input type="text" data-input="toDate" placeholder="blank = same as fromDate"></label>
+          <label>maxPagesPerDomain (testing)<input type="text" data-input="maxPagesPerDomain" placeholder="blank = all pages"></label>
+        </div>
+        <div class="actions">
+          <button onclick="runPullReadymode(this)">Pull dispositions</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="repopulate-injections">
         <div class="ep-head">
           <div>
@@ -4383,6 +4488,25 @@ async function runRepopulateInjections(btn){
     method: "POST", url: "/api/admin/repopulate-injections",
     headers: { "content-type": "application/json" },
     body: { dryRun },
+  });
+}
+async function runPullReadymode(btn){
+  const card = btn.closest(".endpoint-card");
+  const fromDate = card.querySelector('[data-input="fromDate"]').value.trim();
+  const toDate = card.querySelector('[data-input="toDate"]').value.trim();
+  const maxPagesRaw = card.querySelector('[data-input="maxPagesPerDomain"]').value.trim();
+  const body = {};
+  if(fromDate) body.fromDate = fromDate;
+  if(toDate) body.toDate = toDate;
+  if(maxPagesRaw) body.maxPagesPerDomain = parseInt(maxPagesRaw, 10);
+  // Multi-day backfills can take minutes — warn the operator.
+  if(fromDate && toDate && fromDate !== toDate){
+    if(!confirm("Backfilling " + fromDate + " → " + toDate + " could take several minutes per day per domain. RM_USER must be logged out everywhere else. Continue?")) return;
+  }
+  await runRequest(card, {
+    method: "POST", url: "/api/admin/pull-readymode",
+    headers: { "content-type": "application/json" },
+    body,
   });
 }
 async function runConversationReseed(btn){

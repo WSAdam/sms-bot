@@ -213,6 +213,17 @@ export function legacyKeyToCollectionPath(prefix: LegacyKey): LegacyCollectionPa
       return { parent: `${ROOT_COLLECTION}/conversations/byCallId` };
     case "abtest":
       return { parent: `${ROOT_COLLECTION}/abtest/byPhone` };
+    case "calldispositions":
+      // Doc id is `{phone10}__{callLogId}`. Optional first rest element
+      // filters to a specific phone (used by per-phone lookup pages).
+      if (rest.length >= 1) {
+        const phone = rest[0];
+        return {
+          parent: `${ROOT_COLLECTION}/calldispositions/byPhone`,
+          filterFn: (id: string) => id.startsWith(`${phone}__`),
+        };
+      }
+      return { parent: `${ROOT_COLLECTION}/calldispositions/byPhone` };
     default:
       return null;
   }
