@@ -68,6 +68,13 @@ export const abTestCollection = `${abTestContainer}/byPhone`;
 export const dncContainer = `${R}/dnc`;
 export const dncCollection = `${dncContainer}/byPhone`;
 
+// ReadyMode portal call dispositions, scraped daily. Doc id is
+// `{phone10}__{callLogId}` so re-running the import is idempotent
+// (RM's call_log.id is the server-side primary key).
+export const callDispositionsContainer = `${R}/calldispositions`;
+export const callDispositionsCollection =
+  `${callDispositionsContainer}/byPhone`;
+
 export const configContainer = `${R}/config`;
 export const configSettingsCollection = `${configContainer}/settings`;
 
@@ -114,6 +121,15 @@ export function orchestratorEventDocPath(docId: string): string {
 }
 export function rateLimitDocPath(phone10: string): string {
   return `${rateLimitCollection}/${phone10}`;
+}
+export function callDispositionDocPath(
+  phone10: string,
+  callLogId: string,
+): string {
+  return `${callDispositionsCollection}/${phone10}__${callLogId}`;
+}
+export function readymodeCampaignsDocPath(): string {
+  return `${configSettingsCollection}/readymodeCampaigns`;
 }
 export function globalSmsCountDocPath(easternDate: string): string {
   return `${globalSmsCountCollection}/${easternDate}`;

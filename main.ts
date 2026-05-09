@@ -11,6 +11,7 @@ import {
   yesterdayEasternDateString,
 } from "@shared/services/report/nightly.ts";
 import { runDailyQbSaleMatch } from "@shared/services/sale-match/cron.ts";
+import { scrapeReadymode } from "@shared/services/readymode/scrape-orchestrator.ts";
 
 export const app = new App<State>();
 
@@ -117,6 +118,28 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
       );
     } catch (e) {
       console.error(`❌ nightly report cron threw: ${(e as Error).message}`);
+    }
+  });
+
+  // Once a day at 09:30 UTC = 5:30 AM EST. Pulls yesterday's full call log
+  // from the ReadyMode portal (login + paginated update endpoint), writes
+  // each call to calldispositions, and upserts guestanswered for any
+  // non-No-Answer call. REQUIRES Adam's RM browser session to be logged
+  // out at this time — RM enforces single-session-per-user.
+  denoCron("readymode-daily-pull", "30 9 * * *", async () => {
+    try {
+      const r = await scrapeReadymode();
+      const errored = r.perDomain.filter((d) => d.error).length;
+      console.log(
+        `⏰ readymode pull: ${r.fromDate} rows=${r.totals.rowsFetched} dispositions=${r.totals.dispositionsWritten} answered=${r.totals.answeredUpserted} domainsErrored=${errored}`,
+      );
+      for (const d of r.perDomain) {
+        if (d.error) {
+          console.error(`  ❌ ${d.domain}: ${d.error}`);
+        }
+      }
+    } catch (e) {
+      console.error(`❌ readymode pull cron threw: ${(e as Error).message}`);
     }
   });
 }
