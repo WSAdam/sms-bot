@@ -15,6 +15,41 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+// IANA timezone → approximate UTC offset (hours). Used to interpret
+// naive Bland Desired_Time strings (no offset) as local time in the
+// guest's zone. Approximate at DST boundaries — callers should pair
+// this with a wide sanity window.
+const TZ_OFFSET_HOURS: Record<string, number> = {
+  "America/New_York": -4,
+  "America/Chicago": -5,
+  "America/Denver": -6,
+  "America/Phoenix": -7,
+  "America/Los_Angeles": -7,
+  "America/Anchorage": -8,
+  "Pacific/Honolulu": -10,
+};
+
+// Parses a Bland `variables.Desired_Time` string. Strings with an
+// explicit offset or trailing Z parse directly. Naive strings are
+// interpreted in the supplied IANA timezone (falls back to UTC if the
+// zone is unknown).
+export function parseBlandDesiredTimeMs(
+  raw: string,
+  conversationTz?: string,
+): number | null {
+  if (!raw) return null;
+  if (/[+-]\d{2}:?\d{2}$|Z$/.test(raw)) {
+    const ms = new Date(raw).getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const ms = new Date(raw + "Z").getTime();
+  if (!Number.isFinite(ms)) return null;
+  const offsetHours = conversationTz
+    ? (TZ_OFFSET_HOURS[conversationTz] ?? 0)
+    : 0;
+  return ms - offsetHours * 3_600_000;
+}
+
 export function parseDateishToMs(v: unknown): number | null {
   if (v == null) return null;
   if (v instanceof Date) {

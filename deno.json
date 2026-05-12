@@ -20,6 +20,10 @@
     "run-booking-scan": "deno run -A --env-file=env/local scripts/run-booking-scan.ts",
     "cleanup-excluded-phones": "deno run -A --env-file=env/local scripts/cleanup-excluded-phones.ts",
     "backfill-injection-from-answered": "deno run -A --env-file=env/local scripts/backfill-injection-from-answered.ts",
+    "backfill-readymode-answered": "deno run -A --env-file=env/local scripts/backfill-readymode-answered.ts",
+    "backfill-event-time-placeholder": "deno run -A --env-file=env/local scripts/backfill-event-time-placeholder.ts",
+    "reclassify-talk-now": "deno run -A --env-file=env/local scripts/reclassify-talk-now.ts",
+    "recover-bland-desired-time": "deno run -A --env-file=env/local scripts/recover-bland-desired-time.ts",
     "shape-check": "deno run -A scripts/shape-check.ts"
   },
   "lint": {

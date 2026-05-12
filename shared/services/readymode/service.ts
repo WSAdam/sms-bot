@@ -6,8 +6,8 @@
 // from env so we can flip off "production" without a code change.
 
 import {
-  ATTEMPTS_GATEKEEPER_THRESHOLD,
   BLAND_AGENT_NUMBER,
+  GLOBAL_DAILY_SMS_CAP,
 } from "@shared/config/constants.ts";
 import { loadEnv } from "@shared/config/env.ts";
 import {
@@ -20,6 +20,7 @@ import {
   getFirestoreClient,
 } from "@shared/firestore/wrapper.ts";
 import { getAndToggleVariant } from "@shared/services/ab-test/service.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import * as bland from "@shared/services/bland/client.ts";
 import * as conversations from "@shared/services/conversations/store.ts";
 import { findGuestByResId } from "@shared/services/crm/reservations.ts";
@@ -42,6 +43,7 @@ import {
   type ReadymodeResponseDto,
   type StandardLead,
 } from "@shared/types/readymode.ts";
+import { normalizePhone } from "@shared/util/phone.ts";
 import { easternDateString } from "@shared/util/time.ts";
 
 function resolveDomain(input: string | undefined | null): DialerDomain {
@@ -107,11 +109,19 @@ export async function processInboundLead(
     (rawData.dialerDomain as string) ?? (rawData.domain as string),
   );
   const lead = normalize(domain, rawData);
-  const phone = lead.phone ||
-    (rawData.primaryPhone ? String(rawData.primaryPhone).replace(/\D/g, "") : "");
+  // RM-trigger callers go through parseTriggerPayload which already
+  // normalizes phone to 10 digits — `lead.phone` is the truth here. The
+  // `primaryPhone` fallback exists for the manual/QA trigger route, which
+  // doesn't (yet) go through the validator and may pass a formatted string.
+  // Route both through normalizePhone instead of an inline strip so we
+  // don't accidentally salvage contaminated input like "key=(123)...".
+  const phone = lead.phone || normalizePhone(rawData.primaryPhone) || "";
   const resIdString = lead.reservationId ||
     String(rawData.resID ?? rawData.Custom_56 ?? "");
-  const attempts = Number(rawData.attempts ?? rawData.times_called ?? 0);
+  // No silent fallback to 0 — the validator now guarantees a numeric
+  // attempts for the RM path. Manual path sets override=true and bypasses
+  // the attempts gate anyway, so NaN here is harmless.
+  const attempts = Number(rawData.attempts ?? rawData.times_called);
 
   if (!phone) {
     return { status: "error", message: "Missing phone number" };
@@ -123,15 +133,22 @@ export async function processInboundLead(
     console.log("[trigger] 🚨 OVERRIDE bypassing all gatekeepers");
   }
 
+  // Gates 1 + 2 read from gatesConfig (Firestore-backed, dashboard-editable,
+  // falls back to the constants in shared/config/constants.ts). One read
+  // covers both gates — gates-config caches for 60s internally.
+  const gates = await getGatesConfig(client);
+
   // Gatekeeper 1: attempts
-  if (!isOverride && attempts < ATTEMPTS_GATEKEEPER_THRESHOLD) {
+  if (!isOverride && attempts < gates.attemptsThreshold) {
     return { status: "skipped", reason: "Insufficient attempts", attempts };
   }
 
-  // Gatekeeper 2: global daily cap (env-overridable so Adam can set
-  // GLOBAL_DAILY_SMS_CAP=10 in env/local for staged rollout testing).
+  // Gatekeeper 2: global daily cap. Precedence: env var > gatesConfig >
+  // hardcoded default. The env override stays so Deno Deploy's existing
+  // GLOBAL_DAILY_SMS_CAP setting still works for staged rollout testing.
   if (!isOverride) {
-    const cap = loadEnv().globalDailySmsCap;
+    const envCap = loadEnv().globalDailySmsCap;
+    const cap = envCap !== GLOBAL_DAILY_SMS_CAP ? envCap : gates.globalDailySmsCap;
     const dailyCount = await getGlobalDailyCount(client);
     if (dailyCount >= cap) {
       console.log(

@@ -41,7 +41,12 @@ export const CRON_CONFIG_DEFAULTS: CronConfig = {
     scheduleNote: "4:15 AM EST daily (09:15 UTC)",
   },
   qbSaleMatch: {
-    reportId: "530",
+    // 530 was the original ODR-only report; 678 is the current "all
+    // activations across all teams" report we actually run sale-match
+    // against. Adam confirmed 678 weeks ago. The Firestore cronConfig
+    // doc overrides this; if no doc exists (updatedAt == epoch), this
+    // default is what the cron uses.
+    reportId: "678",
     tableId: "bpb28qsnn",
     enabled: true,
     scheduleNote: "4:00 AM EST daily (09:00 UTC)",

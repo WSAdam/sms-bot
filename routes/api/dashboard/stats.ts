@@ -8,9 +8,9 @@ import { define } from "@/utils.ts";
 import {
   isExcludedFromReporting,
   ROOT_COLLECTION,
-  SALE_MATCH_WINDOW_DAYS,
 } from "@shared/config/constants.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
 
@@ -111,11 +111,15 @@ export const handler = define.handlers({
       totalKv += filteredList.length;
     }
 
+    // Pull the live window from gatesConfig (dashboard-editable). Falls
+    // back to the SALE_MATCH_WINDOW_DAYS constant inside gates-config.
+    const { saleMatchWindowDays } = await getGatesConfig();
+
     // Activated count headline = QUALIFYING subset (sales within the
-    // SALE_MATCH_WINDOW_DAYS window of the appointment). withinDays isn't
-    // persisted on the guestactivated doc (only on the saleswithin7d marker),
-    // so we derive it from |activatedAt - eventTime|. Strict numeric math —
-    // matchReason is informational only; changing the constant immediately
+    // configured window of the appointment). withinDays isn't persisted
+    // on the guestactivated doc consistently (only on the saleswithin7d
+    // marker), so we derive it from |activatedAt - eventTime| when needed.
+    // matchReason is informational only; changing the window immediately
     // reclassifies records without needing a migration.
     const activatedList = byContainer.get("guestactivated") ?? [];
     const activatedQualifyingCount = activatedList
@@ -127,7 +131,7 @@ export const handler = define.handlers({
         // before the appointment is negative. We care about the absolute
         // gap when deciding if it's within the window.
         if (typeof wd === "number") {
-          return Math.abs(wd) <= SALE_MATCH_WINDOW_DAYS;
+          return Math.abs(wd) <= saleMatchWindowDays;
         }
         const activatedAt = typeof data.activatedAt === "string"
           ? data.activatedAt
@@ -140,7 +144,7 @@ export const handler = define.handlers({
         const eMs = new Date(eventTime).getTime();
         if (!Number.isFinite(aMs) || !Number.isFinite(eMs)) return false;
         const days = Math.abs(aMs - eMs) / 86_400_000;
-        return days <= SALE_MATCH_WINDOW_DAYS;
+        return days <= saleMatchWindowDays;
       }).length;
 
     // Conversation-derived stats: dedupe + drop excluded phones + date-filter.
@@ -249,12 +253,10 @@ export const handler = define.handlers({
         activatedLifetimeCount: breakdown.guestactivated?.count ?? 0,
         // Surface the configured window so the dashboard modal can default
         // its "Window (days)" filter to the same value the headline uses.
-        saleMatchWindowDays: SALE_MATCH_WINDOW_DAYS,
+        saleMatchWindowDays,
         answeredCount: breakdown.guestanswered?.count ?? 0,
         lifetimeAppointmentsBooked,
         lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
-        lifetimeActivationsOutsideWindow:
-          breakdown.salesoutsidewindow?.count ?? 0,
         lifetimeUniqueGuests: new Set(deduped.map((m) => m.phoneNumber)).size,
       },
       kvBreakdown: breakdown,

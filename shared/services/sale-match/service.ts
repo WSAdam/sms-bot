@@ -3,10 +3,8 @@
 // within `windowDays` of when the injection was scheduled, mark a sale and
 // activate the guest.
 
-import {
-  isExcludedFromReporting,
-  SALE_MATCH_WINDOW_DAYS,
-} from "@shared/config/constants.ts";
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import {
   guestActivatedCollection,
   guestActivatedDocPath,
@@ -67,6 +65,12 @@ function odrReason(
 interface ApptCandidate {
   eventTime: string;
   eventTimeMs: number;
+  // True when this came from a booking-scan-recovery injectionhistory
+  // record whose eventTime is a placeholder (the bot-message timestamp,
+  // not a real appointment time). Propagated onto guestactivated so the
+  // dashboard renders "(no time recorded)" instead of a misleading
+  // pseudo-appointment.
+  placeholderTime: boolean;
 }
 
 export interface ProcessSaleMatchOptions {
@@ -78,6 +82,12 @@ export async function processSaleMatches(
   client: FirestoreClient = getFirestoreClient(),
   options: ProcessSaleMatchOptions = {},
 ): Promise<ActivateFromReportSummary> {
+  // Read the live window from gatesConfig (dashboard-editable). Falls
+  // back to windowDaysConfigured constant inside the gates-config
+  // layer if Firestore is empty. One read, used for every input row.
+  const { saleMatchWindowDays: windowDaysConfigured } = await getGatesConfig(
+    client,
+  );
   const summary: ActivateFromReportSummary = {
     success: true,
     fetchedFromReport: inputs.length,
@@ -104,23 +114,27 @@ export async function processSaleMatches(
   const alreadyActivated = new Set<string>(activatedDocs.map((e) => e.id));
 
   const apptMap = new Map<string, ApptCandidate[]>();
-  function add(rawPhone: unknown, rawEventTime: unknown) {
+  function add(
+    rawPhone: unknown,
+    rawEventTime: unknown,
+    placeholderTime: boolean,
+  ) {
     if (typeof rawPhone !== "string" || typeof rawEventTime !== "string") return;
     const phone10 = normalizePhone(rawPhone);
     if (!phone10) return;
     const ms = parseDateishToMs(rawEventTime);
     if (ms == null) return;
     const arr = apptMap.get(phone10) ?? [];
-    arr.push({ eventTime: rawEventTime, eventTimeMs: ms });
+    arr.push({ eventTime: rawEventTime, eventTimeMs: ms, placeholderTime });
     apptMap.set(phone10, arr);
   }
   for (const e of pendingDocs) {
     const d = e.data as Record<string, unknown>;
-    add(d.phone, d.eventTime);
+    add(d.phone, d.eventTime, false);
   }
   for (const e of historyDocs) {
     const d = e.data as Record<string, unknown>;
-    add(d.phone, d.eventTime);
+    add(d.phone, d.eventTime, d.eventTimePlaceholder === true);
   }
   console.log(
     `[sale-match] loaded ${pendingDocs.length} pending + ${historyDocs.length} history = ${apptMap.size} unique phones with appointments`,
@@ -167,7 +181,7 @@ export async function processSaleMatches(
     let best: ApptCandidate | null = null;
     let bestWithinDays = Infinity;
     for (const c of candidates) {
-      if (!isWithinDayWindow(c.eventTimeMs, saleMs, SALE_MATCH_WINDOW_DAYS)) {
+      if (!isWithinDayWindow(c.eventTimeMs, saleMs, windowDaysConfigured)) {
         continue;
       }
       const d = dayDiff(c.eventTimeMs, saleMs);
@@ -197,11 +211,13 @@ export async function processSaleMatches(
     let appointmentAt: string | null;
     let withinDays: number | null;
     let matchReason: SaleMatchReason;
+    let eventTimePlaceholder = false;
 
     if (best) {
       appointmentAt = best.eventTime;
       withinDays = bestWithinDays;
       matchReason = "within_window";
+      eventTimePlaceholder = best.placeholderTime;
       console.log(
         `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] → matched ${easternDateString(new Date(best.eventTimeMs))} (${bestWithinDays}d)`,
       );
@@ -224,6 +240,7 @@ export async function processSaleMatches(
       appointmentAt = ref.eventTime;
       withinDays = dayDiff(ref.eventTimeMs, saleMs);
       matchReason = odrKind;
+      eventTimePlaceholder = ref.placeholderTime;
       console.log(
         `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → matched (${odrKind}, ${withinDays}d)`,
       );
@@ -242,7 +259,7 @@ export async function processSaleMatches(
         continue;
       }
       console.log(
-        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → outside ${SALE_MATCH_WINDOW_DAYS}d window`,
+        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → outside ${windowDaysConfigured}d window`,
       );
       summary.skippedOlderThan7Days++;
       const candidateDetails = candidates.map((c) => ({
@@ -268,7 +285,7 @@ export async function processSaleMatches(
           candidates: candidateDetails,
           activator: activator ?? null,
           office: office ?? null,
-          windowDays: SALE_MATCH_WINDOW_DAYS,
+          windowDays: windowDaysConfigured,
           updatedAt: new Date().toISOString(),
         },
       });
@@ -282,7 +299,7 @@ export async function processSaleMatches(
       phone11: `1${phone10}`,
       appointmentAt,
       saleAt: saleAtIso,
-      windowDays: SALE_MATCH_WINDOW_DAYS,
+      windowDays: windowDaysConfigured,
       withinDays,
       matchReason,
       ...(activator ? { activator } : {}),
@@ -304,6 +321,11 @@ export async function processSaleMatches(
         // Otherwise the drill shows every row with the same "today" timestamp.
         activatedAt: saleAtIso,
         eventTime: appointmentAt,
+        // True when appointmentAt is the bot-message timestamp from a
+        // booking-scan recovery (we couldn't parse the real appt time).
+        // Dashboard renders "(no time recorded)" instead of showing this
+        // misleading near-activation timestamp as if it were the appt.
+        eventTimePlaceholder,
         // Persist the computed window-days on the activated doc so the
         // dashboard's qualifying filter (server stats + client modal) can
         // short-circuit on it. Otherwise both sides re-parse `eventTime`

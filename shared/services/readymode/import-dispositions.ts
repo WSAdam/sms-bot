@@ -9,7 +9,10 @@
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
   callDispositionDocPath,
+  guestActivatedCollection,
   guestAnsweredDocPath,
+  injectionHistoryCollection,
+  scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
 import {
   type BatchOp,
@@ -17,15 +20,37 @@ import {
 } from "@shared/firestore/wrapper.ts";
 import type { DialerCallRow } from "@shared/services/readymode/portal-client.ts";
 
-// Disposition strings that mean "the call did not connect with a human".
-// Mirrors the rule used by scripts/import-call-dispositions.ts.
-const NON_ANSWERED = new Set<string>(["No Answer", "TEST"]);
+// "Did this call connect with a human?" — substring match catches the
+// literal "No Answer" plus team-prefixed variants RM uses ("ODR No Answer",
+// "2ND No Answer", etc). TEST is administrative, not a real call.
+function isNonAnswered(disposition: string): boolean {
+  const norm = disposition.toLowerCase().trim();
+  if (norm === "test") return true;
+  if (norm.includes("no answer")) return true;
+  return false;
+}
+
+// RM serves disposition strings with HTML entities baked in (e.g. transfer
+// rows render as " &rArr; Andrew Torsiello" → "⇒ Andrew Torsiello").
+// Decode the small set we've actually seen so they store cleanly.
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&rArr;/g, "⇒")
+    .replace(/&rarr;/g, "→")
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .trim();
+}
 
 export interface ImportDispositionsSummary {
   rowsFetched: number;
   dispositionsWritten: number;
   answeredUpserted: number;
   answeredAlreadyEarlier: number;
+  answeredOutOfSystemSkipped: number;
   excludedSkipped: number;
   byDomain: Record<string, number>;
 }
@@ -38,6 +63,7 @@ export async function importDailyDispositions(
     dispositionsWritten: 0,
     answeredUpserted: 0,
     answeredAlreadyEarlier: 0,
+    answeredOutOfSystemSkipped: 0,
     excludedSkipped: 0,
     byDomain: {},
   };
@@ -66,6 +92,8 @@ export async function importDailyDispositions(
     }
     summary.byDomain[r.domain] = (summary.byDomain[r.domain] ?? 0) + 1;
 
+    const disposition = decodeHtmlEntities(r.disposition);
+
     // Always write the disposition record.
     ops.push({
       type: "set",
@@ -75,7 +103,7 @@ export async function importDailyDispositions(
         callLogId: r.callLogId,
         callTime: r.callTime,
         agentName: r.agentName,
-        disposition: r.disposition,
+        disposition,
         callType: r.callType,
         domain: r.domain,
         recId: r.recId,
@@ -85,7 +113,7 @@ export async function importDailyDispositions(
     summary.dispositionsWritten++;
 
     // Track earliest answered call per phone for the upsert.
-    if (!NON_ANSWERED.has(r.disposition)) {
+    if (!isNonAnswered(disposition)) {
       const cur = earliestAnsweredInBatch.get(r.phone10);
       if (!cur || r.callTime < cur) {
         earliestAnsweredInBatch.set(r.phone10, r.callTime);
@@ -93,15 +121,28 @@ export async function importDailyDispositions(
     }
   }
 
-  // Read existing guestanswered docs in parallel; only write when our
-  // batch's earliest is EARLIER than what's stored. Preserves the
-  // "first time we ever spoke with them" semantics.
+  // Build the "phone is in our funnel" gate from the same canonical sources
+  // the dashboard's "Appointments Booked" count uses: scheduledinjections
+  // (booked, awaiting injection), injectionhistory (already injected), and
+  // guestactivated (a sale we've credited — covers historical bookings that
+  // pre-date the injection-records era). RM's portal returns dispositions
+  // for every dial it placed, including for phones we never put into the
+  // dialer (other teams' campaigns, manual dials). Marking those "answered"
+  // flooded the funnel — answered must stay ⊆ phones we ourselves booked /
+  // injected, otherwise the invariant answered ⊆ booked breaks.
+  const inFunnel = await loadInFunnelPhones(db);
+
+  // Read existing guestanswered docs in parallel for the in-funnel subset.
   const phones = Array.from(earliestAnsweredInBatch.keys());
   const existing = await Promise.all(
     phones.map((p) => db.get(guestAnsweredDocPath(p))),
   );
   for (let i = 0; i < phones.length; i++) {
     const phone10 = phones[i];
+    if (!inFunnel.has(phone10)) {
+      summary.answeredOutOfSystemSkipped++;
+      continue;
+    }
     const newAt = earliestAnsweredInBatch.get(phone10)!;
     const cur = existing[i];
     const curAt = typeof cur?.answeredAt === "string"
@@ -138,7 +179,28 @@ export async function importDailyDispositions(
   }
 
   console.log(
-    `[rm-import] done: rows=${summary.rowsFetched} excluded=${summary.excludedSkipped} dispositions=${summary.dispositionsWritten} answered=${summary.answeredUpserted} (already-earlier=${summary.answeredAlreadyEarlier})`,
+    `[rm-import] done: rows=${summary.rowsFetched} excluded=${summary.excludedSkipped} dispositions=${summary.dispositionsWritten} answered=${summary.answeredUpserted} (already-earlier=${summary.answeredAlreadyEarlier}, out-of-system=${summary.answeredOutOfSystemSkipped})`,
   );
   return summary;
+}
+
+// Phones with any record in scheduledinjections (id == phone), injectionhistory
+// (id starts with "{phone}__"), or guestactivated (id == phone). Mirrors the
+// universe the dashboard's "Booked" stat counts, so answered⊆booked holds.
+async function loadInFunnelPhones(
+  db: ReturnType<typeof getFirestoreClient>,
+): Promise<Set<string>> {
+  const [pending, history, activated] = await Promise.all([
+    db.list(scheduledInjectionsCollection),
+    db.list(injectionHistoryCollection),
+    db.list(guestActivatedCollection),
+  ]);
+  const set = new Set<string>();
+  for (const r of pending) set.add(r.id);
+  for (const r of history) {
+    const sep = r.id.indexOf("__");
+    set.add(sep > 0 ? r.id.slice(0, sep) : r.id);
+  }
+  for (const r of activated) set.add(r.id);
+  return set;
 }

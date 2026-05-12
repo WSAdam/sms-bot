@@ -20,6 +20,7 @@
 
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
+  guestActivatedCollection,
   injectionHistoryCollection,
   injectionHistoryDocPath,
   scheduledInjectionDocPath,
@@ -238,6 +239,14 @@ export async function scanConversationsForBookings(
     }
   }
 
+  // Phones already credited as sales — skip them entirely. Without this
+  // guard, booking-scan re-processes their old conversations and
+  // re-creates stale scheduledinjections that the sweep would later try
+  // to fire (e.g. 2195884368: sale credited 5/6, then booking-scan on
+  // 5/7 wrote a bogus 5/7 inject from the same convo).
+  const activated = await db.list(guestActivatedCollection, { limit: 50_000 });
+  const activatedPhones = new Set<string>(activated.map((e) => e.id));
+
   const list = await bland.listConversationsByDateRange(fromIso, toIso);
   console.log(
     `[booking-scan] Bland returned ${list.conversations.length} conversations for ${fromIso} → ${toIso ?? "now"}`,
@@ -279,6 +288,16 @@ export async function scanConversationsForBookings(
       summary.skippedExisting++;
       console.log(
         `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already recovered)`,
+      );
+      continue;
+    }
+    // Phone is already a credited sale — booking-scan has no business
+    // reprocessing their booking conversation. Force=true still skips
+    // because re-parsing won't change the credited record either.
+    if (activatedPhones.has(phone10)) {
+      summary.skippedExisting++;
+      console.log(
+        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already activated)`,
       );
       continue;
     }
@@ -332,30 +351,48 @@ export async function scanConversationsForBookings(
     }
     if (!signalInfo || signalIdx < 0) continue;
 
-    // 1) Walk backward looking for an explicit date+time match.
+    // Bland's pathway already parsed the appointment time and stored it
+    // structured as `variables.Desired_Time` — way more reliable than
+    // re-parsing English from the message stream. We saw a case
+    // (2195884368) where our regex turned "Tomorrow 9am" + "MST" into
+    // 5/7 instead of 5/3; Bland had the right value with an explicit
+    // -07:00 offset. So: try Bland FIRST, fall back to message parsing
+    // only if Bland has nothing or the value fails sanity gates (±4h
+    // past, +180d future of convo's now_utc — filters out stale
+    // upstream lead-source defaults that come pre-populated).
     let eventTime: string | null = null;
     let eventTimeSource: string | null = null;
     let eventTimeIsFuture = false;
-    for (let i = signalIdx; i >= 0; i--) {
-      const candidate = msgs[i];
-      if (!candidate) continue;
-      const parsed = parseDateFromText(
-        candidate.message ?? "",
-        candidate.created_at ?? signalInfo.signalAt,
-      );
-      if (parsed) {
-        eventTime = parsed;
-        const who = (candidate.sender ?? "").toUpperCase() === "USER"
-          ? "guest"
-          : "bot";
-        eventTimeSource = `[${who}] ${(candidate.message ?? "").slice(0, 80)}`;
-        break;
+
+    const blandDt = await bland.getBlandDesiredTime(callId);
+    if (blandDt) {
+      eventTime = blandDt.iso;
+      eventTimeSource = blandDt.source;
+    }
+
+    // Fallback 1: walk backward looking for an explicit date+time match.
+    if (!eventTime) {
+      for (let i = signalIdx; i >= 0; i--) {
+        const candidate = msgs[i];
+        if (!candidate) continue;
+        const parsed = parseDateFromText(
+          candidate.message ?? "",
+          candidate.created_at ?? signalInfo.signalAt,
+        );
+        if (parsed) {
+          eventTime = parsed;
+          const who = (candidate.sender ?? "").toUpperCase() === "USER"
+            ? "guest"
+            : "bot";
+          eventTimeSource = `[${who}] ${(candidate.message ?? "").slice(0, 80)}`;
+          break;
+        }
       }
     }
-    // 2) Fallback: time-only (e.g. "2:00 pm" + "CST") → next occurrence
-    //    of that local time at or after now. Customer said a time, Cal.com
-    //    picked the date — we re-pick the next available matching slot so
-    //    the cron sweep can actually inject them.
+    // Fallback 2: time-only (e.g. "2:00 pm" + "CST") → next occurrence
+    // of that local time at or after now. Customer said a time, Cal.com
+    // picked the date — we re-pick the next available matching slot so
+    // the cron sweep can actually inject them.
     if (!eventTime) {
       const next = nextOccurrenceFromMessages(msgs, signalIdx);
       if (next) {
@@ -423,11 +460,20 @@ export async function scanConversationsForBookings(
           // No parseable time OR time was in the past — record in history
           // as a placeholder so the booking COUNTS without risking a stale
           // sweep fire. Operator can manually claim or re-book.
+          //
+          // When we couldn't parse a real appointment time, `eventTime`
+          // here is the bot-message timestamp (signalInfo.signalAt) —
+          // NOT the actual scheduled call time. Tag the doc so downstream
+          // (sale-match → guestactivated → dashboard column) can render
+          // it as unknown instead of showing a misleading "appointment
+          // time" that's really just our recovery cron's clock.
           const firedAt = signalInfo.signalAt;
           const docId = injectionHistoryDocId(phone10, firedAt);
+          const isPlaceholderTime = !eventTime;
           await db.set(injectionHistoryDocPath(docId), {
             phone: phone10,
             eventTime: eventTimeFinal,
+            eventTimePlaceholder: isPlaceholderTime,
             scheduledAt: new Date(firedAt).getTime(),
             isTest: false,
             firedAt,
@@ -439,7 +485,7 @@ export async function scanConversationsForBookings(
           });
           summary.applied++;
           console.log(
-            `[booking-scan] ✅ ${phone10} history-placeholder eventTime=${eventTimeFinal} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
+            `[booking-scan] ✅ ${phone10} history-placeholder eventTime=${eventTimeFinal}${isPlaceholderTime ? " (unknown)" : ""} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
           );
         }
       } catch (e) {

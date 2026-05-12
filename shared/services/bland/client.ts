@@ -3,6 +3,7 @@
 
 import { BLAND_API_BASE } from "@shared/config/constants.ts";
 import { loadEnv } from "@shared/config/env.ts";
+import { parseBlandDesiredTimeMs } from "@shared/util/time.ts";
 
 interface BlandHeaders {
   [key: string]: string;
@@ -66,8 +67,55 @@ export interface BlandConvoResponse {
     message_count?: number;
     created_at?: string;
     messages?: Array<{ sender: string; message: string; created_at?: string }>;
+    // Bland's pathway request variables. `Desired_Time` is the canonical
+    // appointment time the bot parsed and locked in — far more reliable
+    // than re-parsing English from the message stream.
+    variables?: Record<string, unknown>;
   };
   errors?: unknown;
+}
+
+// 4h past tolerance covers talk-now and "call me in 30 min" cases plus
+// DST off-by-one. 180d future cap accepts vacation bookings months out
+// while rejecting stale upstream values (we've seen leads come in with a
+// 2-year-old Desired_Time inherited from their source record).
+const DESIRED_TIME_PAST_TOLERANCE_MS = 4 * 60 * 60 * 1000;
+const DESIRED_TIME_MAX_FUTURE_MS = 180 * 24 * 60 * 60 * 1000;
+
+// Best-effort: fetches the conversation, reads `variables.Desired_Time`,
+// sanity-checks it against `variables.now_utc`, and returns the parsed
+// ISO string + ms. Returns null on any failure (no network, no variable,
+// stale/bogus value). Callers should treat this as a fallback signal,
+// not the primary appt time source.
+export async function getBlandDesiredTime(
+  callId: string,
+): Promise<{ iso: string; ms: number; source: string } | null> {
+  try {
+    const r = await getConversation(callId);
+    // deno-lint-ignore no-explicit-any
+    const d: any = (r.json as any)?.data;
+    const v = d?.variables ?? {};
+    const dt = typeof v.Desired_Time === "string" ? v.Desired_Time : "";
+    if (!dt) return null;
+    const tz = typeof v.timezone === "string" ? v.timezone : undefined;
+    const desiredMs = parseBlandDesiredTimeMs(dt, tz);
+    if (desiredMs == null) return null;
+    const nowIso = typeof v.now_utc === "string" ? v.now_utc : d?.created_at;
+    const nowMs = nowIso ? new Date(nowIso).getTime() : NaN;
+    if (!Number.isFinite(nowMs)) return null;
+    if (desiredMs < nowMs - DESIRED_TIME_PAST_TOLERANCE_MS) return null;
+    if (desiredMs > nowMs + DESIRED_TIME_MAX_FUTURE_MS) return null;
+    return {
+      iso: dt,
+      ms: desiredMs,
+      source: `bland.variables.Desired_Time (tz=${tz ?? "?"})`,
+    };
+  } catch (e) {
+    console.warn(
+      `[bland] getBlandDesiredTime(${callId}) failed: ${(e as Error).message}`,
+    );
+    return null;
+  }
 }
 
 export async function getConversation(

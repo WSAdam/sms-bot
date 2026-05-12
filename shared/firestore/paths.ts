@@ -82,6 +82,10 @@ export function cronConfigDocPath(): string {
   return `${configSettingsCollection}/cronConfig`;
 }
 
+export function gatesConfigDocPath(): string {
+  return `${configSettingsCollection}/gatesConfig`;
+}
+
 // Doc-path helpers
 export function conversationDocPath(docId: string): string {
   return `${conversationsCollection}/${docId}`;

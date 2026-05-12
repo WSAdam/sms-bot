@@ -6,10 +6,8 @@
 // POST body: { phone10: string, note?: string }
 
 import { define } from "@/utils.ts";
-import {
-  isExcludedFromReporting,
-  SALE_MATCH_WINDOW_DAYS,
-} from "@shared/config/constants.ts";
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import {
   guestActivatedCollection,
   guestActivatedDocPath,
@@ -63,13 +61,14 @@ export const handler = define.handlers({
       ? outside.activator
       : null;
 
+    const { saleMatchWindowDays } = await getGatesConfig(db);
     const updatedAt = new Date().toISOString();
     const marker: SaleWithinWindowMarker = {
       phone10,
       phone11: `1${phone10}`,
       appointmentAt: closestAppointmentAt,
       saleAt: activatedAt,
-      windowDays: SALE_MATCH_WINDOW_DAYS,
+      windowDays: saleMatchWindowDays,
       withinDays: closestDaysDiff,
       matchReason: "manual_override",
       ...(activator ? { activator } : {}),

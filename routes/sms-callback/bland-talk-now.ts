@@ -1,7 +1,14 @@
 // Hot-path immediate injection. Optional source-domain scrub (best-effort,
 // no lock — gotcha §15), then inject into the ODR Appointments campaign.
+// After a successful inject, write an injectionhistory doc with
+// firedBy:"talk-now" so sale-match can credit later activations and the
+// dashboard can render the actual call moment as the scheduled time.
+// Without that audit trail, talk-now sales used to surface only via the
+// answered-backfill script reconstructing them after the fact.
 
 import { define } from "@/utils.ts";
+import { injectionHistoryDocPath } from "@shared/firestore/paths.ts";
+import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import {
   CAMPAIGN_MASTER_MAP,
   getCampaignConfig,
@@ -17,6 +24,7 @@ import {
   type ReadymodeLeadDto,
   type StandardLead,
 } from "@shared/types/readymode.ts";
+import { injectionHistoryDocId } from "@shared/util/id.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
 export const handler = define.handlers({
@@ -58,6 +66,34 @@ export const handler = define.handlers({
       target.domain,
       target.id,
     );
+
+    // Audit trail: record the talk-now injection so sale-match has a
+    // first-class record to credit against, and so the dashboard can
+    // show the actual inject moment under "Scheduled Call Time" (the
+    // appointment IS now — eventTime=firedAt is intentional, not a
+    // placeholder). Best-effort: failures here don't block the call,
+    // they just mean we fall back to the answered-backfill path later.
+    const firedAt = new Date().toISOString();
+    try {
+      await getFirestoreClient().set(
+        injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
+        {
+          phone,
+          eventTime: firedAt,
+          scheduledAt: new Date(firedAt).getTime(),
+          firedAt,
+          firedBy: "talk-now",
+          status: "success",
+          // Explicitly NOT eventTimePlaceholder. The appointment really
+          // is "now" — the guest just consented to be called immediately.
+          campaignId: target.id,
+          campaignName: target.name,
+        },
+      );
+    } catch (e) {
+      console.warn(`[talk-now] ih write failed (non-fatal): ${(e as Error).message}`);
+    }
+
     return Response.json({
       status: "success",
       message: `Injected to ${target.name}`,

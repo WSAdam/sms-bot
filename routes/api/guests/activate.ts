@@ -4,15 +4,13 @@
 // guestactivated/byPhone/{phone10}.
 
 import { define } from "@/utils.ts";
-import {
-  isExcludedFromReporting,
-  SALE_MATCH_WINDOW_DAYS,
-} from "@shared/config/constants.ts";
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
   guestActivatedDocPath,
   scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import type { FutureInjection } from "@shared/types/injection.ts";
 import { sha256Hex } from "@shared/util/id.ts";
 
@@ -27,7 +25,8 @@ export const handler = define.handlers({
     const incoming = new Set(body!.hashes.map((h) => h.toLowerCase()));
     const db = getFirestoreClient();
 
-    const cutoffMs = Date.now() - SALE_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const { saleMatchWindowDays } = await getGatesConfig(db);
+    const cutoffMs = Date.now() - saleMatchWindowDays * 24 * 60 * 60 * 1000;
     const all = await db.list(scheduledInjectionsCollection, { limit: 5000 });
 
     const activatedAt = new Date().toISOString();

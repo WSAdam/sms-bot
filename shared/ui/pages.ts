@@ -633,6 +633,14 @@ ${sharedThemeCss}
     <a href="/test">🧪 Test</a>
   </div>
 
+  <div class="panel process-explainer" style="margin-bottom:16px;background:rgba(25,195,125,0.04);border-left:3px solid rgba(25,195,125,0.4)">
+    <h3 style="margin:0 0 8px 0;color:var(--accentHi);font-size:.95rem">How this works</h3>
+    <p style="margin:0;line-height:1.55;font-size:.88rem;color:var(--silver)">
+      We text leads that the dialer has called <strong data-gate="attempts">40</strong>+ times without connecting. We cap outbound at <strong data-gate="dailyCap">100</strong> texts/day system-wide, and never text the same phone more than once per <strong data-gate="rateWindow">30</strong> days. A QuickBase sale credited within <strong data-gate="saleWindow">8</strong> days of a booked appointment counts as our activation.
+      <span class="muted small" style="display:block;margin-top:6px">Tunable from the Test page → Gates Config card. Cached 60s.</span>
+    </p>
+  </div>
+
   <div class="panel" style="margin-bottom:16px">
     <div class="filters">
       <div class="filter-group">
@@ -727,7 +735,7 @@ ${sharedThemeCss}
         <div class="icon">✅</div>
         <div class="value" id="activatedCount">-</div>
         <div class="label">Activated (qualifying)</div>
-        <div class="explain">Sales credited within the configured window of the booked appointment — what mathematically counts. Click to drill in and adjust the window (defaults to <span id="activatedWindowChip">7</span>d). Full lifetime including ODR/2ND bypass + manual claims: <span id="activatedLifetimeChip">-</span>.</div>
+        <div class="explain">Sales credited within the configured window of the booked appointment — what mathematically counts. Click to drill in and adjust the window (defaults to <span id="activatedWindowChip">8</span>d). Full lifetime including ODR/2ND bypass + manual claims: <span id="activatedLifetimeChip">-</span>.</div>
         <div class="hint">Click to drill in</div>
       </div>
 
@@ -736,14 +744,6 @@ ${sharedThemeCss}
         <div class="value" id="answeredCount">-</div>
         <div class="label">Answered (lifetime)</div>
         <div class="explain">Guests who answered an inbound call from the dialer (POST /api/guests/answered).</div>
-        <div class="hint">Click to drill in</div>
-      </div>
-
-      <div class="stat-card clickable" id="outsideWindowCard" title="Click to view activations that slipped past the reminder window">
-        <div class="icon">⏱️</div>
-        <div class="value" id="lifetimeOutsideWindow">-</div>
-        <div class="label">Activations Outside Window</div>
-        <div class="explain">Activations that DID have a scheduled appointment with us, but the activation landed outside the configured day-window (currently 7 days). These are guests who came in on their own — outside our reminder timing.</div>
         <div class="hint">Click to drill in</div>
       </div>
 
@@ -988,11 +988,10 @@ function renderDashboard(data){
   // input to the same value used for the headline count.
   window.__saleMatchWindowDays = (typeof data.stats.saleMatchWindowDays === "number" && data.stats.saleMatchWindowDays > 0)
     ? data.stats.saleMatchWindowDays
-    : 7;
+    : 8;
   document.getElementById("activatedWindowChip").textContent = String(window.__saleMatchWindowDays);
   document.getElementById("answeredCount").textContent = (data.stats.answeredCount || 0).toLocaleString();
   document.getElementById("lifetimeAppointments").textContent = (data.stats.lifetimeAppointmentsBooked || 0).toLocaleString();
-  document.getElementById("lifetimeOutsideWindow").textContent = (data.stats.lifetimeActivationsOutsideWindow || 0).toLocaleString();
   document.getElementById("lifetimeUniqueGuests").textContent = (data.stats.lifetimeUniqueGuests || 0).toLocaleString();
 
   const breakdownBody = document.getElementById("kvBreakdown");
@@ -1709,7 +1708,12 @@ document.getElementById("activatedCard").addEventListener("click", async functio
           if(isNaN(d.getTime())) return "-";
           return escapeHtml(d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric", timeZone:"America/New_York" }));
         }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
-      { label: "Event Time", render: function(m){ return escapeHtml(formatTimestamp(m.eventTime)); }, sortKey: function(m){ return m.eventTime || ""; } },
+      { label: "Scheduled Call Time", render: function(m){
+          if(m.eventTimePlaceholder === true){
+            return '<span class="muted" title="The booking-scan recovery cron couldn\\'t parse the appointment time from the bot conversation, so the eventTime on this record is the bot-message timestamp, not a real scheduled call. The sale still counts; we just don\\'t know exactly when the dialer would have called.">no time recorded</span>';
+          }
+          return escapeHtml(formatTimestamp(m.eventTime));
+        }, sortKey: function(m){ return m.eventTimePlaceholder ? "zzz_placeholder" : (m.eventTime || ""); } },
       { label: "Within Days", render: function(m){ var wd = effectiveWithinDays(m); return wd == null ? '-' : String(wd); }, cls: "muted", sortKey: function(m){ var wd = effectiveWithinDays(m); return wd == null ? 9999 : wd; } },
       { label: "Confirmed Called", render: function(m){
           var c = earliestConfirmedCall(m);
@@ -1734,7 +1738,7 @@ document.getElementById("activatedCard").addEventListener("click", async functio
     var tabBtnActive = 'background:rgba(25,195,125,.18);border-color:rgba(25,195,125,.55);color:#b8ffe2;';
     var inputStyle = 'width:54px;padding:4px 6px;border:1px solid rgba(195,204,209,.35);border-radius:6px;background:transparent;color:var(--silver);font-size:.82rem;font-weight:700;text-align:center;margin:0 4px;';
 
-    var threshold = window.__saleMatchWindowDays || 7;
+    var threshold = window.__saleMatchWindowDays || 8;
     var currentTab = "qualifying";
 
     function qualifyingFor(t){
@@ -1847,118 +1851,12 @@ document.getElementById("lifetimeUniqueGuestsCard").addEventListener("click", as
   }
 });
 
-// Activations Outside Window drill-in. Reads salesoutsidewindow collection
-// via the existing /api/kv/list endpoint (same path the activated/answered
-// drills use). Each doc has activatedAt + closestAppointmentAt + closestDaysDiff.
-async function _loadOutsideWindowDrill(){
-  drillReset();
-  drillTitle.textContent = "Activations Outside Window";
-  drillSubtitle.textContent = "Phones that activated but the activation landed outside the appointment day-window (currently 8 days). Sorted by closest miss first. Already-credited phones are filtered out so Claim always moves the count.";
-  openDrill();
-  drillLoading.style.display = "block";
-  try{
-    // Load both outside-window AND guestactivated in parallel. We filter out
-    // any outside-window row whose phone is already in guestactivated — those
-    // are stale (already counted as a sale) and Claiming them is a no-op,
-    // which is what made the count appear "stuck". The cron will eventually
-    // delete the stale docs but this filter makes the drill correct on load.
-    var outsideRes = await fetch("/api/kv/list", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: ["salesoutsidewindow"], limit: 1000 })
-    });
-    var activatedRes = await fetch("/api/kv/list", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: ["guestactivated"], limit: 50000 })
-    });
-    var outsideData = await outsideRes.json();
-    var activatedData = await activatedRes.json();
-    if(!outsideRes.ok) throw new Error(outsideData.error || "Failed (outside)");
-    if(!activatedRes.ok) throw new Error(activatedData.error || "Failed (activated)");
-    drillLoading.style.display = "none";
-    var activatedSet = new Set();
-    (activatedData.entries || []).forEach(function(e){
-      var key = e.key;
-      if(Array.isArray(key) && key.length >= 2) activatedSet.add(String(key[1]));
-    });
-    var rawItems = (outsideData.entries || []).map(function(e){ return e.value; });
-    var items = rawItems.filter(function(m){ return !activatedSet.has(String(m.phone10)); });
-    var hiddenCount = rawItems.length - items.length;
-    if(hiddenCount > 0){
-      drillSubtitle.textContent += " (" + hiddenCount + " stale row" + (hiddenCount === 1 ? "" : "s") + " hidden — already credited; cron will clean them up.)";
-    }
-    items.sort(function(a, b){
-      return Math.abs(a.closestDaysDiff || 0) - Math.abs(b.closestDaysDiff || 0);
-    });
-    renderDrillTable(items, [
-      { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
-      { label: "Activated At", render: function(m){
-          if(!m.activatedAt) return "-";
-          var d = new Date(m.activatedAt);
-          if(isNaN(d.getTime())) return "-";
-          return escapeHtml(d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric", timeZone:"America/New_York" }));
-        }, cls: "muted", sortKey: function(m){ return m.activatedAt || ""; } },
-      { label: "Closest Appt", render: function(m){ return escapeHtml(formatTimestamp(m.closestAppointmentAt)); }, sortKey: function(m){ return m.closestAppointmentAt || ""; } },
-      { label: "Days Off", render: function(m){ return '<span style="font-weight:900">' + (m.closestDaysDiff || 0) + 'd</span>'; }, sortKey: function(m){ return m.closestDaysDiff || 0; } },
-      { label: "Office", render: function(m){ return escapeHtml(m.office || ""); }, sortKey: function(m){ return m.office || ""; } },
-      { label: "Activator", render: function(m){ return escapeHtml(m.activator || ""); }, cls: "muted", sortKey: function(m){ return m.activator || ""; } },
-      { label: "Window", render: function(m){ return (m.windowDays || 8) + 'd'; }, cls: "muted" },
-      { label: "Action", render: function(m){
-        return '<button class="secondary claim-btn" data-claim-phone="' + escapeHtml(m.phone10 || "") + '">Claim</button>';
-      }}
-    ]);
-  } catch(err){
-    drillLoading.style.display = "none";
-    drillError.textContent = String(err.message || err);
-    drillError.style.display = "block";
-  }
-}
-
-document.getElementById("outsideWindowCard").addEventListener("click", _loadOutsideWindowDrill);
-
-// Delegated handler for the per-row Claim button. Posts to the override
-// endpoint then re-loads the drill so the claimed row drops out.
-drillContent.addEventListener("click", async function(ev){
-  var btn = ev.target.closest && ev.target.closest("button[data-claim-phone]");
-  if(!btn) return;
-  var phone10 = btn.getAttribute("data-claim-phone");
-  if(!phone10) return;
-  if(!confirm("Claim sale credit for " + phone10 + "? This moves it from Outside Window into Activated/Within7d.")) return;
-  btn.disabled = true;
-  btn.textContent = "Claiming…";
-  try{
-    var res = await fetch("/api/sales/claim-outside-window", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone10: phone10 })
-    });
-    var data = await res.json();
-    if(!res.ok) throw new Error(data.error || "Failed");
-    var diag = data.diagnostic || {};
-    var msg = "";
-    if(diag.excludedFromReporting){
-      msg = "Claim recorded for " + phone10 + " but this phone is in EXCLUDED_REPORTING_PHONES — it WILL NOT show up in dashboard counts. (Activated total " + diag.activatedCountAfter + " unchanged.)";
-    } else if(diag.phoneAlreadyActivated && diag.activatedDelta === 0){
-      msg = "Claim recorded but " + phone10 + " was ALREADY in guestactivated (likely from a prior cron / claim). Total stays at " + diag.activatedCountAfter + " — no double-count.";
-    } else if(diag.activatedDelta === 1){
-      msg = "✅ Claimed " + phone10 + ". Activated total: " + diag.activatedCountBefore + " → " + diag.activatedCountAfter + ".";
-    } else if(diag.activatedDelta < 0){
-      msg = "⚠️ Activated count went DOWN (" + diag.activatedCountBefore + " → " + diag.activatedCountAfter + "). Something else removed a doc concurrently. Check logs.";
-    } else {
-      msg = "Claim recorded. Activated " + diag.activatedCountBefore + " → " + diag.activatedCountAfter + ", Outside Window now " + diag.outsideWindowCountAfter + ".";
-    }
-    alert(msg);
-    // Refresh both the drill (so the row drops) AND the main dashboard
-    // cards behind it (so Activated/SalesWithin7d/OutsideWindow tiles
-    // reflect the new totals). Without this, the user sees stale numbers.
-    await Promise.all([_loadOutsideWindowDrill(), loadDashboard()]);
-  } catch(err){
-    btn.disabled = false;
-    btn.textContent = "Claim";
-    alert("Claim failed: " + (err.message || err));
-  }
-});
+// (Outside-Window drill removed 2026-05-12 — operator wasn't acting on it.
+// The salesoutsidewindow collection still gets written by sale-match as a
+// near-miss log, and the /api/sales/claim-outside-window endpoint is still
+// callable, but it no longer has a dashboard surface. If you need to claim
+// a sale that fell outside the window, hit that endpoint directly with
+// the phone10 in the body.)
 
 // Total SMS Records → scroll to the breakdown table that's already on the page.
 document.getElementById("totalKvRecordsCard").addEventListener("click", function(){
@@ -1971,6 +1869,29 @@ document.getElementById("totalKvRecordsCard").addEventListener("click", function
 });
 
 loadDashboard();
+
+// Live-fetch the gates config and interpolate the explainer's data-gate
+// strongs. Defaults already rendered in HTML, so a fetch failure leaves
+// the hardcoded fallbacks visible — same numbers the gates layer falls
+// back to. Decoupled from the main dashboard fetch so a slow stats call
+// doesn't delay the header text.
+(async function refreshExplainerGates(){
+  try {
+    const res = await fetch("/api/config/gates");
+    if(!res.ok) return;
+    const g = await res.json();
+    const set = function(key, val){
+      const el = document.querySelector('[data-gate="' + key + '"]');
+      if(el && typeof val === "number" && Number.isFinite(val)) el.textContent = String(val);
+    };
+    set("attempts", g.attemptsThreshold);
+    set("dailyCap", g.globalDailySmsCap);
+    set("rateWindow", g.rateLimitWindowDays);
+    set("saleWindow", g.saleMatchWindowDays);
+  } catch (_e) {
+    // Fall through to the hardcoded defaults in the HTML.
+  }
+})();
 </script>
 </body>
 </html>`;
@@ -3976,6 +3897,26 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="gates-config" style="grid-column: 1 / -1">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🚦 Gates Config <span class="tag">live-edit</span></div>
+            <div class="ep-desc">Live-editable operational thresholds. Stored in Firestore (sms-bot/config/settings/gatesConfig) with hardcoded fallback defaults. Cached in-process for 60s so changes take ≤1 minute to propagate to gate enforcement.</div>
+          </div>
+          <span class="ep-method method-GET">GET/POST</span>
+        </div>
+        <code class="path">/api/config/gates</code>
+        <div id="gatesConfigBody" class="params" style="margin-top:10px">
+          <div class="muted">Click Load to fetch current config…</div>
+        </div>
+        <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:10px">
+          <button onclick="loadGatesConfig(this)">Load Config</button>
+          <button onclick="saveGatesConfig(this)">💾 Save</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="bland-list-today">
         <div class="ep-head">
           <div>
@@ -4596,6 +4537,57 @@ async function sendReportNow(btn){
   if(!confirm("Send the nightly report email now using the saved config?")) return;
   const card = btn.closest(".endpoint-card");
   await runRequest(card, { method: "POST", url: "/api/report/nightly" });
+}
+
+// ---- Gates Config ----
+async function loadGatesConfig(btn){
+  const card = btn.closest(".endpoint-card");
+  const body = card.querySelector("#gatesConfigBody");
+  body.innerHTML = '<div class="muted">Loading…</div>';
+  try{
+    const res = await fetch("/api/config/gates");
+    const cfg = await res.json();
+    if(!res.ok) throw new Error(cfg.error || "load failed");
+    body.innerHTML = renderGatesConfigForm(cfg);
+  } catch(err){
+    body.innerHTML = '<div class="error">Load failed: ' + escapeHtml(String(err.message || err)) + '</div>';
+  }
+}
+
+function renderGatesConfigForm(cfg){
+  return ''
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
+    +   '<label>Attempts threshold <span class="muted small">(min times_called before we text)</span><input type="number" min="0" data-gatecfg="attemptsThreshold" value="' + escapeHtml(String(cfg.attemptsThreshold ?? "")) + '"></label>'
+    +   '<label>Sale-match window (days) <span class="muted small">(sale within N days of appt counts)</span><input type="number" min="0" data-gatecfg="saleMatchWindowDays" value="' + escapeHtml(String(cfg.saleMatchWindowDays ?? "")) + '"></label>'
+    +   '<label>Global daily SMS cap <span class="muted small">(system-wide texts/day)</span><input type="number" min="0" data-gatecfg="globalDailySmsCap" value="' + escapeHtml(String(cfg.globalDailySmsCap ?? "")) + '"></label>'
+    +   '<label>Rate-limit window (days) <span class="muted small">(per-phone cooldown)</span><input type="number" min="0" data-gatecfg="rateLimitWindowDays" value="' + escapeHtml(String(cfg.rateLimitWindowDays ?? "")) + '"></label>'
+    + '</div>'
+    + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '. Enforcement layer caches for 60s — your change will be live within a minute.</div>';
+}
+
+function readGatesConfigForm(card){
+  const out = {};
+  card.querySelectorAll('[data-gatecfg]').forEach(function(el){
+    const key = el.getAttribute("data-gatecfg");
+    const n = Number(el.value);
+    if(Number.isFinite(n) && n >= 0) out[key] = n;
+  });
+  return out;
+}
+
+async function saveGatesConfig(btn){
+  const card = btn.closest(".endpoint-card");
+  const payload = readGatesConfigForm(card);
+  if(!Object.keys(payload).length){
+    alert("Click Load first to fetch the current config.");
+    return;
+  }
+  await runRequest(card, {
+    method: "POST", url: "/api/config/gates",
+    headers: { "content-type": "application/json" },
+    body: payload,
+  });
+  setTimeout(function(){ loadGatesConfig(btn); }, 500);
 }
 
 async function runQbCronNow(btn){

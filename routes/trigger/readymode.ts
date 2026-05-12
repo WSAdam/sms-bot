@@ -7,6 +7,7 @@
 
 import { define } from "@/utils.ts";
 import { processInboundLead } from "@shared/services/readymode/service.ts";
+import { parseTriggerPayload } from "@shared/services/readymode/validate-trigger.ts";
 
 function parseBody(contentType: string, raw: string): Record<string, unknown> {
   if (!raw) return {};
@@ -40,31 +41,31 @@ export const handler = define.handlers({
 
     const merged = { ...queryObj, ...body };
 
-    const hasPhone = !!(
-      merged.phone || merged.primaryPhone || merged.Phone
-    );
-
-    if (!hasPhone) {
-      // Dump EVERYTHING so we can identify the source. Headers, raw body,
-      // query string, full URL — no filtering.
+    // Validate at the boundary. Anything that fails here never reaches
+    // processInboundLead, so we can't send SMS on contaminated input.
+    const validation = parseTriggerPayload(merged);
+    if (!validation.ok) {
       const headers: Record<string, string> = {};
       for (const [k, v] of ctx.req.headers.entries()) headers[k] = v;
       console.warn(
-        `[trigger] ❌ rejecting empty/no-phone request — FULL REQUEST DUMP:\n` +
+        `[trigger] ❌ rejected — field=${validation.error.field} reason="${validation.error.reason}" value=${JSON.stringify(validation.error.value)}\n` +
           `  url       = ${ctx.req.url}\n` +
-          `  method    = ${ctx.req.method}\n` +
           `  query     = ${JSON.stringify(queryObj)}\n` +
           `  rawBody   = ${rawBody.length > 0 ? rawBody : "(empty)"}\n` +
           `  parsedBody= ${JSON.stringify(body)}\n` +
           `  headers   = ${JSON.stringify(headers, null, 2)}`,
       );
       return Response.json(
-        { status: "error", message: "Missing phone number" },
+        {
+          status: "error",
+          message: `Invalid payload: ${validation.error.field} — ${validation.error.reason}`,
+          field: validation.error.field,
+        },
         { status: 400 },
       );
     }
 
-    const r = await processInboundLead(merged);
+    const r = await processInboundLead(validation.dto);
     const status = r.status === "error" ? 400 : 200;
     return Response.json(r, { status });
   },
