@@ -17,7 +17,15 @@ export interface ReportConfig {
   recipients: string; // comma-separated emails (Postmark accepts this format)
   subjectPrefix: string; // e.g. "[REPORT]"
   enabled: boolean; // false = cron skips the email
-  scheduleNote: string; // human display only, e.g. "4:15 AM EST daily"
+  // Time of day (Eastern, 24h "HH:MM") the cron should send. Live-editable
+  // — the report cron now runs every minute and checks this field, so
+  // changing the time takes effect within ~60s. No deploy required.
+  timeOfDayEt: string;
+  scheduleNote: string; // human display only — auto-recomputed from timeOfDayEt
+  // System-managed: the ET date of the most recent successful send. Used
+  // by the every-minute tick cron to ensure exactly-once delivery per
+  // calendar day. Not exposed in the edit form.
+  lastSentEtDate?: string;
 }
 
 export interface QbSaleMatchConfig {
@@ -38,7 +46,8 @@ export const CRON_CONFIG_DEFAULTS: CronConfig = {
     recipients: "adamp@monsterrg.com",
     subjectPrefix: "[REPORT]",
     enabled: true,
-    scheduleNote: "4:15 AM EST daily (09:15 UTC)",
+    timeOfDayEt: "04:15",
+    scheduleNote: "04:15 ET daily",
   },
   qbSaleMatch: {
     // 530 was the original ODR-only report; 678 is the current "all
@@ -73,7 +82,10 @@ export async function getCronConfig(
 }
 
 export async function setCronConfig(
-  partial: Partial<Pick<CronConfig, "report" | "qbSaleMatch">>,
+  partial: {
+    report?: Partial<ReportConfig>;
+    qbSaleMatch?: Partial<QbSaleMatchConfig>;
+  },
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<CronConfig> {
   const current = await getCronConfig(client);

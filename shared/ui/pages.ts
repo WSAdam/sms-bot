@@ -755,6 +755,27 @@ ${sharedThemeCss}
         <div class="hint">Click to drill in</div>
       </div>
 
+      <div class="stat-card" title="Activated sales divided by unique phones we've messaged">
+        <div class="icon">🎯</div>
+        <div class="value" id="penetrationPct">-</div>
+        <div class="label">Penetration Rate</div>
+        <div class="explain">Activated guests ÷ unique phones we've messaged. The funnel-wide conversion rate of everyone we've ever texted.</div>
+      </div>
+
+      <div class="stat-card" title="Outbound text count × cost per text">
+        <div class="icon">💸</div>
+        <div class="value" id="lifetimeCost">-</div>
+        <div class="label">Cost (lifetime)</div>
+        <div class="explain"><span id="lifetimeOutboundTexts">-</span> outbound texts × <span id="costPerTextChip">$0.00</span>/text. Edit cost-per-text in Test page → Gates Config.</div>
+      </div>
+
+      <div class="stat-card" title="Activated sales × estimated revenue per sale">
+        <div class="icon">💰</div>
+        <div class="value" id="lifetimeProfit">-</div>
+        <div class="label">Profit (lifetime)</div>
+        <div class="explain">Earnings <span id="lifetimeEarnings">-</span> (= activations × <span id="earningsPerSaleChip">$50</span>) minus cost <span id="lifetimeCostInline">-</span>. Edit $/sale in Test page → Gates Config.</div>
+      </div>
+
       <div class="stat-card clickable" id="totalKvRecordsCard" title="Jump to the per-collection breakdown">
         <div class="icon">🗄️</div>
         <div class="value" id="totalKvEntries">-</div>
@@ -993,6 +1014,29 @@ function renderDashboard(data){
   document.getElementById("answeredCount").textContent = (data.stats.answeredCount || 0).toLocaleString();
   document.getElementById("lifetimeAppointments").textContent = (data.stats.lifetimeAppointmentsBooked || 0).toLocaleString();
   document.getElementById("lifetimeUniqueGuests").textContent = (data.stats.lifetimeUniqueGuests || 0).toLocaleString();
+
+  // Profitability cards. fmtCurrency wraps to USD with cents; penetration
+  // is rounded to one decimal so single-percent moves are still visible.
+  const fmtCurrency = function(n){
+    if(typeof n !== "number" || !Number.isFinite(n)) return "$-";
+    return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  };
+  const fmtCurrencyPrecise = function(n){
+    if(typeof n !== "number" || !Number.isFinite(n)) return "$-";
+    return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 });
+  };
+  const pen = data.stats.penetrationPct;
+  document.getElementById("penetrationPct").textContent =
+    (typeof pen === "number" && Number.isFinite(pen)) ? pen.toFixed(1) + "%" : "-";
+  document.getElementById("lifetimeOutboundTexts").textContent =
+    (data.stats.lifetimeOutboundTexts || 0).toLocaleString();
+  document.getElementById("costPerTextChip").textContent =
+    fmtCurrencyPrecise(data.stats.costPerText || 0);
+  document.getElementById("lifetimeCost").textContent = fmtCurrency(data.stats.lifetimeCost || 0);
+  document.getElementById("lifetimeCostInline").textContent = fmtCurrency(data.stats.lifetimeCost || 0);
+  document.getElementById("lifetimeEarnings").textContent = fmtCurrency(data.stats.lifetimeEarnings || 0);
+  document.getElementById("earningsPerSaleChip").textContent = fmtCurrency(data.stats.earningsPerSale || 0);
+  document.getElementById("lifetimeProfit").textContent = fmtCurrency(data.stats.lifetimeProfit || 0);
 
   const breakdownBody = document.getElementById("kvBreakdown");
   breakdownBody.innerHTML = "";
@@ -4493,8 +4537,9 @@ function renderCronConfigForm(cfg){
     +     '<label>Recipients (comma-separated)<input type="text" data-cfg="report.recipients" value="' + escapeHtml(r.recipients || "") + '" placeholder="adamp@monsterrg.com, x@y.com"></label>'
     +     '<label>Subject Prefix<input type="text" data-cfg="report.subjectPrefix" value="' + escapeHtml(r.subjectPrefix || "") + '" placeholder="[REPORT]"></label>'
     +     '<label class="checkbox-label"><input type="checkbox" data-cfg="report.enabled"' + (r.enabled ? ' checked' : '') + '> Enabled (cron sends email)</label>'
-    +     '<label>Schedule (display only)<input type="text" data-cfg="report.scheduleNote" value="' + escapeHtml(r.scheduleNote || "") + '"></label>'
-    +     '<div class="muted small" style="margin-top:6px">⚠ Schedule changes require a code change in main.ts (Deno.cron registers at deploy).</div>'
+    +     '<label>Send time (ET, HH:MM 24h) <span class="muted small">live-editable, no deploy needed</span><input type="text" data-cfg="report.timeOfDayEt" value="' + escapeHtml(r.timeOfDayEt || "04:15") + '" placeholder="04:15" pattern="^[0-2][0-9]:[0-5][0-9]$"></label>'
+    +     '<label>Schedule note (display)<input type="text" data-cfg="report.scheduleNote" value="' + escapeHtml(r.scheduleNote || "") + '"></label>'
+    +     '<div class="muted small" style="margin-top:6px">Last sent ET date: ' + escapeHtml(r.lastSentEtDate || "(never)") + '. The cron runs every minute and fires once when the time hits.</div>'
     +   '</div>'
     +   '<div>'
     +     '<h4 style="color:var(--accentHi);margin-bottom:8px">🔄 QB Sale-Match</h4>'
@@ -4561,6 +4606,8 @@ function renderGatesConfigForm(cfg){
     +   '<label>Sale-match window (days) <span class="muted small">(sale within N days of appt counts)</span><input type="number" min="0" data-gatecfg="saleMatchWindowDays" value="' + escapeHtml(String(cfg.saleMatchWindowDays ?? "")) + '"></label>'
     +   '<label>Global daily SMS cap <span class="muted small">(system-wide texts/day)</span><input type="number" min="0" data-gatecfg="globalDailySmsCap" value="' + escapeHtml(String(cfg.globalDailySmsCap ?? "")) + '"></label>'
     +   '<label>Rate-limit window (days) <span class="muted small">(per-phone cooldown)</span><input type="number" min="0" data-gatecfg="rateLimitWindowDays" value="' + escapeHtml(String(cfg.rateLimitWindowDays ?? "")) + '"></label>'
+    +   '<label>Cost per text (USD) <span class="muted small">(drives the Cost card)</span><input type="number" min="0" step="0.0001" data-gatecfg="costPerText" value="' + escapeHtml(String(cfg.costPerText ?? "")) + '"></label>'
+    +   '<label>Earnings per sale (USD) <span class="muted small">(drives Profit card; default $50)</span><input type="number" min="0" step="0.01" data-gatecfg="earningsPerSale" value="' + escapeHtml(String(cfg.earningsPerSale ?? "")) + '"></label>'
     + '</div>'
     + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '. Enforcement layer caches for 60s — your change will be live within a minute.</div>';
 }

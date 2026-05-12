@@ -10,7 +10,12 @@ import {
   runNightlyReport,
   yesterdayEasternDateString,
 } from "@shared/services/report/nightly.ts";
+import {
+  getCronConfig,
+  setCronConfig,
+} from "@shared/services/config/cron-config.ts";
 import { runDailyQbSaleMatch } from "@shared/services/sale-match/cron.ts";
+import { easternDateString } from "@shared/util/time.ts";
 import { scrapeReadymode } from "@shared/services/readymode/scrape-orchestrator.ts";
 
 export const app = new App<State>();
@@ -105,19 +110,44 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
     }
   });
 
-  // Once a day at 09:15 UTC = 4:15 AM EST. Runs after the QB sale-match cron
-  // so the report reflects the freshly-computed activations from yesterday.
-  // Subject is prefixed with [REPORT] for easy mailbox filtering.
-  denoCron("nightly-report", "15 9 * * *", async () => {
+  // Every-minute tick. Reads cronConfig.report.timeOfDayEt + lastSentEtDate
+  // to decide if it should send. This replaces the old fixed "15 9 * * *"
+  // schedule so Adam can edit the send time from the dashboard without a
+  // redeploy. Exactly-once-per-day is enforced by stamping
+  // report.lastSentEtDate after a successful send — once a day has
+  // already been sent, subsequent ticks skip even if the time still
+  // matches. Subject is prefixed with [REPORT] for easy mailbox filtering.
+  denoCron("nightly-report", "* * * * *", async () => {
     try {
-      const date = yesterdayEasternDateString();
-      const r = await runNightlyReport(date);
+      const cfg = await getCronConfig();
+      if (!cfg.report.enabled) return;
+
+      // Current ET wall-clock HH:MM. -4 approximation matches the rest of
+      // the report path; off-by-one minute around DST is acceptable since
+      // the next tick will catch it.
+      const now = new Date();
+      const etNow = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+      const hh = String(etNow.getUTCHours()).padStart(2, "0");
+      const mm = String(etNow.getUTCMinutes()).padStart(2, "0");
+      const currentHhMm = `${hh}:${mm}`;
+      const targetHhMm = (cfg.report.timeOfDayEt ?? "04:15").trim();
+      // Once configured time has passed in current ET day, fire once.
+      if (currentHhMm < targetHhMm) return;
+
+      const todayEt = easternDateString(now);
+      if (cfg.report.lastSentEtDate === todayEt) return;
+
+      const r = await runNightlyReport(todayEt);
+      if (r.skipped) return;
+      await setCronConfig({ report: { lastSentEtDate: todayEt } });
       console.log(
-        `⏰ nightly report: date=${r.date} texts=${r.counts.texts} phones=${r.counts.phones} ` +
-          `appts=${r.counts.appts} activated=${r.counts.activated} answered=${r.counts.answered}`,
+        `⏰ daily report sent: date=${r.date} time=${currentHhMm}ET ` +
+          `texts wtd=${r.counts.textsSentWtd}/lt=${r.counts.textsSentLifetime} ` +
+          `appts wtd=${r.counts.apptsBookedWtd}/lt=${r.counts.apptsBookedLifetime} ` +
+          `acts wtd=${r.counts.activationsWtd}/lt=${r.counts.activationsLifetime}`,
       );
     } catch (e) {
-      console.error(`❌ nightly report cron threw: ${(e as Error).message}`);
+      console.error(`❌ nightly report tick threw: ${(e as Error).message}`);
     }
   });
 

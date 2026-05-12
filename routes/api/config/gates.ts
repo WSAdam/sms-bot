@@ -20,7 +20,7 @@ export const handler = define.handlers({
   },
   async POST(ctx) {
     const body = await ctx.req.json().catch(() => null) as
-      | Partial<Pick<GatesConfig, "attemptsThreshold" | "saleMatchWindowDays" | "globalDailySmsCap" | "rateLimitWindowDays">>
+      | Partial<Pick<GatesConfig, "attemptsThreshold" | "saleMatchWindowDays" | "globalDailySmsCap" | "rateLimitWindowDays" | "costPerText" | "earningsPerSale">>
       | null;
     if (!body) {
       return Response.json({ error: "Invalid JSON body" }, { status: 400 });

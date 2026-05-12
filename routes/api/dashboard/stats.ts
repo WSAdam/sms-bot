@@ -239,6 +239,24 @@ export const handler = define.handlers({
       })
       .slice(0, 50);
 
+    const lifetimeUniqueGuests = new Set(deduped.map((m) => m.phoneNumber)).size;
+    const activatedLifetimeCount = breakdown.guestactivated?.count ?? 0;
+
+    // Cost is paid per OUTBOUND SMS. Inbound replies are free. Count
+    // anything that isn't a guest-sender as outbound. Computed lifetime
+    // — costPerText/earningsPerSale come from gatesConfig and are
+    // operator-editable on the test page.
+    const lifetimeOutboundTexts = deduped.filter((m) => m.sender !== "Guest").length;
+    const { costPerText, earningsPerSale } = await getGatesConfig();
+    const lifetimeCost = lifetimeOutboundTexts * costPerText;
+    const lifetimeEarnings = activatedLifetimeCount * earningsPerSale;
+    const lifetimeProfit = lifetimeEarnings - lifetimeCost;
+    // Penetration = % of unique phones we messaged that became a sale.
+    // Lifetime denominator so the headline reflects the full funnel.
+    const penetrationPct = lifetimeUniqueGuests > 0
+      ? (activatedLifetimeCount / lifetimeUniqueGuests) * 100
+      : 0;
+
     return Response.json({
       stats: {
         // Date-filtered (driven by Start/End Date pickers)
@@ -250,14 +268,24 @@ export const handler = define.handlers({
         // Lifetime — date-filter-independent
         totalKvEntries: totalKv,
         activatedCount: activatedQualifyingCount,
-        activatedLifetimeCount: breakdown.guestactivated?.count ?? 0,
+        activatedLifetimeCount,
         // Surface the configured window so the dashboard modal can default
         // its "Window (days)" filter to the same value the headline uses.
         saleMatchWindowDays,
         answeredCount: breakdown.guestanswered?.count ?? 0,
         lifetimeAppointmentsBooked,
         lifetimeSalesMatched: breakdown.saleswithin7d?.count ?? 0,
-        lifetimeUniqueGuests: new Set(deduped.map((m) => m.phoneNumber)).size,
+        lifetimeUniqueGuests,
+        // Profitability (lifetime). Echo the per-unit rates back so the
+        // dashboard can render "$0.04 × 2,300 texts" tooltips without a
+        // second config fetch.
+        lifetimeOutboundTexts,
+        lifetimeCost,
+        lifetimeEarnings,
+        lifetimeProfit,
+        penetrationPct,
+        costPerText,
+        earningsPerSale,
       },
       kvBreakdown: breakdown,
       recentEntries,

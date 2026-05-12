@@ -28,6 +28,12 @@ export interface GatesConfig {
   saleMatchWindowDays: number;   // days between appt and QB sale to credit
   globalDailySmsCap: number;     // total system-wide texts per day
   rateLimitWindowDays: number;   // per-phone cooldown in days
+  // Profitability — used to drive the Cost / Earnings / Profit cards on
+  // the dashboard. Defaults assume $0 cost (so cost stays zero until
+  // Adam fills in the real number) and $50 estimated revenue per
+  // credited sale.
+  costPerText: number;           // USD per outbound SMS
+  earningsPerSale: number;       // USD revenue per credited activation
   updatedAt: string;
 }
 
@@ -36,6 +42,8 @@ export const GATES_CONFIG_DEFAULTS: GatesConfig = {
   saleMatchWindowDays: SALE_MATCH_WINDOW_DAYS,
   globalDailySmsCap: GLOBAL_DAILY_SMS_CAP,
   rateLimitWindowDays: RATE_LIMIT_WINDOW_DAYS,
+  costPerText: 0,
+  earningsPerSale: 50,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -63,6 +71,14 @@ function mergeWithDefaults(doc: Record<string, unknown> | null): GatesConfig {
       doc.rateLimitWindowDays,
       GATES_CONFIG_DEFAULTS.rateLimitWindowDays,
     ),
+    costPerText: numOr(
+      doc.costPerText,
+      GATES_CONFIG_DEFAULTS.costPerText,
+    ),
+    earningsPerSale: numOr(
+      doc.earningsPerSale,
+      GATES_CONFIG_DEFAULTS.earningsPerSale,
+    ),
     updatedAt: typeof doc.updatedAt === "string"
       ? doc.updatedAt
       : GATES_CONFIG_DEFAULTS.updatedAt,
@@ -89,7 +105,7 @@ export async function getGatesConfig(
 }
 
 export async function setGatesConfig(
-  partial: Partial<Pick<GatesConfig, "attemptsThreshold" | "saleMatchWindowDays" | "globalDailySmsCap" | "rateLimitWindowDays">>,
+  partial: Partial<Pick<GatesConfig, "attemptsThreshold" | "saleMatchWindowDays" | "globalDailySmsCap" | "rateLimitWindowDays" | "costPerText" | "earningsPerSale">>,
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<GatesConfig> {
   const current = await getGatesConfig(client);
@@ -100,6 +116,8 @@ export async function setGatesConfig(
     globalDailySmsCap: partial.globalDailySmsCap ?? current.globalDailySmsCap,
     rateLimitWindowDays: partial.rateLimitWindowDays ??
       current.rateLimitWindowDays,
+    costPerText: partial.costPerText ?? current.costPerText,
+    earningsPerSale: partial.earningsPerSale ?? current.earningsPerSale,
     updatedAt: new Date().toISOString(),
   };
   await client.set(
