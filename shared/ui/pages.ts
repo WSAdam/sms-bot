@@ -4085,6 +4085,15 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
 
 <script>
 // ===================== Helpers =====================
+// HTML-escape via DOM textContent. Used by the Cron/Gates Config forms
+// to build innerHTML strings safely. Each dashboard route renders its
+// own template literal so utilities don't carry across — we re-declare
+// the helpers per page rather than risk a ReferenceError mid-render.
+function escapeHtml(text){
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
 function normPhone(raw){
   if(!raw) return null;
   const d = String(raw).replace(/\\D/g, "");
