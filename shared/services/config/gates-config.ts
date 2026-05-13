@@ -24,16 +24,23 @@ import {
 } from "@shared/firestore/wrapper.ts";
 
 export interface GatesConfig {
-  attemptsThreshold: number;     // min times_called before we'll text
-  saleMatchWindowDays: number;   // days between appt and QB sale to credit
-  globalDailySmsCap: number;     // total system-wide texts per day
-  rateLimitWindowDays: number;   // per-phone cooldown in days
+  attemptsThreshold: number; // min times_called before we'll text
+  saleMatchWindowDays: number; // days between appt and QB sale to credit
+  globalDailySmsCap: number; // total system-wide texts per day
+  rateLimitWindowDays: number; // per-phone cooldown in days
   // Profitability — used to drive the Cost / Earnings / Profit cards on
   // the dashboard. Defaults assume $0 cost (so cost stays zero until
   // Adam fills in the real number) and $50 estimated revenue per
   // credited sale.
-  costPerText: number;           // USD per outbound SMS
-  earningsPerSale: number;       // USD revenue per credited activation
+  costPerText: number; // USD per outbound SMS
+  earningsPerSale: number; // USD revenue per credited activation
+  // RM TPI throttle (live-editable so the operator can tighten/loosen
+  // without redeploying). The TPI lookup runs on every trigger whose
+  // upstream attempts field is the (times_called) placeholder; we don't
+  // want to hammer RM. Default spacing 2s + 30 calls per 5-minute window
+  // is comfortably under RM's tolerance for the ACT volume.
+  tpiMinSpacingMs: number; // min ms between TPI calls
+  tpiMaxPer5Min: number; // sliding-window cap on TPI calls
   updatedAt: string;
 }
 
@@ -44,6 +51,8 @@ export const GATES_CONFIG_DEFAULTS: GatesConfig = {
   rateLimitWindowDays: RATE_LIMIT_WINDOW_DAYS,
   costPerText: 0,
   earningsPerSale: 50,
+  tpiMinSpacingMs: 2000,
+  tpiMaxPer5Min: 30,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -79,6 +88,14 @@ function mergeWithDefaults(doc: Record<string, unknown> | null): GatesConfig {
       doc.earningsPerSale,
       GATES_CONFIG_DEFAULTS.earningsPerSale,
     ),
+    tpiMinSpacingMs: numOr(
+      doc.tpiMinSpacingMs,
+      GATES_CONFIG_DEFAULTS.tpiMinSpacingMs,
+    ),
+    tpiMaxPer5Min: numOr(
+      doc.tpiMaxPer5Min,
+      GATES_CONFIG_DEFAULTS.tpiMaxPer5Min,
+    ),
     updatedAt: typeof doc.updatedAt === "string"
       ? doc.updatedAt
       : GATES_CONFIG_DEFAULTS.updatedAt,
@@ -105,7 +122,19 @@ export async function getGatesConfig(
 }
 
 export async function setGatesConfig(
-  partial: Partial<Pick<GatesConfig, "attemptsThreshold" | "saleMatchWindowDays" | "globalDailySmsCap" | "rateLimitWindowDays" | "costPerText" | "earningsPerSale">>,
+  partial: Partial<
+    Pick<
+      GatesConfig,
+      | "attemptsThreshold"
+      | "saleMatchWindowDays"
+      | "globalDailySmsCap"
+      | "rateLimitWindowDays"
+      | "costPerText"
+      | "earningsPerSale"
+      | "tpiMinSpacingMs"
+      | "tpiMaxPer5Min"
+    >
+  >,
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<GatesConfig> {
   const current = await getGatesConfig(client);
@@ -118,6 +147,8 @@ export async function setGatesConfig(
       current.rateLimitWindowDays,
     costPerText: partial.costPerText ?? current.costPerText,
     earningsPerSale: partial.earningsPerSale ?? current.earningsPerSale,
+    tpiMinSpacingMs: partial.tpiMinSpacingMs ?? current.tpiMinSpacingMs,
+    tpiMaxPer5Min: partial.tpiMaxPer5Min ?? current.tpiMaxPer5Min,
     updatedAt: new Date().toISOString(),
   };
   await client.set(

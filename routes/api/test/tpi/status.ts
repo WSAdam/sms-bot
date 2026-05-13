@@ -8,7 +8,7 @@ import { define } from "@/utils.ts";
 import { getTpiThrottleSnapshot } from "@shared/services/readymode/tpi-client.ts";
 
 export const handler = define.handlers({
-  GET() {
-    return Response.json(getTpiThrottleSnapshot());
+  async GET() {
+    return Response.json(await getTpiThrottleSnapshot());
   },
 });

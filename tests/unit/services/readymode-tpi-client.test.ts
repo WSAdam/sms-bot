@@ -131,7 +131,7 @@ Deno.test(
       assertEquals(r.ok, false);
       if (!r.ok) assertEquals(r.reason, "no-lead-in-rm");
       // RM responded fine, so the circuit shouldn't have moved.
-      assertEquals(getTpiThrottleSnapshot().consecutiveFailures, 0);
+      assertEquals((await getTpiThrottleSnapshot()).consecutiveFailures, 0);
     },
   ),
 );
@@ -165,7 +165,7 @@ Deno.test(
         const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
         assertEquals(r.ok, false);
       }
-      const snap = getTpiThrottleSnapshot();
+      const snap = await getTpiThrottleSnapshot();
       assertEquals(snap.circuitOpen, true);
 
       // 6th call: should short-circuit BEFORE fetching. Swap the stub
@@ -197,7 +197,7 @@ Deno.test(
       assertEquals(r.ok, false);
       if (!r.ok) assertEquals(r.reason, "invalid-phone");
       // No token consumed.
-      assertEquals(getTpiThrottleSnapshot().callsInWindow, 0);
+      assertEquals((await getTpiThrottleSnapshot()).callsInWindow, 0);
     },
   ),
 );

@@ -11,26 +11,28 @@
 //      (key has a space; lowercase).
 //
 // Three throttle guards in front, each gate-check before any HTTP:
-//   • Min spacing between calls (1s default). Caller waits, but only up
-//     to MAX_WAIT_MS — past that we fail with `tpi-spacing-wait-too-long`
+//   • Min spacing between calls. Live-editable via gatesConfig
+//     (tpiMinSpacingMs, default 2000). Caller waits, but only up to
+//     MAX_WAIT_MS — past that we fail with `tpi-spacing-wait-too-long`
 //     so we don't backlog inbound triggers.
-//   • Sliding 5-minute cap (30 calls default). Fails fast — no waiting,
-//     caller decides what to do.
+//   • Sliding 5-minute cap. Live-editable via gatesConfig
+//     (tpiMaxPer5Min, default 30). Fails fast — no waiting, caller
+//     decides what to do.
 //   • Circuit breaker. 5 consecutive non-2xx / network errors → open for
 //     60s. Open state fails instantly without touching the other guards
 //     so a flapping RM doesn't burn our 5-min budget.
 //
-// All three are tunable via env vars but have safe defaults that fit
-// the operator's "100 leads/day at 40+ attempts" steady-state and won't
-// crater RM if a wave hits at once.
+// The two main throttle knobs (spacing + 5-min cap) come from gatesConfig
+// so the operator can tighten them from the dashboard without a redeploy.
+// gatesConfig caches for 60s so reading per call is cheap. The other
+// knobs (max-wait, circuit thresholds, HTTP timeout) stay env-only —
+// they're rare-tuning safety net values, not day-to-day operational
+// dials.
 
 import { getRmCreds } from "@shared/services/readymode/auth.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
 
-const TPI_MIN_SPACING_MS = Number(
-  Deno.env.get("RM_TPI_MIN_SPACING_MS") ?? 1000,
-);
-const TPI_MAX_PER_5MIN = Number(Deno.env.get("RM_TPI_MAX_PER_5MIN") ?? 30);
 const TPI_MAX_WAIT_MS = Number(Deno.env.get("RM_TPI_MAX_WAIT_MS") ?? 5000);
 const TPI_CIRCUIT_THRESHOLD = Number(
   Deno.env.get("RM_TPI_CIRCUIT_THRESHOLD") ?? 5,
@@ -63,16 +65,17 @@ export interface TpiThrottleSnapshot {
   circuitThreshold: number;
 }
 
-export function getTpiThrottleSnapshot(): TpiThrottleSnapshot {
+export async function getTpiThrottleSnapshot(): Promise<TpiThrottleSnapshot> {
   const now = Date.now();
   pruneWindow(now);
+  const gates = await getGatesConfig();
   return {
     now,
     windowMs: WINDOW_MS,
-    maxPer5Min: TPI_MAX_PER_5MIN,
+    maxPer5Min: gates.tpiMaxPer5Min,
     callsInWindow: recentCalls.length,
     msSinceLast: lastCallAt === 0 ? -1 : now - lastCallAt,
-    minSpacingMs: TPI_MIN_SPACING_MS,
+    minSpacingMs: gates.tpiMinSpacingMs,
     circuitOpen: now < circuitOpenUntil,
     circuitOpenUntil,
     consecutiveFailures,
@@ -111,14 +114,21 @@ async function acquireToken(): Promise<string | null> {
   const now = Date.now();
 
   // Circuit first — cheapest check, and if open we don't burn the
-  // 5-min budget OR consume spacing.
+  // 5-min budget OR consume spacing. Doesn't read gatesConfig either,
+  // so a flapping Firestore can't take us down here.
   if (now < circuitOpenUntil) {
     return "tpi-circuit-open";
   }
 
+  // Spacing + window cap come from gatesConfig (live-editable from the
+  // dashboard). gatesConfig caches for 60s so reading per call is cheap;
+  // on Firestore failure it falls back to GATES_CONFIG_DEFAULTS so the
+  // throttle still enforces sane limits.
+  const gates = await getGatesConfig();
+
   // Sliding window.
   pruneWindow(now);
-  if (recentCalls.length >= TPI_MAX_PER_5MIN) {
+  if (recentCalls.length >= gates.tpiMaxPer5Min) {
     return "tpi-window-cap-reached";
   }
 
@@ -127,8 +137,8 @@ async function acquireToken(): Promise<string | null> {
   // endpoint starts timing out.
   if (lastCallAt !== 0) {
     const sinceLast = now - lastCallAt;
-    if (sinceLast < TPI_MIN_SPACING_MS) {
-      const waitMs = TPI_MIN_SPACING_MS - sinceLast;
+    if (sinceLast < gates.tpiMinSpacingMs) {
+      const waitMs = gates.tpiMinSpacingMs - sinceLast;
       if (waitMs > TPI_MAX_WAIT_MS) {
         return "tpi-spacing-wait-too-long";
       }

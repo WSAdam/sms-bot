@@ -4650,6 +4650,8 @@ function renderGatesConfigForm(cfg){
     +   '<label>Rate-limit window (days) <span class="muted small">(per-phone cooldown)</span><input type="number" min="0" data-gatecfg="rateLimitWindowDays" value="' + escapeHtml(String(cfg.rateLimitWindowDays ?? "")) + '"></label>'
     +   '<label>Cost per text (USD) <span class="muted small">(drives the Cost card)</span><input type="number" min="0" step="0.0001" data-gatecfg="costPerText" value="' + escapeHtml(String(cfg.costPerText ?? "")) + '"></label>'
     +   '<label>Earnings per sale (USD) <span class="muted small">(drives Profit card; default $50)</span><input type="number" min="0" step="0.01" data-gatecfg="earningsPerSale" value="' + escapeHtml(String(cfg.earningsPerSale ?? "")) + '"></label>'
+    +   '<label>RM TPI min spacing (ms) <span class="muted small">(min ms between RM TPI lookups; default 2000)</span><input type="number" min="0" step="100" data-gatecfg="tpiMinSpacingMs" value="' + escapeHtml(String(cfg.tpiMinSpacingMs ?? "")) + '"></label>'
+    +   '<label>RM TPI max per 5 min <span class="muted small">(sliding-window cap on TPI lookups; default 30)</span><input type="number" min="0" step="1" data-gatecfg="tpiMaxPer5Min" value="' + escapeHtml(String(cfg.tpiMaxPer5Min ?? "")) + '"></label>'
     + '</div>'
     + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '. Enforcement layer caches for 60s — your change will be live within a minute.</div>';
 }
