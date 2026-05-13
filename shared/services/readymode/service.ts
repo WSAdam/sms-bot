@@ -33,10 +33,8 @@ import {
 } from "@shared/services/rate-limiter/service.ts";
 import { getRmCreds } from "@shared/services/readymode/auth.ts";
 import { DOMAIN_CONFIG } from "@shared/services/readymode/config.ts";
-import {
-  denormalize,
-  normalize,
-} from "@shared/services/readymode/mapping.ts";
+import { fetchAttemptsFromTpi } from "@shared/services/readymode/tpi-client.ts";
+import { denormalize, normalize } from "@shared/services/readymode/mapping.ts";
 import {
   DialerDomain,
   type ReadymodeLeadDto,
@@ -62,7 +60,9 @@ function resolveDomain(input: string | undefined | null): DialerDomain {
     case "monsterods":
       return DialerDomain.ODS;
     default:
-      console.warn(`[trigger] Unknown dialerDomain '${input}', defaulting to MONSTER`);
+      console.warn(
+        `[trigger] Unknown dialerDomain '${input}', defaulting to MONSTER`,
+      );
       return DialerDomain.MONSTER;
   }
 }
@@ -86,8 +86,12 @@ async function incrementGlobalDailyCount(
   const today = easternDateString();
   const path = globalSmsCountDocPath(today);
   const existing = await client.get(path);
-  const newCount = (typeof existing?.count === "number" ? existing.count : 0) + 1;
-  await client.set(path, { count: newCount, updatedAt: new Date().toISOString() });
+  const newCount = (typeof existing?.count === "number" ? existing.count : 0) +
+    1;
+  await client.set(path, {
+    count: newCount,
+    updatedAt: new Date().toISOString(),
+  });
   return newCount;
 }
 
@@ -103,7 +107,9 @@ export async function processInboundLead(
   rawData: Record<string, unknown>,
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<ProcessLeadResult> {
-  console.log(`[trigger] 📥 incoming: ${JSON.stringify(rawData).slice(0, 600)}`);
+  console.log(
+    `[trigger] 📥 incoming: ${JSON.stringify(rawData).slice(0, 600)}`,
+  );
 
   const domain = resolveDomain(
     (rawData.dialerDomain as string) ?? (rawData.domain as string),
@@ -118,10 +124,18 @@ export async function processInboundLead(
   const phone = lead.phone || normalizePhone(rawData.primaryPhone) || "";
   const resIdString = lead.reservationId ||
     String(rawData.resID ?? rawData.Custom_56 ?? "");
-  // No silent fallback to 0 — the validator now guarantees a numeric
-  // attempts for the RM path. Manual path sets override=true and bypasses
-  // the attempts gate anyway, so NaN here is harmless.
-  const attempts = Number(rawData.attempts ?? rawData.times_called);
+  // Attempts is `undefined` when the validator saw the known-broken
+  // (times_called) placeholder. We look it up via RM's TPI after the
+  // cheap deterministic gates pass — see the lookup branch below. For
+  // any other shape the validator already enforced a number or rejected.
+  const attemptsRaw = rawData.attempts ?? rawData.times_called;
+  let attempts: number | undefined = attemptsRaw === undefined ||
+      attemptsRaw === null
+    ? undefined
+    : (() => {
+      const n = Number(attemptsRaw);
+      return Number.isFinite(n) ? n : undefined;
+    })();
 
   if (!phone) {
     return { status: "error", message: "Missing phone number" };
@@ -138,8 +152,13 @@ export async function processInboundLead(
   // covers both gates — gates-config caches for 60s internally.
   const gates = await getGatesConfig(client);
 
-  // Gatekeeper 1: attempts
-  if (!isOverride && attempts < gates.attemptsThreshold) {
+  // Gatekeeper 1: attempts — only fires when we already know the value.
+  // If `attempts` is undefined (RM template broken), the lookup branch
+  // below resolves it AFTER the cheap deterministic gates so we don't
+  // burn TPI calls on phones we wouldn't text regardless.
+  if (
+    !isOverride && attempts !== undefined && attempts < gates.attemptsThreshold
+  ) {
     return { status: "skipped", reason: "Insufficient attempts", attempts };
   }
 
@@ -148,7 +167,9 @@ export async function processInboundLead(
   // GLOBAL_DAILY_SMS_CAP setting still works for staged rollout testing.
   if (!isOverride) {
     const envCap = loadEnv().globalDailySmsCap;
-    const cap = envCap !== GLOBAL_DAILY_SMS_CAP ? envCap : gates.globalDailySmsCap;
+    const cap = envCap !== GLOBAL_DAILY_SMS_CAP
+      ? envCap
+      : gates.globalDailySmsCap;
     const dailyCount = await getGlobalDailyCount(client);
     if (dailyCount >= cap) {
       console.log(
@@ -165,7 +186,9 @@ export async function processInboundLead(
   let guest = await findGuestByResId(Number(resIdString));
   if (!guest) {
     if (!isOverride) {
-      console.warn(`[trigger] guest not found for ResID ${resIdString} — skipping`);
+      console.warn(
+        `[trigger] guest not found for ResID ${resIdString} — skipping`,
+      );
       return { status: "skipped", reason: "Guest Not Found" };
     }
     console.warn(
@@ -200,6 +223,28 @@ export async function processInboundLead(
   if (!isOverride) {
     if (!(await rateLimitCheck(phone))) {
       return { status: "skipped", reason: "Rate Limited" };
+    }
+  }
+
+  // TPI attempts lookup — only when upstream failed to substitute the
+  // (times_called) placeholder. All deterministic pre-flight gates have
+  // already passed, so we know we'd text this phone if attempts qualifies.
+  // On lookup failure (timeout, circuit open, throttled, no lead in RM):
+  // 200 + skipped, never silently fall through to texting an unqualified
+  // lead. Override path skips the lookup entirely.
+  if (!isOverride && attempts === undefined) {
+    const r = await fetchAttemptsFromTpi(phone, domain);
+    if (!r.ok) {
+      console.warn(`[trigger] ❌ TPI lookup failed for ${phone}: ${r.reason}`);
+      return { status: "skipped", reason: `attempts-unknown:${r.reason}` };
+    }
+    attempts = r.attempts;
+    console.log(
+      `[trigger] ✅ TPI looked up attempts=${attempts} for ${phone} ` +
+        `(leadId=${r.leadId})`,
+    );
+    if (attempts < gates.attemptsThreshold) {
+      return { status: "skipped", reason: "Insufficient attempts", attempts };
     }
   }
 
@@ -267,8 +312,10 @@ export async function processInboundLead(
         variant,
         destination: lead.destination ||
           (rawData.desiredDestination1 as string) || "",
-        MostRecentPackageIdDateOfBooking: guest.MostRecentPackageIdDateOfBooking,
-        MostRecentPackageIdCreditCardType: guest.MostRecentPackageIdCreditCardType,
+        MostRecentPackageIdDateOfBooking:
+          guest.MostRecentPackageIdDateOfBooking,
+        MostRecentPackageIdCreditCardType:
+          guest.MostRecentPackageIdCreditCardType,
         MostRecentPackageIdLast4OfCreditCardOnly:
           guest.MostRecentPackageIdLast4OfCreditCardOnly,
         conversationHistory: historyContext,
@@ -282,7 +329,9 @@ export async function processInboundLead(
       (blandResult.json as { data?: { conversation_id?: string } } | null)
         ?.data?.conversation_id;
     console.log(
-      `[trigger] Bland response status=200 conversation_id=${conversationId ?? "(none)"}`,
+      `[trigger] Bland response status=200 conversation_id=${
+        conversationId ?? "(none)"
+      }`,
     );
     if (conversationId) {
       // Fire-and-forget — fetch the agent's first message a few seconds later
@@ -310,10 +359,17 @@ async function storeInitialBlandMessage(
     const messages = r.json.data?.messages ?? [];
     const first = messages.find((m) => m.sender === "AGENT");
     if (first) {
-      await conversations.storeMessage(phone, conversationId, "AI Bot", first.message);
+      await conversations.storeMessage(
+        phone,
+        conversationId,
+        "AI Bot",
+        first.message,
+      );
     }
   } catch (e) {
-    console.warn(`[trigger] storeInitialBlandMessage failed: ${(e as Error).message}`);
+    console.warn(
+      `[trigger] storeInitialBlandMessage failed: ${(e as Error).message}`,
+    );
   }
 }
 
@@ -383,11 +439,15 @@ export async function injectLead(
   try {
     await scrubLead(lead.phone, domain);
   } catch (e) {
-    console.warn(`[inject] preemptive scrub failed (non-fatal): ${(e as Error).message}`);
+    console.warn(
+      `[inject] preemptive scrub failed (non-fatal): ${(e as Error).message}`,
+    );
   }
 
   const url = buildLeadUrl(baseUrl, lead as unknown as Record<string, unknown>);
-  console.log(`[inject] 🚀 ${domain} target=${targetId} → ${url.slice(0, 200)}`);
+  console.log(
+    `[inject] 🚀 ${domain} target=${targetId} → ${url.slice(0, 200)}`,
+  );
 
   try {
     const res = await fetch(url, { method: "POST" });
@@ -400,7 +460,8 @@ export async function injectLead(
     let success = false;
     if (
       ((json as Record<string, unknown> | null)?.Success === true) ||
-      ((json as Record<string, Record<string, unknown>> | null)?.["0"]?.Success === true) ||
+      ((json as Record<string, Record<string, unknown>> | null)?.["0"]
+        ?.Success === true) ||
       text.includes('"Success":true') ||
       text.includes('"Success": true')
     ) {
@@ -433,7 +494,10 @@ export async function injectLead(
       return { status: "success", message: "Injected" };
     }
 
-    return { status: "error", message: `Injection Failed: ${text.slice(0, 200)}` };
+    return {
+      status: "error",
+      message: `Injection Failed: ${text.slice(0, 200)}`,
+    };
   } catch (e) {
     throw new Error(`Injection Failed: ${(e as Error).message}`);
   }
@@ -452,7 +516,9 @@ async function handleDuplicate(
     const jsonMatch = errorBody.match(/"xencall_leadId":\s*"XC:([\d]+)"/);
     if (jsonMatch?.[1]) leadId = jsonMatch[1];
   }
-  if (!leadId) return { status: "error", message: "Duplicate - ID Parse Failed" };
+  if (!leadId) {
+    return { status: "error", message: "Duplicate - ID Parse Failed" };
+  }
 
   if (!(await scrubLead(lead.phone, domain, leadId))) {
     return { status: "error", message: "Scrub Failed" };
@@ -463,7 +529,9 @@ async function handleDuplicate(
     .replace(/lead%5B0%5D/g, `lead%5B${ts}%5D`)
     .replace(/lead\[0\]/g, `lead[${ts}]`);
 
-  const retryRes = await rateLimitSchedule(() => fetch(newUrl, { method: "POST" }));
+  const retryRes = await rateLimitSchedule(() =>
+    fetch(newUrl, { method: "POST" })
+  );
   const retryText = await retryRes.text();
   if (
     retryText.includes("Success") || retryText.includes("success") ||
@@ -543,7 +611,9 @@ async function dncLead(
   }
 }
 
-export async function dncGlobal(phone: string): Promise<Record<string, string>> {
+export async function dncGlobal(
+  phone: string,
+): Promise<Record<string, string>> {
   if (phone === "0") return {};
   const results: Record<string, string> = {};
   for (const domain of Object.values(DialerDomain)) {

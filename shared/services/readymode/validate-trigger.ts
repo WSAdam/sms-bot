@@ -16,10 +16,15 @@
 import { normalizePhone } from "@shared/util/phone.ts";
 
 export interface TriggerPayloadDto {
-  phone: string;             // normalized 10-digit
-  attempts: number;          // integer >= 0 (forced to 0 under override)
+  phone: string; // normalized 10-digit
+  // integer >= 0 (forced to 0 under override). `undefined` means upstream
+  // sent the literal `(times_called)` placeholder — the service is expected
+  // to look the real value up via the RM TPI client before applying the
+  // attempts gate. Any OTHER placeholder or non-numeric value still fails
+  // validation; only that one known-broken template token is whitelisted.
+  attempts: number | undefined;
   resID: string;
-  dialerDomain: string;      // lowercased, one of KNOWN_DIALER_DOMAINS
+  dialerDomain: string; // lowercased, one of KNOWN_DIALER_DOMAINS
   override: boolean;
   firstName?: string;
   lastName?: string;
@@ -64,6 +69,12 @@ const KNOWN_DIALER_DOMAINS = new Set([
 ]);
 
 const PLACEHOLDER_RE = /^\([a-zA-Z][a-zA-Z0-9_]*\)$/;
+
+// The one specific placeholder we know upstream RM template breaks on —
+// `attempts=(times_called)`. We don't reject this anymore; the service
+// looks up the real attempts value via the TPI client. Other placeholders
+// in the attempts field, or this token in OTHER fields, still fail.
+const ATTEMPTS_LOOKUP_TOKEN = "(times_called)";
 
 // Fields we want to type-check or surface in the DTO. Other keys pass
 // through verbatim (after the placeholder sweep).
@@ -150,13 +161,19 @@ export function parseTriggerPayload(
     return fail("dialerDomain", "required", dialerDomainRaw);
   }
   if (isPlaceholder(dialerDomainRaw)) {
-    return fail("dialerDomain", "looks like an unsubstituted placeholder", dialerDomainRaw);
+    return fail(
+      "dialerDomain",
+      "looks like an unsubstituted placeholder",
+      dialerDomainRaw,
+    );
   }
   const dialerDomain = dialerDomainRaw.toLowerCase().trim();
   if (!KNOWN_DIALER_DOMAINS.has(dialerDomain)) {
     return fail(
       "dialerDomain",
-      `unknown domain (expected one of ${[...KNOWN_DIALER_DOMAINS].join(", ")})`,
+      `unknown domain (expected one of ${
+        [...KNOWN_DIALER_DOMAINS].join(", ")
+      })`,
       dialerDomainRaw,
     );
   }
@@ -178,24 +195,48 @@ export function parseTriggerPayload(
   // Required UNLESS override is set, which is the QA / manual-test escape
   // hatch and intentionally bypasses every gatekeeper downstream. When
   // override is on we still record attempts as 0 so the DTO type stays
-  // honest (no `undefined`).
-  let attempts: number;
+  // honest where possible.
+  //
+  // Special case: the literal token `(times_called)` is whitelisted and
+  // becomes `undefined`. RM's webhook template is broken in production —
+  // they ship the unsubstituted placeholder. The service handles this by
+  // looking the real value up via the TPI client before applying the
+  // attempts gate. Any OTHER placeholder, missing value, or non-numeric
+  // string in this field still fails: those would be a different bug.
+  let attempts: number | undefined;
   if (override) {
-    const parsed = parseAttempts(raw.attempts);
-    attempts = parsed ?? 0;
+    if (
+      typeof raw.attempts === "string" &&
+      raw.attempts.trim() === ATTEMPTS_LOOKUP_TOKEN
+    ) {
+      attempts = undefined;
+    } else {
+      const parsed = parseAttempts(raw.attempts);
+      attempts = parsed ?? 0;
+    }
   } else {
     if (raw.attempts === undefined || raw.attempts === null) {
       return fail("attempts", "required (no override)", raw.attempts);
     }
-    const parsed = parseAttempts(raw.attempts);
-    if (parsed === null) {
-      return fail(
-        "attempts",
-        "must be a non-negative integer (got placeholder or non-numeric)",
-        raw.attempts,
+    if (
+      typeof raw.attempts === "string" &&
+      raw.attempts.trim() === ATTEMPTS_LOOKUP_TOKEN
+    ) {
+      console.log(
+        `[trigger] ⚠️ attempts is the known-broken (times_called) placeholder — will look up via TPI`,
       );
+      attempts = undefined;
+    } else {
+      const parsed = parseAttempts(raw.attempts);
+      if (parsed === null) {
+        return fail(
+          "attempts",
+          "must be a non-negative integer (got non-numeric, or a placeholder other than (times_called))",
+          raw.attempts,
+        );
+      }
+      attempts = parsed;
     }
-    attempts = parsed;
   }
 
   // --- placeholder sweep on every other string field -----------------------

@@ -15,7 +15,8 @@ const PRODUCTION_BAD_PAYLOAD = {
   dialerDomain: "monsteract",
   resID: "384901",
   LeadDate: "",
-  urlLinkToRecord: "https://monsterrg.quickbase.com/db/bmhvhc72c?a=dr&rid=384901",
+  urlLinkToRecord:
+    "https://monsterrg.quickbase.com/db/bmhvhc72c?a=dr&rid=384901",
   office: "BookVIP",
   totalPrice: "115",
   destination: "MST - Travel America Promotion",
@@ -38,24 +39,34 @@ const HAPPY_PAYLOAD = {
   lastName: "Mack",
 };
 
-Deno.test("rejects the verbatim production-failure payload", () => {
-  // The real payload had both a contaminated phone AND a placeholder
-  // attempts. Either is sufficient to reject; we just want this exact
-  // shape to never make it past the boundary again.
+Deno.test("rejects the verbatim production-failure payload (phone contamination)", () => {
+  // The real payload had a contaminated phone — that alone is sufficient
+  // to reject, and phone is validated before attempts. Even though the
+  // (times_called) attempts placeholder is now whitelisted, the phone
+  // contamination check still fires first.
   const r = parseTriggerPayload(PRODUCTION_BAD_PAYLOAD);
   assertEquals(r.ok, false);
   if (r.ok) return;
-  // Field must be one of the genuinely-bad ones, not collateral.
-  const expectedFields = new Set(["phone", "attempts"]);
-  assertEquals(
-    expectedFields.has(r.error.field),
-    true,
-    `unexpected field: ${r.error.field}`,
-  );
+  assertEquals(r.error.field, "phone");
 });
 
-Deno.test("rejects attempts placeholder variants", () => {
-  for (const bad of ["(times_called)", "(attempts)", "abc", ""]) {
+Deno.test("(times_called) attempts is whitelisted → dto.attempts === undefined", () => {
+  // Upstream RM template is broken and ships the literal placeholder.
+  // We don't reject anymore; the service is expected to look the real
+  // value up via the TPI client before the attempts gate.
+  const r = parseTriggerPayload({
+    ...HAPPY_PAYLOAD,
+    attempts: "(times_called)",
+  });
+  assertEquals(r.ok, true);
+  if (!r.ok) return;
+  assertEquals(r.dto.attempts, undefined);
+});
+
+Deno.test("rejects attempts placeholder variants OTHER than (times_called)", () => {
+  // Only the one specific known-broken token is whitelisted. Any other
+  // placeholder in this field is a different bug and still rejects.
+  for (const bad of ["(attempts)", "(first_name)", "(times)", "abc", ""]) {
     const r = parseTriggerPayload({ ...HAPPY_PAYLOAD, attempts: bad });
     assertEquals(r.ok, false, `expected rejection for attempts=${bad}`);
     if (!r.ok) assertEquals(r.error.field, "attempts");
@@ -109,7 +120,10 @@ Deno.test("rejects phone with too few digits", () => {
 });
 
 Deno.test("rejects placeholder on any string field (firstName)", () => {
-  const r = parseTriggerPayload({ ...HAPPY_PAYLOAD, firstName: "(first_name)" });
+  const r = parseTriggerPayload({
+    ...HAPPY_PAYLOAD,
+    firstName: "(first_name)",
+  });
   assertEquals(r.ok, false);
   if (!r.ok) assertEquals(r.error.field, "firstName");
 });
@@ -121,7 +135,10 @@ Deno.test("rejects placeholder on any string field (campaign)", () => {
 });
 
 Deno.test("rejects placeholder on any string field (destination)", () => {
-  const r = parseTriggerPayload({ ...HAPPY_PAYLOAD, destination: "(destination)" });
+  const r = parseTriggerPayload({
+    ...HAPPY_PAYLOAD,
+    destination: "(destination)",
+  });
   assertEquals(r.ok, false);
   if (!r.ok) assertEquals(r.error.field, "destination");
 });

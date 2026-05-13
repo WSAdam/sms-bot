@@ -3961,6 +3961,39 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="rm-tpi" style="grid-column: 1 / -1">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🔬 RM TPI Lookup <span class="tag">discovery + live path</span></div>
+            <div class="ep-desc">Hand-fire RM's TPI search/get to look up <code>times called</code> when the inbound trigger ships the (times_called) placeholder. <b>Search/Get</b> bypass the throttle (raw RM response). <b>Lookup</b> goes through the production code path with the token bucket + circuit breaker, same as the live trigger.</div>
+          </div>
+          <span class="ep-method method-POST">POST</span>
+        </div>
+        <code class="path">/api/test/tpi/{search,get,lookup,status}</code>
+        <div class="params" style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <label>Phone <input type="text" id="tpiPhone" placeholder="8432222986" value="8432222986"></label>
+          <label>Dialer domain
+            <select id="tpiDomain">
+              <option value="monsteract" selected>monsteract</option>
+              <option value="monsterodr">monsterodr</option>
+              <option value="monsterods">monsterods</option>
+              <option value="monsterrg">monsterrg</option>
+              <option value="monsterrd2">monsterrd2</option>
+            </select>
+          </label>
+          <label>Lead ID (for Get) <input type="number" id="tpiLeadId" placeholder="2391391"></label>
+          <label>&nbsp;<span class="muted small" style="display:block">Search picks max(itemId) among typeId=Lead. Lookup chains Search→Get→extract.</span></label>
+        </div>
+        <div class="actions" style="margin-top:10px;flex-wrap:wrap;gap:10px">
+          <button onclick="runTpiSearch(this)">🔍 Search</button>
+          <button onclick="runTpiGet(this)">📄 Get</button>
+          <button onclick="runTpiLookup(this)">⚡ Lookup (full path)</button>
+          <button onclick="runTpiStatus(this)" class="secondary">📊 Throttle Status</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="bland-list-today">
         <div class="ep-head">
           <div>
@@ -4644,6 +4677,49 @@ async function saveGatesConfig(btn){
     body: payload,
   });
   setTimeout(function(){ loadGatesConfig(btn); }, 500);
+}
+
+// ---- RM TPI test endpoints ----
+function readTpiInputs(){
+  const phone = (document.getElementById("tpiPhone").value || "").replace(/\D/g, "");
+  const domain = document.getElementById("tpiDomain").value;
+  const leadIdRaw = document.getElementById("tpiLeadId").value;
+  const leadId = leadIdRaw ? Number(leadIdRaw) : null;
+  return { phone, domain, leadId };
+}
+async function runTpiSearch(btn){
+  const card = btn.closest(".endpoint-card");
+  const { phone, domain } = readTpiInputs();
+  if(!/^\d{10}$/.test(phone)){ alert("Phone must be 10 digits"); return; }
+  await runRequest(card, {
+    method: "POST", url: "/api/test/tpi/search",
+    headers: { "content-type": "application/json" },
+    body: { phone, dialerDomain: domain },
+  });
+}
+async function runTpiGet(btn){
+  const card = btn.closest(".endpoint-card");
+  const { domain, leadId } = readTpiInputs();
+  if(!leadId || leadId <= 0){ alert("Enter a Lead ID"); return; }
+  await runRequest(card, {
+    method: "POST", url: "/api/test/tpi/get",
+    headers: { "content-type": "application/json" },
+    body: { leadId, dialerDomain: domain },
+  });
+}
+async function runTpiLookup(btn){
+  const card = btn.closest(".endpoint-card");
+  const { phone, domain } = readTpiInputs();
+  if(!/^\d{10}$/.test(phone)){ alert("Phone must be 10 digits"); return; }
+  await runRequest(card, {
+    method: "POST", url: "/api/test/tpi/lookup",
+    headers: { "content-type": "application/json" },
+    body: { phone, dialerDomain: domain },
+  });
+}
+async function runTpiStatus(btn){
+  const card = btn.closest(".endpoint-card");
+  await runRequest(card, { method: "GET", url: "/api/test/tpi/status" });
 }
 
 async function runQbCronNow(btn){
