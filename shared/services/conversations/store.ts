@@ -104,13 +104,15 @@ export async function getAllConversations(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<ConversationMessage[]> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  // Conversations collection has 7K+ docs; the old limit:500 silently
-  // returned "no results" for any phone whose docs weren't in the first
-  // arbitrary 500 returned by Firestore. 50K matches the cap we already
-  // use across the dashboard endpoints.
-  const all = await client.list(conversationsCollection, { limit: 50_000 });
-  return all
-    .filter((e) => e.id.startsWith(`${phone}__`))
+  // Filter at the database with an indexed equality on phoneNumber instead
+  // of listing the whole collection and filtering in memory. The previous
+  // limit:50_000 form caused the 2026-05-19 Firestore quota-exceeded
+  // incident — see firestore-safety.md.
+  const matches = await client.list(conversationsCollection, {
+    where: { field: "phoneNumber", op: "==", value: phone },
+    limit: 1000,
+  });
+  return matches
     .map((e) => e.data as unknown as ConversationMessage)
     .sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
