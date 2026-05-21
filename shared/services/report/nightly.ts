@@ -13,25 +13,27 @@
 // WTD = Monday 00:00 ET of the current week through the cron run moment.
 // Lifetime = all-time.
 
-import { ROOT_COLLECTION } from "@shared/config/constants.ts";
 import {
-  conversationsCollection,
   guestActivatedCollection,
   injectionHistoryCollection,
   scheduledInjectionsCollection,
+  uniqueRecipientByPhoneCollection,
+  weeklyRecipientByPhoneWeekCollection,
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { getCronConfig } from "@shared/services/config/cron-config.ts";
 import { sendReport } from "@shared/services/postmark/client.ts";
-import type { ConversationMessage } from "@shared/types/conversation.ts";
-import { easternDateString } from "@shared/util/time.ts";
+import {
+  easternDateString,
+  easternMondayDateString,
+} from "@shared/util/time.ts";
 
 const LIST_LIMIT = 50_000;
 const DASHBOARD_URL = "https://sms-bot.thetechgoose.deno.net/dashboard";
 
 export interface DailyReportCounts {
-  textsSentWtd: number;       // unique recipient phones, WTD
-  textsSentLifetime: number;  // unique recipient phones, all time
+  textsSentWtd: number; // unique recipient phones, WTD
+  textsSentLifetime: number; // unique recipient phones, all time
   apptsBookedWtd: number;
   apptsBookedLifetime: number;
   activationsWtd: number;
@@ -77,28 +79,35 @@ async function build(reportDate: string): Promise<{
 }> {
   const db = getFirestoreClient();
   const weekStartMs = startOfWeekMsEt();
+  const currentWeekKey = easternMondayDateString();
 
-  const [convoAll, pending, history, activated] = await Promise.all([
-    db.list(conversationsCollection, { limit: LIST_LIMIT }),
-    db.list(scheduledInjectionsCollection, { limit: LIST_LIMIT }),
-    db.list(injectionHistoryCollection, { limit: LIST_LIMIT }),
-    db.list(guestActivatedCollection, { limit: LIST_LIMIT }),
-  ]);
+  // Texts-sent metrics come from the write-side recipient markers
+  // (uniquerecipientbyphone + weeklyrecipientbyphoneweek) so we don't
+  // scan the conversations collection — that scan was the 2026-05-19
+  // Firestore-quota incident. See firestore-safety.md. WTD filter is a
+  // single equality on weekKey so the scan is bounded to one week of
+  // recipients.
+  const [pending, history, activated, lifetimeRecipientDocs, wtdRecipientDocs] =
+    await Promise.all([
+      db.list(scheduledInjectionsCollection, { limit: LIST_LIMIT }),
+      db.list(injectionHistoryCollection, { limit: LIST_LIMIT }),
+      db.list(guestActivatedCollection, { limit: LIST_LIMIT }),
+      db.list(uniqueRecipientByPhoneCollection, { limit: LIST_LIMIT }),
+      db.list(weeklyRecipientByPhoneWeekCollection, {
+        where: { field: "weekKey", op: "==", value: currentWeekKey },
+        limit: LIST_LIMIT,
+      }),
+    ]);
 
   // --- Texts Sent (unique recipients) ---
-  // Phone = unique guest phone we sent any outbound message to. Sender
-  // values in our store are "Bot" / "AI Bot" / "Agent" vs "Guest" — we
-  // treat anything that isn't "Guest" as outbound.
-  const lifetimeUniquePhones = new Set<string>();
-  const wtdUniquePhones = new Set<string>();
-  for (const e of convoAll) {
-    const m = e.data as unknown as ConversationMessage;
-    if (!m || !m.phoneNumber) continue;
-    if (m.sender === "Guest") continue;
-    lifetimeUniquePhones.add(m.phoneNumber);
-    const ts = safeMs(m.timestamp);
-    if (ts != null && ts >= weekStartMs) wtdUniquePhones.add(m.phoneNumber);
-  }
+  // One doc per unique recipient (lifetime) and one per recipient-per-week
+  // (WTD), written write-side after every successful outbound SMS. See
+  // shared/services/readymode/service.ts → recordOutboundRecipientMarkers.
+  // Historical recipients from before the 2026-05-19 fix are not in
+  // these collections — run scripts/backfill-recipient-markers.ts once
+  // to seed lifetime from the existing conversations data.
+  const lifetimeUniquePhones = lifetimeRecipientDocs.length;
+  const wtdUniquePhones = wtdRecipientDocs.length;
 
   // --- Appts Booked ---
   // Source of truth is the same as the dashboard "Booked" stat: union of
@@ -142,8 +151,8 @@ async function build(reportDate: string): Promise<{
   }
 
   const counts: DailyReportCounts = {
-    textsSentWtd: wtdUniquePhones.size,
-    textsSentLifetime: lifetimeUniquePhones.size,
+    textsSentWtd: wtdUniquePhones,
+    textsSentLifetime: lifetimeUniquePhones,
     apptsBookedWtd,
     apptsBookedLifetime,
     activationsWtd,
@@ -151,14 +160,19 @@ async function build(reportDate: string): Promise<{
   };
 
   const rows: Array<[string, number, number]> = [
-    ["Text Sent (unique recipients)", counts.textsSentWtd, counts.textsSentLifetime],
+    [
+      "Text Sent (unique recipients)",
+      counts.textsSentWtd,
+      counts.textsSentLifetime,
+    ],
     ["Appts Booked", counts.apptsBookedWtd, counts.apptsBookedLifetime],
     ["Activations", counts.activationsWtd, counts.activationsLifetime],
   ];
 
   const fmt = (n: number) => n.toLocaleString("en-US");
 
-  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#fafafa;padding:24px;color:#222">
+  const html =
+    `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#fafafa;padding:24px;color:#222">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e5e5e5;border-radius:8px;padding:24px">
     <p style="margin:0 0 16px 0">
       <a href="${DASHBOARD_URL}" style="color:#0a6;text-decoration:none;font-weight:600">→ Open Dashboard</a>
@@ -175,16 +189,20 @@ async function build(reportDate: string): Promise<{
       </thead>
       <tbody>
         ${
-    rows
-      .map(([label, wtd, lt]) =>
-        `<tr>
+      rows
+        .map(([label, wtd, lt]) =>
+          `<tr>
           <td style="border-bottom:1px solid #eee">${label}</td>
-          <td style="border-bottom:1px solid #eee;text-align:right;padding-right:12px"><b>${fmt(wtd)}</b></td>
-          <td style="border-bottom:1px solid #eee;text-align:right"><b>${fmt(lt)}</b></td>
+          <td style="border-bottom:1px solid #eee;text-align:right;padding-right:12px"><b>${
+            fmt(wtd)
+          }</b></td>
+          <td style="border-bottom:1px solid #eee;text-align:right"><b>${
+            fmt(lt)
+          }</b></td>
         </tr>`
-      )
-      .join("")
-  }
+        )
+        .join("")
+    }
       </tbody>
     </table>
   </div>
@@ -196,7 +214,9 @@ async function build(reportDate: string): Promise<{
     ``,
     `                              Week to date    Lifetime`,
     ...rows.map(([label, wtd, lt]) =>
-      `${label.padEnd(34)}${String(fmt(wtd)).padStart(8)}${String(fmt(lt)).padStart(12)}`
+      `${label.padEnd(34)}${String(fmt(wtd)).padStart(8)}${
+        String(fmt(lt)).padStart(12)
+      }`
     ),
   ].join("\n");
 

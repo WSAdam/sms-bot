@@ -15,6 +15,23 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+// ISO date (YYYY-MM-DD) of the Monday 00:00 ET that begins the week
+// containing `date`. Used as the partition key for weekly recipient
+// markers. Approximated using -4h (EDT) — off by an hour around DST
+// transitions, which only matters for events fired in the 1-hour DST
+// drift; benign for week-bucketing reporting.
+export function easternMondayDateString(date: Date = new Date()): string {
+  const etNow = new Date(date.getTime() - 4 * 60 * 60 * 1000);
+  const dow = etNow.getUTCDay(); // 0=Sun..6=Sat
+  const daysSinceMonday = (dow + 6) % 7;
+  const monday = new Date(etNow);
+  monday.setUTCDate(etNow.getUTCDate() - daysSinceMonday);
+  monday.setUTCHours(0, 0, 0, 0);
+  // Shift back to "wall clock" by formatting via the same Eastern formatter.
+  // monday represents Monday 00:00 ET expressed in UTC; re-encode as ET date.
+  return DATE_FORMATTER.format(new Date(monday.getTime() + 4 * 60 * 60 * 1000));
+}
+
 // IANA timezone → approximate UTC offset (hours). Used to interpret
 // naive Bland Desired_Time strings (no offset) as local time in the
 // guest's zone. Approximate at DST boundaries — callers should pair

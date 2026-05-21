@@ -62,6 +62,24 @@ export const rateLimitCollection = `${rateLimitContainer}/byPhone`;
 export const globalSmsCountContainer = `${R}/globalsmscount`;
 export const globalSmsCountCollection = `${globalSmsCountContainer}/byDate`;
 
+// Write-side index for "Texts Sent (unique recipients)" reporting. Each
+// phone we send an outbound SMS to gets ONE doc here on first send;
+// subsequent sends short-circuit via atomicCreate. Eliminates the need
+// for the nightly report to scan the conversations collection. See
+// firestore-safety.md (Part B) for the incident context.
+export const uniqueRecipientByPhoneContainer = `${R}/uniquerecipientbyphone`;
+export const uniqueRecipientByPhoneCollection =
+  `${uniqueRecipientByPhoneContainer}/byPhone`;
+
+// Per-week recipient index for the WTD count. Doc id is
+// `{weekKey}__{phone10}` so atomicCreate dedupes within the same week.
+// `weekKey` is the ISO date of Monday 00:00 ET for that week, e.g.
+// "2026-05-11". Stored as a field too so we can `where("weekKey", "==")`.
+export const weeklyRecipientByPhoneWeekContainer =
+  `${R}/weeklyrecipientbyphoneweek`;
+export const weeklyRecipientByPhoneWeekCollection =
+  `${weeklyRecipientByPhoneWeekContainer}/byKey`;
+
 export const abTestContainer = `${R}/abtest`;
 export const abTestCollection = `${abTestContainer}/byPhone`;
 
@@ -137,6 +155,15 @@ export function readymodeCampaignsDocPath(): string {
 }
 export function globalSmsCountDocPath(easternDate: string): string {
   return `${globalSmsCountCollection}/${easternDate}`;
+}
+export function uniqueRecipientByPhoneDocPath(phone10: string): string {
+  return `${uniqueRecipientByPhoneCollection}/${phone10}`;
+}
+export function weeklyRecipientByPhoneWeekDocPath(
+  weekKey: string,
+  phone10: string,
+): string {
+  return `${weeklyRecipientByPhoneWeekCollection}/${weekKey}__${phone10}`;
 }
 export function abTestDocPath(phone10: string): string {
   return `${abTestCollection}/${phone10}`;

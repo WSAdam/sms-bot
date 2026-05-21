@@ -52,6 +52,19 @@ export interface FirestoreClient {
 
 const MAX_BATCH = 400;
 
+// Tripwire for the "list everything, filter in memory" pattern that
+// caused the 2026-05-19 quota incident. Any list() that returns more
+// than this threshold logs a loud warning with a stack trace so the
+// pattern surfaces in the logs the next time someone reintroduces it.
+// 500 matches the historical "default limit" that the May 5 change
+// raised — anything above is by definition outside the polite range.
+// Override via env if a known-large scan needs to opt out without
+// noise (only the nightly report / migration scripts should ever do
+// this; everything else should rewrite as a targeted query).
+const LIST_RESULT_WARN_THRESHOLD = Number(
+  Deno.env.get("FIRESTORE_LIST_WARN_THRESHOLD") ?? 500,
+);
+
 class FirebaseAdminClient implements FirestoreClient {
   async get(path: DocPath): Promise<Record<string, unknown> | null> {
     const db = await getDb();
@@ -70,7 +83,10 @@ class FirebaseAdminClient implements FirestoreClient {
     await db.doc(path).delete();
   }
 
-  async list(parentPath: string, opts: ListOptions = {}): Promise<ListResult[]> {
+  async list(
+    parentPath: string,
+    opts: ListOptions = {},
+  ): Promise<ListResult[]> {
     const db = await getDb();
     // deno-lint-ignore no-explicit-any
     let q: any = db.collection(parentPath);
@@ -89,6 +105,9 @@ class FirebaseAdminClient implements FirestoreClient {
     }
 
     const snap = await q.get();
+    if (snap.size > LIST_RESULT_WARN_THRESHOLD) {
+      auditLargeListResult(parentPath, snap.size, opts);
+    }
     // deno-lint-ignore no-explicit-any
     return snap.docs.map((d: any) => ({
       id: d.id,
@@ -158,6 +177,28 @@ function auditCriticalDelete(path: string): void {
   if (!CRITICAL_DELETE_PATHS.some((p) => path.includes(p))) return;
   const stack = new Error("delete trace").stack ?? "(no stack)";
   console.warn(
-    `🚨 [firestore.delete] CRITICAL path=${path}\n${stack.split("\n").slice(2, 8).join("\n")}`,
+    `🚨 [firestore.delete] CRITICAL path=${path}\n${
+      stack.split("\n").slice(2, 8).join("\n")
+    }`,
+  );
+}
+
+// Regression guard for the full-table-scan pattern that caused the
+// 2026-05-19 quota incident. Logs a stack-trace breadcrumb so the
+// offending call site is obvious in Deno Deploy logs. Does NOT throw —
+// we never want this guard to take down a request path; surfacing the
+// problem in logs is enough to catch it during normal review.
+function auditLargeListResult(
+  parentPath: string,
+  returnedSize: number,
+  opts: ListOptions,
+): void {
+  const stack = new Error("large list trace").stack ?? "(no stack)";
+  console.warn(
+    `⚠️ [firestore.list] returned=${returnedSize} threshold=${LIST_RESULT_WARN_THRESHOLD} ` +
+      `path=${parentPath} where=${JSON.stringify(opts.where ?? null)} ` +
+      `limit=${opts.limit ?? "(none)"}\n${
+        stack.split("\n").slice(2, 8).join("\n")
+      }`,
   );
 }

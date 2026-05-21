@@ -14,6 +14,8 @@ import {
   globalSmsCountDocPath,
   leadPointerDocPath,
   smsFlowContextDocPath,
+  uniqueRecipientByPhoneDocPath,
+  weeklyRecipientByPhoneWeekDocPath,
 } from "@shared/firestore/paths.ts";
 import {
   type FirestoreClient,
@@ -42,7 +44,10 @@ import {
   type StandardLead,
 } from "@shared/types/readymode.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
-import { easternDateString } from "@shared/util/time.ts";
+import {
+  easternDateString,
+  easternMondayDateString,
+} from "@shared/util/time.ts";
 
 function resolveDomain(input: string | undefined | null): DialerDomain {
   const v = (input ?? "").toLowerCase().trim();
@@ -341,12 +346,46 @@ export async function processInboundLead(
 
     await incrementGlobalDailyCount(client);
     await rateLimitReserve(phone);
+    // Fire-and-forget write-side index for the nightly report's
+    // "unique recipients" metric. Two idempotent atomicCreates so
+    // repeat sends to the same phone short-circuit; failure here must
+    // never block the SMS path, so we swallow rejections.
+    recordOutboundRecipientMarkers(client, phone).catch((e) => {
+      console.warn(
+        `[trigger] recipient-marker write failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    });
 
     return { status: "success", variant };
   } catch (e) {
     console.error(`[trigger] Bland API failed: ${(e as Error).message}`);
     return { status: "error", message: "Bland API Failed" };
   }
+}
+
+// Write the lifetime + per-week recipient marker docs. atomicCreate is
+// idempotent — repeat sends to the same phone leave the lifetime doc as
+// it was and only do one wasted read. See firestore-safety.md (Part B
+// follow-up: nightly report no longer scans the conversations collection
+// to compute unique-recipient counts).
+async function recordOutboundRecipientMarkers(
+  client: FirestoreClient,
+  phone: string,
+): Promise<void> {
+  const nowIsoStr = new Date().toISOString();
+  const weekKey = easternMondayDateString();
+  await Promise.all([
+    client.atomicCreate(uniqueRecipientByPhoneDocPath(phone), {
+      phone,
+      firstSentAt: nowIsoStr,
+    }),
+    client.atomicCreate(
+      weeklyRecipientByPhoneWeekDocPath(weekKey, phone),
+      { phone, weekKey, firstSentAt: nowIsoStr },
+    ),
+  ]);
 }
 
 async function storeInitialBlandMessage(
