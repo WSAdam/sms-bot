@@ -238,7 +238,7 @@ In `shared/config/constants.ts`:
   3-branch (sale/booked = noop, ODR = return-to-source, else = recycle)
 - `POST /sms-callback/stop` — `{phone}` → DNC across 5 RM domains + Firestore
   flag
-- `POST /sms-callback/bland/talk-now` — `{phone}` → instant ODR inject
+- `POST /sms-callback/bland-talk-now` — `{phone}` → instant ODR inject
 - `POST|GET /sms-callback/return-to-source` — scrub ODR, inject back to original
 - `POST /sms-callback/backfill-conversations` — `{conversationIds:[…]}`
 - `POST /sms-callback/seed-conversations`,
@@ -687,7 +687,7 @@ and self-driven.
 | GET / POST | `/api/report/nightly`                   | playground | Send Postmark email with stats + CSV                   |
 | POST       | `/trigger/readymode`                    | omnisource | ReadyMode dialer webhook → SMS send                    |
 | POST       | `/trigger/manual`                       | omnisource | Test override (skips all gatekeepers)                  |
-| POST       | `/sms-callback/bland/talk-now`          | omnisource | Hot-path: scrub source → inject ODR                    |
+| POST       | `/sms-callback/bland-talk-now`          | omnisource | Hot-path: scrub source → inject ODR                    |
 | POST       | `/sms-callback/appointment-booked`      | omnisource | Cal.com booked → schedule future injection             |
 | POST       | `/sms-callback/disposition`             | omnisource | Post-call disposition handling                         |
 | POST       | `/sms-callback/stop`                    | omnisource | STOP → DNC                                             |
@@ -1128,8 +1128,8 @@ injections every minute.
 - **Talk-now scrub is optional.** Proceeds even if no source domain is on the
   lead pointer.
 - **Ngrok tunnel aliases.**
-  `conf-deploy.ngrok.app/confirmations/v001/sms-callback/bland/talk-now` (prod)
-  and `conf-omnisource.ngrok.app/confirmations/v001/sms-callback/bland/talk-now`
+  `conf-deploy.ngrok.app/confirmations/v001/sms-callback/bland-talk-now` (prod)
+  and `conf-omnisource.ngrok.app/confirmations/v001/sms-callback/bland-talk-now`
   (test) currently route to the legacy app. After deploy, either repoint the
   tunnels at the new Deno Deploy URL **or** mount the new handlers under
   `/confirmations/v001/...` so the existing tunnels keep working without

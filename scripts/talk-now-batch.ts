@@ -32,7 +32,10 @@ for (const phone of PHONES) {
   console.log(`→ ${phone}`);
   const t0 = performance.now();
   try {
-    const res = await fetch(`${ENDPOINT}/sms-callback/bland/talk-now`, {
+    // Note the HYPHEN, not a slash — Fresh routes the file
+    // routes/sms-callback/bland-talk-now.ts as /sms-callback/bland-talk-now.
+    // (context.md §0.5 has it documented with a slash — that's wrong.)
+    const res = await fetch(`${ENDPOINT}/sms-callback/bland-talk-now`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ phone }),
