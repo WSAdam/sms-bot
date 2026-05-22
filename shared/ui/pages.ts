@@ -4045,7 +4045,72 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
     </div>
   </div>
 
-  <!-- ============ 8. CLEANUP (DANGEROUS) ============ -->
+  <!-- ============ 8. COMPOSITE INDEX PROBES ============ -->
+  <div class="section">
+    <h2>🧮 Composite index probes <span class="tag">DEPLOY HELPER</span></h2>
+    <p class="section-desc" style="margin-bottom:10px">
+      Each button fires the smallest possible query for one composite
+      index. If the index hasn't been built yet, the response includes a
+      "createUrl" — click it to open the Firebase console with the index
+      spec pre-filled, then hit "Save". Firestore builds the index in the
+      background (minutes-to-hours). Click the same button again to
+      verify; once built, the response shows a real sample doc instead
+      of a create URL.
+    </p>
+    <div class="grid">
+
+      <div class="endpoint-card" data-id="probe-phone-timestamp">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">conversations/messages: (phoneNumber, timestamp desc)</div>
+            <div class="ep-desc">Used by <code>/api/dashboard/drill</code> when a phone filter is set.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/admin/probe-index?name=messages-phone-timestamp</code>
+        <div class="actions">
+          <button onclick="runProbeIndex(this, 'messages-phone-timestamp')">Probe</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="probe-sender-timestamp">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">conversations/messages: (sender, timestamp desc)</div>
+            <div class="ep-desc">Used by <code>/api/dashboard/drill</code> when a sender filter (Guest/AI Bot) is set.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/admin/probe-index?name=messages-sender-timestamp</code>
+        <div class="actions">
+          <button onclick="runProbeIndex(this, 'messages-sender-timestamp')">Probe</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+      <div class="endpoint-card" data-id="probe-nodeTag-timestamp">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">conversations/messages: (nodeTag, timestamp desc)</div>
+            <div class="ep-desc">Used by <code>/api/dashboard/drill</code> when a nodeTag filter is set, plus the "Repopulate scheduled injections" admin tool.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/admin/probe-index?name=messages-nodeTag-timestamp</code>
+        <div class="actions">
+          <button onclick="runProbeIndex(this, 'messages-nodeTag-timestamp')">Probe</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ 9. CLEANUP (DANGEROUS) ============ -->
   <div class="section">
     <h2>🧹 Cleanup <span class="tag">IRREVERSIBLE</span></h2>
     <div class="danger-banner">These wipe Firestore docs and call ReadyMode TPI. Use only on test phones.</div>
@@ -4516,6 +4581,47 @@ async function runRepopulateInjections(btn){
     headers: { "content-type": "application/json" },
     body: { dryRun },
   });
+}
+async function runProbeIndex(btn, name){
+  // Composite-index probe. Fires the query and renders one of two
+  // outcomes:
+  //   - status="index_needed": surfaces the Firebase console create-URL
+  //     as a single clickable link, plus the raw response so the user
+  //     can see what Firestore returned.
+  //   - status="ready": shows the elapsed ms + a one-doc sample so the
+  //     user can confirm the index is live.
+  const card = btn.closest(".endpoint-card");
+  btn.disabled = true;
+  const stat = card.querySelector(".actions .status");
+  stat.className = "status muted";
+  stat.textContent = "probing...";
+  const t0 = performance.now();
+  try {
+    const res = await fetch("/api/admin/probe-index?name=" + encodeURIComponent(name));
+    const ms = Math.round(performance.now() - t0);
+    const body = await res.json();
+    const resp = card.querySelector(".resp");
+    const pre = resp.querySelector("pre");
+    resp.classList.add("show");
+    if (body.status === "ready") {
+      stat.className = "status status-2xx";
+      stat.textContent = "ready · " + ms + "ms";
+      pre.textContent = JSON.stringify(body, null, 2);
+    } else if (body.status === "index_needed" && body.createUrl) {
+      stat.className = "status status-4xx";
+      stat.textContent = "index needed — see createUrl ↓";
+      const linkLine = "👉 Click to create the index in Firebase console:\\n  " + body.createUrl + "\\n\\n";
+      pre.textContent = linkLine + JSON.stringify(body, null, 2);
+    } else {
+      stat.className = "status status-5xx";
+      stat.textContent = body.status || "error";
+      pre.textContent = JSON.stringify(body, null, 2);
+    }
+  } catch (err) {
+    showError(card, err);
+  } finally {
+    btn.disabled = false;
+  }
 }
 async function runPullReadymode(btn){
   const card = btn.closest(".endpoint-card");
