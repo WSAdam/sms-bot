@@ -81,6 +81,17 @@ export const handler = define.handlers({
       ? etDaysInRange(startDate, easternDateString())
       : null;
 
+    // For a date-filtered request, also pull Guest messages in the
+    // window so we can compute date-filtered peopleReplied. Otherwise
+    // the Daily Activity card shows the LIFETIME reply count which
+    // looks inconsistent against "0 Total Texts" when no sends happened
+    // in the window (2026-05-22 dashboard showed "0 Total Texts" and
+    // "590 People Replied" simultaneously — see the screenshot).
+    //
+    // Composite index `(sender asc, timestamp desc)` covers this query.
+    // limit 5000 is a generous safety cap; range filtering is done
+    // client-side against the desc-sorted result so the orderBy + a
+    // single equality filter is all Firestore needs from us.
     const [
       lifetimeDoc,
       kvBreakdownDoc,
@@ -90,6 +101,7 @@ export const handler = define.handlers({
       uniqueGuestsList,
       recentMessages,
       dailyDocs,
+      guestMessagesInRange,
     ] = await Promise.all([
       db.get(metricsLifetimeDocPath()),
       db.get(metricsKvBreakdownDocPath()),
@@ -104,6 +116,15 @@ export const handler = define.handlers({
       dateDays
         ? Promise.all(dateDays.map((d) => db.get(metricsDailyDocPath(d))))
         : Promise.resolve([] as Array<Record<string, unknown> | null>),
+      haveDateFilter
+        ? db.list(conversationsCollection, {
+          where: { field: "sender", op: "==", value: "Guest" },
+          orderBy: { field: "timestamp", dir: "desc" },
+          limit: 5_000,
+        })
+        : Promise.resolve(
+          [] as Array<{ id: string; data: Record<string, unknown> }>,
+        ),
     ]);
 
     // ------------------------------------------------------------------
@@ -180,6 +201,40 @@ export const handler = define.handlers({
       }
     }
 
+    // Date-filtered peopleReplied: dedupe Guest messages by phoneNumber
+    // within the configured timestamp range. Without this the Daily
+    // Activity card would show the lifetime reply count (590) next to
+    // "0 Total Texts" which makes no sense to a human reading the row.
+    let peopleRepliedInRange = peopleRepliedLifetime;
+    if (haveDateFilter) {
+      // ET 00:00 of startDate → ET 23:59:59 of endDate (or today if
+      // endDate omitted). Stringified ISO so we compare against the
+      // doc's stored timestamp without re-parsing.
+      const startIso = startDate
+        ? new Date(`${startDate}T00:00:00-04:00`).toISOString()
+        : null;
+      const endIso = endDate
+        ? new Date(`${endDate}T23:59:59-04:00`).toISOString()
+        : null;
+      const repliedPhones = new Set<string>();
+      for (const e of guestMessagesInRange) {
+        const m = e.data as unknown as ConversationMessage;
+        const phone = m.phoneNumber;
+        if (!phone || isExcludedFromReporting(phone)) {
+          continue;
+        }
+        const ts = m.timestamp ?? "";
+        if (endIso && ts > endIso) {
+          continue; // newer than window end — skip
+        }
+        if (startIso && ts < startIso) {
+          break; // older than window start — desc sort, done
+        }
+        repliedPhones.add(phone);
+      }
+      peopleRepliedInRange = repliedPhones.size;
+    }
+
     // ------------------------------------------------------------------
     // Recent activity feed — 50 newest messages from the indexed sort.
     // Excluded phones filtered in-memory on the bounded result.
@@ -229,7 +284,7 @@ export const handler = define.handlers({
         textsSent: dateTextsSent,
         uniquePhonesSent: dateTextsSent, // No per-day unique counter yet — use total
         initialTextsSent: dateTextsSent,
-        peopleReplied: peopleRepliedLifetime,
+        peopleReplied: peopleRepliedInRange,
         appointmentsSet: haveDateFilter
           ? dateAppointmentsSet
           : lifetimeAppointmentsBooked,
