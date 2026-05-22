@@ -41,36 +41,45 @@ type DenoCron = (
 const denoCron = (Deno as unknown as { cron?: DenoCron }).cron;
 
 if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
+  // Cron handler shape note: we wrap every handler as a plain `async
+  // () => { try { await ... } catch { ... } }` rather than a chained
+  // `() => recordCronRun(...).catch(...)`. The chained form works in
+  // theory but Deno Deploy's behavior with that shape was suspect
+  // around 2026-05-22 (every-minute cron was registered but never
+  // logged ANY output — including its own ⏰ tick log). The plain-
+  // async pattern is also easier to debug because each handler logs
+  // a `[cron-tick]` line on entry so we can see in Deno Deploy logs
+  // whether the handler fired at all, separately from whether the
+  // marker write succeeded.
+
   // Every minute: fire any scheduled injections whose eventTime <= now.
-  denoCron(
-    "scheduled-injection-sweep",
-    "* * * * *",
-    () =>
-      recordCronRun("scheduled-injection-sweep", async () => {
+  denoCron("scheduled-injection-sweep", "* * * * *", async () => {
+    console.log(
+      `[cron-tick] scheduled-injection-sweep ${new Date().toISOString()}`,
+    );
+    try {
+      await recordCronRun("scheduled-injection-sweep", async () => {
         const r = await sweepScheduledInjections("cron");
         console.log(
           `⏰ sweep: scanned=${r.scanned} fired=${r.fired} errors=${r.errors.length}`,
         );
-      }).catch((e) => {
-        // recordCronRun re-throws so the marker captures the failure; we
-        // swallow here so Deno.cron doesn't see an unhandled rejection.
-        console.error(`❌ sweep failed: ${(e as Error).message}`);
-      }),
-  );
+      });
+    } catch (e) {
+      console.error(`❌ sweep failed: ${(e as Error).message}`);
+    }
+  });
 
   // Once a day at 07:00 UTC = 2 AM EST (3 AM EDT). Pulls every Bland
   // conversation from the previous ET day and re-syncs each one against
   // Firestore. The reseed is safe: if Bland has fewer messages than we
   // have stored, we leave the existing docs alone.
-  denoCron(
-    "nightly-conversation-reseed",
-    "0 7 * * *",
-    () =>
-      recordCronRun("nightly-conversation-reseed", async () => {
+  denoCron("nightly-conversation-reseed", "0 7 * * *", async () => {
+    console.log(
+      `[cron-tick] nightly-conversation-reseed ${new Date().toISOString()}`,
+    );
+    try {
+      await recordCronRun("nightly-conversation-reseed", async () => {
         const { fromIso, toIso } = yesterdayEasternRange();
-        // The reseed + booking-scan share a marker — both are part of the
-        // same nightly tick. If either throws, the marker captures the
-        // first failure; otherwise both ran successfully.
         const r = await reseedConversationsByDateRange(fromIso, toIso);
         console.log(
           `⏰ nightly conversation reseed: bland=${r.blandConversations} ` +
@@ -83,26 +92,25 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
             `proposed=${s.proposed} applied=${s.applied} ` +
             `skippedExisting=${s.skippedExisting} skippedNoTime=${s.skippedNoTime} errored=${s.errored}`,
         );
-      }).catch((e) => {
-        console.error(
-          `❌ nightly reseed/booking-scan threw: ${(e as Error).message}`,
-        );
-      }),
-  );
+      });
+    } catch (e) {
+      console.error(
+        `❌ nightly reseed/booking-scan threw: ${(e as Error).message}`,
+      );
+    }
+  });
 
   // Once a day at 09:00 UTC = 4 AM EST (5 AM EDT during summer). Pulls
   // today's QB bookings and writes saleswithin7d markers for any matched
-  // scheduled injections. To change the schedule, edit the cron expression:
-  // "min hour day mon dow" — UTC time.
-  denoCron(
-    "daily-qb-sale-match",
-    "0 9 * * *",
-    () =>
-      recordCronRun("daily-qb-sale-match", async () => {
+  // scheduled injections.
+  denoCron("daily-qb-sale-match", "0 9 * * *", async () => {
+    console.log(
+      `[cron-tick] daily-qb-sale-match ${new Date().toISOString()}`,
+    );
+    try {
+      await recordCronRun("daily-qb-sale-match", async () => {
         const r = await runDailyQbSaleMatch();
         if (!r.ok) {
-          // Surface as a thrown error so the marker captures the failure
-          // (instead of recording status=ok with a soft-fail body).
           throw new Error(`daily QB cron failed: ${r.reason}`);
         }
         const s = r.summary!;
@@ -110,10 +118,11 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
           `⏰ daily QB cron: fetched=${s.fetchedFromReport} matched=${s.matched} ` +
             `skippedNoInjection=${s.skippedNoInjection} skippedOlderThan7Days=${s.skippedOlderThan7Days}`,
         );
-      }).catch((e) => {
-        console.error(`❌ daily QB cron threw: ${(e as Error).message}`);
-      }),
-  );
+      });
+    } catch (e) {
+      console.error(`❌ daily QB cron threw: ${(e as Error).message}`);
+    }
+  });
 
   // Every-minute tick. Reads cronConfig.report.timeOfDayEt + lastSentEtDate
   // to decide if it should send. This replaces the old fixed "15 9 * * *"
@@ -173,25 +182,30 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // "floor" for the dashboard's kvBreakdown sidebar — even if the
   // write-site increments drift (e.g. missed instrumentation on some
   // write path), this daily refresh corrects within 24 hours.
-  denoCron(
-    "metrics-kvbreakdown-refresh",
-    "0 6 * * *",
-    () =>
-      recordCronRun("metrics-kvbreakdown-refresh", async () => {
+  denoCron("metrics-kvbreakdown-refresh", "0 6 * * *", async () => {
+    console.log(
+      `[cron-tick] metrics-kvbreakdown-refresh ${new Date().toISOString()}`,
+    );
+    try {
+      await recordCronRun("metrics-kvbreakdown-refresh", async () => {
         const r = await refreshKvBreakdown();
         console.log(
           `⏰ kvBreakdown refresh: total=${r.total} duration=${r.durationMs}ms`,
         );
-      }).catch((e) => {
-        console.error(`❌ kvBreakdown refresh threw: ${(e as Error).message}`);
-      }),
-  );
+      });
+    } catch (e) {
+      console.error(`❌ kvBreakdown refresh threw: ${(e as Error).message}`);
+    }
+  });
 
-  denoCron(
-    "readymode-daily-pull",
-    "30 9 * * *",
-    () =>
-      recordCronRun("readymode-daily-pull", async () => {
+  // Once a day at 09:30 UTC = 5:30 AM EST. Pulls yesterday's full call
+  // log from the ReadyMode portal.
+  denoCron("readymode-daily-pull", "30 9 * * *", async () => {
+    console.log(
+      `[cron-tick] readymode-daily-pull ${new Date().toISOString()}`,
+    );
+    try {
+      await recordCronRun("readymode-daily-pull", async () => {
         const r = await scrapeReadymode();
         const errored = r.perDomain.filter((d) => d.error).length;
         console.log(
@@ -205,8 +219,9 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
         if (errored > 0) {
           throw new Error(`${errored} domain(s) errored — see logs`);
         }
-      }).catch((e) => {
-        console.error(`❌ readymode pull cron threw: ${(e as Error).message}`);
-      }),
-  );
+      });
+    } catch (e) {
+      console.error(`❌ readymode pull cron threw: ${(e as Error).message}`);
+    }
+  });
 }

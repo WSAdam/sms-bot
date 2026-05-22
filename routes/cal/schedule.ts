@@ -22,6 +22,7 @@ import { scheduleInjection } from "@shared/services/injections/schedule.ts";
 import * as orchestrator from "@shared/services/orchestrator/service.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
+import { normalizeAppointmentTime } from "@shared/util/time.ts";
 
 export const handler = define.handlers({
   async POST(ctx) {
@@ -55,13 +56,25 @@ export const handler = define.handlers({
       return Response.json({ error: "Invalid phone" }, { status: 400 });
     }
 
+    // Stamp the customer's agreed time with an explicit timezone before
+    // anything else reads it. Background: Bland's pathway historically
+    // sent body.startTime as a TZ-naive ISO string ("2026-05-19T12:00:00")
+    // representing the customer's local wall-clock time. JavaScript reads
+    // that as UTC, so "12 pm" became 12 pm UTC = 8 am EDT in storage and
+    // the sweep would dial 4 hours early. Confirmed root cause for
+    // 7164674843 + several other stuck pendings as of 2026-05-22.
+    const normalizedStartTime = normalizeAppointmentTime(
+      body.startTime,
+      body.timeZone,
+    );
+
     let bookingUid = "CAL_FAILED_BUT_INJECTION_SCHEDULED";
     let bookingSuccess = false;
     try {
       const r = await cal.createBooking({
         email: body.email,
         name: body.name,
-        startTime: body.startTime,
+        startTime: normalizedStartTime,
         timeZone: body.timeZone,
         metadata: { phone10 },
       });
@@ -74,10 +87,10 @@ export const handler = define.handlers({
       );
     }
 
-    await scheduleInjection(phone10, body.startTime);
+    await scheduleInjection(phone10, normalizedStartTime);
 
     const callId = body.conversationId ?? `appt_${bookingUid}`;
-    const dateStr = new Date(body.startTime).toLocaleString("en-US", {
+    const dateStr = new Date(normalizedStartTime).toLocaleString("en-US", {
       month: "short",
       day: "numeric",
       hour: "numeric",
@@ -105,7 +118,7 @@ export const handler = define.handlers({
     await orchestrator.logEvent(phone10, {
       action: "SCHEDULE_TIMER",
       domain: DialerDomain.ODR,
-      details: `Scheduled for ${body.startTime}`,
+      details: `Scheduled for ${normalizedStartTime}`,
     });
 
     await orchestrator.updatePointer(phone10, {
@@ -121,7 +134,7 @@ export const handler = define.handlers({
       success: true,
       bookingSuccess,
       bookingUid,
-      scheduledTime: body.startTime,
+      scheduledTime: normalizedStartTime,
       message: bookingSuccess
         ? "Cal.com Appointment and SMS Injection Scheduled Successfully"
         : "SMS Injection Scheduled (Cal.com booking failed but injection will proceed)",

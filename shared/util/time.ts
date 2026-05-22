@@ -15,6 +15,67 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+// Stamp a customer-agreed appointment time with an explicit timezone so
+// the sweep doesn't fire 4 hours early. Background: Bland's pathway has
+// historically sent `startTime: "2026-05-19T12:00:00"` (no Z, no
+// ±HH:MM) representing the customer's local time. `new Date(...)` on a
+// TZ-naive ISO string interprets it as UTC, so "12 pm" the customer
+// said becomes 12 pm UTC = 8 am EDT in our storage — and that's when
+// the sweep dials. Customer was unreachable, sale lost.
+//
+// Inputs we tolerate:
+//   - "2026-05-19T12:00:00Z"          — explicit UTC, already correct
+//   - "2026-05-19T12:00:00-04:00"     — explicit offset, already correct
+//   - "2026-05-19T12:00:00"           — TZ-naive; we apply the supplied
+//                                       timezone (or default to ET)
+//
+// Output is always a canonical UTC ISO string (toISOString) so every
+// downstream reader interprets it identically — no string-format
+// ambiguity, no JS "is local or UTC" coin-flip.
+export function normalizeAppointmentTime(
+  raw: string,
+  tz: string | undefined,
+): string {
+  if (!raw) return raw;
+  const trimmed = raw.trim();
+  const hasTzMarker = /Z$/.test(trimmed) ||
+    /[+-]\d{2}:?\d{2}$/.test(trimmed);
+  if (hasTzMarker) {
+    // Already unambiguous — just canonicalize to UTC ISO.
+    const ms = new Date(trimmed).getTime();
+    if (!Number.isFinite(ms)) return trimmed;
+    return new Date(ms).toISOString();
+  }
+  // TZ-naive — interpret as the customer's local wall-clock in `tz`
+  // (default ET, the operational base time zone for this bot).
+  const tzName = tz && tz.length > 0 ? tz : EASTERN_TZ;
+  // Use the formatToParts approach: compute what UTC offset applies in
+  // `tzName` AT the given wall-clock moment, then subtract that offset
+  // to get the correct UTC ms. Handles DST transitions correctly.
+  const naive = new Date(`${trimmed}Z`); // treat as UTC first
+  if (!Number.isFinite(naive.getTime())) return trimmed;
+  // Find the offset the target tz applies at this wall-clock moment.
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tzName,
+    timeZoneName: "shortOffset",
+  });
+  const parts = fmt.formatToParts(naive);
+  const offsetPart = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  // shortOffset is like "GMT-4" or "GMT-04:00" or "GMT". Parse hours.
+  const m = offsetPart.match(/GMT([+-]\d+)(?::(\d{2}))?/);
+  let offsetMinutes = 0;
+  if (m) {
+    const h = parseInt(m[1], 10);
+    const min = m[2] ? parseInt(m[2], 10) * Math.sign(h || 1) : 0;
+    offsetMinutes = h * 60 + min;
+  }
+  // Subtract the tz's offset from the wall-clock-as-UTC interpretation
+  // to land on actual UTC. (Eastern is -4 in EDT, so 12 pm ET wall =
+  // 12 pm UTC interpretation minus -4h = 4 pm UTC.)
+  const realMs = naive.getTime() - offsetMinutes * 60_000;
+  return new Date(realMs).toISOString();
+}
+
 // ISO date (YYYY-MM-DD) of the Monday 00:00 ET that begins the week
 // containing `date`. Used as the partition key for weekly recipient
 // markers. Approximated using -4h (EDT) — off by an hour around DST
