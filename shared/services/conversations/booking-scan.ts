@@ -20,6 +20,7 @@
 
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
+  conversationsCollection,
   guestActivatedDocPath,
   injectionHistoryCollection,
   injectionHistoryDocPath,
@@ -29,6 +30,7 @@ import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import * as bland from "@shared/services/bland/client.ts";
 import { scheduleInjection } from "@shared/services/injections/schedule.ts";
 import { injectionHistoryDocId } from "@shared/util/id.ts";
+import type { ConversationMessage } from "@shared/types/conversation.ts";
 
 const MONTHS: Record<string, number> = {
   jan: 0,
@@ -165,18 +167,15 @@ function nextOccurrenceFromMessages(
     const text = msgs[i]?.message ?? "";
     if (hh < 0) {
       const tlower = text.toLowerCase();
+      const who = senderIsGuest(msgs[i].sender) ? "guest" : "bot";
       if (/\bnoon\b/.test(tlower)) {
         hh = 12;
         mm = 0;
-        source = `[${
-          (msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"
-        }] ${text.slice(0, 80)}`;
+        source = `[${who}] ${text.slice(0, 80)}`;
       } else if (/\bmidnight\b/.test(tlower)) {
         hh = 0;
         mm = 0;
-        source = `[${
-          (msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"
-        }] ${text.slice(0, 80)}`;
+        source = `[${who}] ${text.slice(0, 80)}`;
       } else {
         const tm = text.match(TIME_RE);
         if (tm) {
@@ -190,9 +189,7 @@ function nextOccurrenceFromMessages(
           if (ampm.startsWith("A") && h === 12) h = 0;
           hh = h;
           mm = minute;
-          source = `[${
-            (msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"
-          }] ${text.slice(0, 80)}`;
+          source = `[${who}] ${text.slice(0, 80)}`;
         }
       }
     }
@@ -242,6 +239,17 @@ function nextOccurrenceFromMessages(
   return null;
 }
 
+// `senderIsGuest` accepts both Bland's "USER"/"ASSISTANT" enum (from
+// live API responses) and Firestore's "Guest"/"AI Bot" enum (stored
+// on every conversation message). The new Firestore-driven scan path
+// passes the latter; the kept-for-fallback Bland API call path used to
+// pass the former. Booking signals come from the bot — we return false
+// when the message is from the customer.
+function senderIsGuest(s: string | undefined): boolean {
+  const u = (s ?? "").toUpperCase();
+  return u === "USER" || u === "GUEST";
+}
+
 function detectSignal(
   msgs: BlandMsg[],
   idx: number,
@@ -250,10 +258,7 @@ function detectSignal(
   | null {
   const m = msgs[idx];
   if (!m) return null;
-  const sender = (m.sender ?? "").toUpperCase();
-  // Bland's API uses USER for guest, ASSISTANT (or anything else) for bot.
-  // Booking confirmations come from the bot.
-  if (sender === "USER") return null;
+  if (senderIsGuest(m.sender)) return null;
   const text = m.message ?? "";
   const ts = m.created_at ?? new Date().toISOString();
   if (/locked\s+in/i.test(text)) return { signal: "locked_in", signalAt: ts };
@@ -270,15 +275,43 @@ export async function scanConversationsForBookings(
   force: boolean = false,
 ): Promise<BookingScanSummary> {
   const db = getFirestoreClient();
-  // Pre-fix this loaded the entire injectionhistory + guestactivated
-  // collections (50k each) once at start. Now per-conversation lookups
-  // hit single docs / narrow where queries. For ~50-200 conversations
-  // per nightly tick, total reads stay in the low hundreds. See
-  // firestore-safety.md.
+  // Pre-fix this called bland.listConversationsByDateRange + one
+  // bland.getConversation(callId) PER conversation — 1,200 sequential
+  // Bland API calls for a 30-day window, ~10 min wall time, 503s on
+  // Deno Deploy. Now: one Firestore list of messages in the window,
+  // grouped by (phoneNumber, callId) in memory. Zero Bland calls for
+  // signal detection. Bland is only contacted later, and ONLY for
+  // conversations with a detected signal — to fetch the structured
+  // variables.Desired_Time field (still the highest-confidence
+  // appointment time source — see comment near getBlandDesiredTime
+  // call below). Net: ~50-100 Bland calls instead of 1,200.
+  //
+  // Single-field auto-index on `timestamp` covers this query; the
+  // `<= toIso` upper bound is enforced client-side on the bounded
+  // slice.
+  const messages = await db.list(conversationsCollection, {
+    where: { field: "timestamp", op: ">=", value: fromIso },
+    orderBy: { field: "timestamp", dir: "asc" },
+    limit: 50_000,
+  });
 
-  const list = await bland.listConversationsByDateRange(fromIso, toIso);
+  // Group by (phoneNumber, callId) so each iteration of the main loop
+  // gets a full conversation message list — same shape detectSignal /
+  // parseDateFromText / nextOccurrenceFromMessages expect. We drop
+  // messages outside the upper window bound here.
+  const byConvo = new Map<string, ConversationMessage[]>();
+  for (const e of messages) {
+    const m = e.data as unknown as ConversationMessage;
+    if (!m.phoneNumber || !m.callId) continue;
+    if (toIso && (m.timestamp ?? "") > toIso) continue;
+    const key = `${m.phoneNumber}__${m.callId}`;
+    const arr = byConvo.get(key) ?? [];
+    arr.push(m);
+    byConvo.set(key, arr);
+  }
+
   console.log(
-    `[booking-scan] Bland returned ${list.conversations.length} conversations for ${fromIso} → ${
+    `[booking-scan] Firestore returned ${messages.length} messages across ${byConvo.size} conversations for ${fromIso} → ${
       toIso ?? "now"
     }`,
   );
@@ -286,7 +319,10 @@ export async function scanConversationsForBookings(
   const summary: BookingScanSummary = {
     fromIso,
     toIso: toIso ?? null,
-    blandConversations: list.conversations.length,
+    // Keep field name for backwards-compat with the response shape
+    // /test page renders. Same meaning post-refactor (count of distinct
+    // conversations in the window).
+    blandConversations: byConvo.size,
     proposed: 0,
     applied: 0,
     skippedExisting: 0,
@@ -297,11 +333,11 @@ export async function scanConversationsForBookings(
   };
 
   let processed = 0;
-  for (const c of list.conversations) {
+  for (const [key, convoMessages] of byConvo) {
     processed++;
-    const phoneRaw = String(c.user_number ?? "").replace(/\D/g, "");
-    const phone10 = phoneRaw.length >= 10 ? phoneRaw.slice(-10) : phoneRaw;
-    const callId = c.id;
+    const sep = key.indexOf("__");
+    const phone10 = sep > 0 ? key.slice(0, sep) : "";
+    const callId = sep > 0 ? key.slice(sep + 2) : "";
     if (!phone10 || phone10.length !== 10 || !callId) continue;
 
     // Test/excluded phones (Adam's, Edwin's, etc.) must never get a real
@@ -310,15 +346,15 @@ export async function scanConversationsForBookings(
     if (isExcludedFromReporting(phone10)) {
       summary.skippedExisting++;
       console.log(
-        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (excluded test phone)`,
+        `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (excluded test phone)`,
       );
       continue;
     }
 
     // Per-conversation lookup: has this callId already been recovered?
     // Indexed where(recoveredFromCallId == callId) — typically 0 docs,
-    // 1 if a prior scan recovered it. Replaces the pre-loaded full-
-    // collection map.
+    // 1 if a prior scan recovered it. Same guard that prevents this
+    // refactor from re-processing the same callId twice.
     const priorRecoveryMatches = await db.list(injectionHistoryCollection, {
       where: { field: "recoveredFromCallId", op: "==", value: callId },
       limit: 1,
@@ -327,60 +363,44 @@ export async function scanConversationsForBookings(
     if (existingRecoveryDocId && !force) {
       summary.skippedExisting++;
       console.log(
-        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already recovered)`,
+        `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (already recovered)`,
       );
       continue;
     }
     // Phone is already a credited sale — booking-scan has no business
     // reprocessing their booking conversation. Force=true still skips
     // because re-parsing won't change the credited record either.
-    // Single-doc lookup, replaces the pre-loaded `activatedPhones` set.
     const activatedDoc = await db.get(guestActivatedDocPath(phone10));
     if (activatedDoc) {
       summary.skippedExisting++;
       console.log(
-        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already activated)`,
+        `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (already activated)`,
       );
       continue;
     }
     // Also skip if there's already a pending scheduledinjection — the
     // proper Cal.com path or a previous scan run already wrote one and
-    // the sweep is going to handle it. With --force we still overwrite
-    // (set is non-merge anyway) so a re-parse can correct a stale guess.
+    // the sweep is going to handle it.
     const existingPending = await db.get(scheduledInjectionDocPath(phone10));
     if (existingPending && !force) {
       summary.skippedExisting++;
       console.log(
-        `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already pending)`,
+        `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (already pending)`,
       );
       continue;
     }
-    console.log(
-      `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  fetching ${
-        callId.slice(0, 8)
-      }…`,
-    );
 
-    let r;
-    try {
-      r = await bland.getConversation(callId);
-    } catch (e) {
-      summary.errored++;
-      summary.errors.push(`${phone10}/${callId}: ${(e as Error).message}`);
-      continue;
-    }
-    if (!r.ok || !r.json.data) {
-      summary.errored++;
-      summary.errors.push(
-        `${phone10}/${callId}: Bland ${r.status} ${
-          JSON.stringify(r.json.errors ?? "").slice(0, 100)
-        }`,
-      );
-      continue;
-    }
-    const msgs = (r.json.data.messages ?? []).filter((m: BlandMsg) =>
-      m.message && m.message !== "<Call Connected>"
-    ) as BlandMsg[];
+    // Map Firestore conversation messages into the BlandMsg shape the
+    // signal-detection + time-parsing functions below expect. No Bland
+    // API call here — every field we need (sender, message, timestamp)
+    // is already on the Firestore doc.
+    const msgs: BlandMsg[] = convoMessages
+      .map((m) => ({
+        sender: m.sender,
+        message: m.message,
+        created_at: m.timestamp,
+      }))
+      .filter((m) => m.message && m.message !== "<Call Connected>");
     msgs.sort((a, b) => (a.created_at ?? "") < (b.created_at ?? "") ? -1 : 1);
 
     // Find the FIRST signal (in conversation order) — earliest booking
@@ -427,9 +447,7 @@ export async function scanConversationsForBookings(
         );
         if (parsed) {
           eventTime = parsed;
-          const who = (candidate.sender ?? "").toUpperCase() === "USER"
-            ? "guest"
-            : "bot";
+          const who = senderIsGuest(candidate.sender) ? "guest" : "bot";
           eventTimeSource = `[${who}] ${
             (candidate.message ?? "").slice(0, 80)
           }`;
@@ -483,7 +501,7 @@ export async function scanConversationsForBookings(
         } — convo:`,
       );
       for (const m of msgs) {
-        const who = (m.sender ?? "").toUpperCase() === "USER" ? "guest" : "bot";
+        const who = senderIsGuest(m.sender) ? "guest" : "bot";
         console.log(
           `    [${(m.created_at ?? "").slice(11, 19)}] ${who}: ${
             (m.message ?? "").slice(0, 140)
