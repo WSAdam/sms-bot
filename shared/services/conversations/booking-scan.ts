@@ -77,6 +77,36 @@ export interface BookingScanSummary {
   errored: number;
   proposals: BookingProposal[];
   errors: string[];
+  // Per-conversation outcome trace. Populated for every conversation
+  // the scan saw — including ones with no signal — so the operator can
+  // pinpoint why a specific phone wasn't proposed. Capped at 2000
+  // entries to keep the response size sane on long-window scans.
+  outcomes?: BookingScanOutcome[];
+}
+
+export interface BookingScanOutcome {
+  phone10: string;
+  callId: string;
+  messageCount: number;
+  // What happened to this conversation:
+  // - "skipped-excluded"       — phone is in EXCLUDED_REPORTING_PHONES
+  // - "skipped-already-recovered" — prior booking-scan run already
+  //   wrote an injectionhistory doc for this callId
+  // - "skipped-activated"      — phone already has a guestactivated doc
+  // - "skipped-pending"        — phone has a pending scheduledinjection
+  // - "no-signal"              — conversation processed but no "locked in"
+  //   / "Appointment Scheduled" message detected
+  // - "proposed"               — signal detected, proposal added to the
+  //   proposals array
+  outcome:
+    | "skipped-excluded"
+    | "skipped-already-recovered"
+    | "skipped-activated"
+    | "skipped-pending"
+    | "no-signal"
+    | "proposed";
+  signal?: BookingProposal["signal"];
+  eventTime?: string | null;
 }
 
 // Match dates like "Jun 1, 9 AM", "June 1 at 9:00 AM", "Apr 30 3 PM" — a
@@ -330,7 +360,14 @@ export async function scanConversationsForBookings(
     errored: 0,
     proposals: [],
     errors: [],
+    outcomes: [],
   };
+  const OUTCOMES_CAP = 2_000;
+  function trace(o: BookingScanOutcome): void {
+    if (summary.outcomes && summary.outcomes.length < OUTCOMES_CAP) {
+      summary.outcomes.push(o);
+    }
+  }
 
   let processed = 0;
   for (const [key, convoMessages] of byConvo) {
@@ -345,6 +382,12 @@ export async function scanConversationsForBookings(
     // operator. Skip BEFORE any write/read.
     if (isExcludedFromReporting(phone10)) {
       summary.skippedExisting++;
+      trace({
+        phone10,
+        callId,
+        messageCount: convoMessages.length,
+        outcome: "skipped-excluded",
+      });
       console.log(
         `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (excluded test phone)`,
       );
@@ -362,6 +405,12 @@ export async function scanConversationsForBookings(
     const existingRecoveryDocId = priorRecoveryMatches[0]?.id;
     if (existingRecoveryDocId && !force) {
       summary.skippedExisting++;
+      trace({
+        phone10,
+        callId,
+        messageCount: convoMessages.length,
+        outcome: "skipped-already-recovered",
+      });
       console.log(
         `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (already recovered)`,
       );
@@ -373,6 +422,12 @@ export async function scanConversationsForBookings(
     const activatedDoc = await db.get(guestActivatedDocPath(phone10));
     if (activatedDoc) {
       summary.skippedExisting++;
+      trace({
+        phone10,
+        callId,
+        messageCount: convoMessages.length,
+        outcome: "skipped-activated",
+      });
       console.log(
         `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (already activated)`,
       );
@@ -384,6 +439,12 @@ export async function scanConversationsForBookings(
     const existingPending = await db.get(scheduledInjectionDocPath(phone10));
     if (existingPending && !force) {
       summary.skippedExisting++;
+      trace({
+        phone10,
+        callId,
+        messageCount: convoMessages.length,
+        outcome: "skipped-pending",
+      });
       console.log(
         `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (already pending)`,
       );
@@ -415,7 +476,15 @@ export async function scanConversationsForBookings(
         break;
       }
     }
-    if (!signalInfo || signalIdx < 0) continue;
+    if (!signalInfo || signalIdx < 0) {
+      trace({
+        phone10,
+        callId,
+        messageCount: convoMessages.length,
+        outcome: "no-signal",
+      });
+      continue;
+    }
 
     // Bland's pathway already parsed the appointment time and stored it
     // structured as `variables.Desired_Time` — way more reliable than
@@ -483,6 +552,14 @@ export async function scanConversationsForBookings(
     };
     summary.proposals.push(proposal);
     summary.proposed++;
+    trace({
+      phone10,
+      callId,
+      messageCount: convoMessages.length,
+      outcome: "proposed",
+      signal: signalInfo.signal,
+      eventTime,
+    });
 
     // Recovery write: when "locked in" hits, the booking is real even if
     // we can't parse the exact time. Cal.com knows the actual time but
