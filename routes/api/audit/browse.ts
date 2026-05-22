@@ -1,13 +1,21 @@
 // Paged audit list. Optional ?stage=<name> browses
 // sms-bot/auditstage/{stage}/* instead of the legacy global collection.
 // Date range filters processedAt.
+//
+// Pre-fix this listed 5000 docs and filtered + sorted in memory. Now uses
+// orderBy(processedAt desc) + database-side range filter on the same
+// field (single-field auto-index). Wire cost drops from 5000 docs/page
+// to ~pageSize docs/page.
 
 import { define } from "@/utils.ts";
 import {
   auditCollection,
   auditStageCollection,
 } from "@shared/firestore/paths.ts";
-import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import {
+  getFirestoreClient,
+  type ListOptions,
+} from "@shared/firestore/wrapper.ts";
 import { sanitizeStage } from "@shared/services/audit/service.ts";
 import type { AuditMarker } from "@shared/types/audit.ts";
 
@@ -18,14 +26,34 @@ export const handler = define.handlers({
     const startDate = url.searchParams.get("startDate");
     const endDate = url.searchParams.get("endDate");
     const recordIdFilter = url.searchParams.get("recordId");
-    const page = Number(url.searchParams.get("page") ?? 1);
-    const pageSize = Number(url.searchParams.get("pageSize") ?? 50);
+    const page = Math.max(1, Number(url.searchParams.get("page") ?? 1));
+    const pageSize = Math.max(
+      1,
+      Math.min(500, Number(url.searchParams.get("pageSize") ?? 50)),
+    );
 
-    const start = startDate ? new Date(`${startDate}T00:00:00`).getTime() : null;
-    const end = endDate ? new Date(`${endDate}T23:59:59.999`).getTime() : null;
+    const startIso = startDate
+      ? new Date(`${startDate}T00:00:00`).toISOString()
+      : null;
+    const endIso = endDate
+      ? new Date(`${endDate}T23:59:59.999`).toISOString()
+      : null;
 
     const parent = stage ? auditStageCollection(stage) : auditCollection;
-    const all = await getFirestoreClient().list(parent, { limit: 5000 });
+
+    // Database-side ordering + filtering. Date range maps to processedAt
+    // (the same field we order by, so no composite index needed).
+    const opts: ListOptions = {
+      orderBy: { field: "processedAt", dir: "desc" },
+      limit: Math.min(page * pageSize + pageSize, 2000),
+    };
+    if (startIso) {
+      opts.where = { field: "processedAt", op: ">=", value: startIso };
+    } else if (endIso) {
+      opts.where = { field: "processedAt", op: "<=", value: endIso };
+    }
+
+    const all = await getFirestoreClient().list(parent, opts);
 
     const records = all
       .map((e) => {
@@ -38,14 +66,18 @@ export const handler = define.handlers({
         };
       })
       .filter((r) => {
-        if (recordIdFilter && !r.recordId.includes(recordIdFilter)) return false;
-        const t = new Date(r.processedAt).getTime();
-        if (!Number.isFinite(t)) return false;
-        if (start && t < start) return false;
-        if (end && t > end) return false;
+        if (recordIdFilter && !r.recordId.includes(recordIdFilter)) {
+          return false;
+        }
+        // Date range second-pass — the database `where` already covered
+        // one side (start OR end); if both are present we filter the
+        // other side here (Firestore would otherwise require a composite
+        // index for two range filters on the same field, which isn't
+        // worth it for this admin tool).
+        if (startIso && r.processedAt < startIso) return false;
+        if (endIso && r.processedAt > endIso) return false;
         return true;
-      })
-      .sort((a, b) => (a.processedAt < b.processedAt ? 1 : -1));
+      });
 
     const total = records.length;
     const todayStart = new Date();

@@ -3,12 +3,14 @@
 // Source-of-truth: scheduledinjections (pending) ∪ injectionhistory (fired).
 // This is the canonical pipeline state — every booking that flows through
 // /sms-callback/appointment-booked writes a scheduledinjection, then the
-// cron sweep moves it to injectionhistory when it fires. Walking those two
-// collections gives us the true "appointments booked" set.
+// cron sweep moves it to injectionhistory when it fires.
 //
-// Previous version walked conversations for nodeTag="appointment scheduled"
-// — that signal vanished when Bland's pathway template changed and stopped
-// sending "Appointment Scheduled: X" messages, masking real bookings.
+// Pre-fix listed BOTH collections at 50_000 each on every page load, then
+// dedupes/sorts/paginates in memory. Now paginates injectionhistory with
+// orderBy(firedAt desc) + limit so the wire cost is ~pageSize docs.
+// scheduledinjections stays a full list because it's small (≤ few
+// hundred active records) and we need all of them to dedupe with history.
+// See firestore-safety.md.
 
 import { define } from "@/utils.ts";
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
@@ -18,7 +20,12 @@ import {
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 
-const LIST_LIMIT = 50_000;
+// scheduledinjections rarely exceeds a few hundred active records (it's
+// drained by the every-minute sweep). 5_000 is a generous safety ceiling
+// well below the legacy 50k. If this ever fires the safety rail in
+// wrapper.list(), it means we have a stuck sweep — investigate, don't
+// bump the cap.
+const PENDING_LIMIT = 5_000;
 
 interface AppointmentRow {
   phoneNumber: string;
@@ -41,13 +48,32 @@ export const handler = define.handlers({
       Math.min(500, Number(url.searchParams.get("pageSize") ?? 50)),
     );
 
-    const start = startDate ? new Date(`${startDate}T00:00:00`).getTime() : null;
-    const end = endDate ? new Date(`${endDate}T23:59:59.999`).getTime() : null;
+    const startIso = startDate
+      ? new Date(`${startDate}T00:00:00`).toISOString()
+      : null;
+    const endIso = endDate
+      ? new Date(`${endDate}T23:59:59.999`).toISOString()
+      : null;
 
     const db = getFirestoreClient();
+
+    // Build the history query. Date range maps to firedAt, since that's
+    // the canonical "when the appointment fired" timestamp. Auto-indexed
+    // single-field; no composite index needed for orderBy + single-field
+    // range filter on the same field.
+    const historyOpts: Parameters<typeof db.list>[1] = {
+      orderBy: { field: "firedAt", dir: "desc" },
+      limit: Math.min(page * pageSize + pageSize, 5000),
+    };
+    if (startIso) {
+      historyOpts.where = { field: "firedAt", op: ">=", value: startIso };
+    } else if (endIso) {
+      historyOpts.where = { field: "firedAt", op: "<=", value: endIso };
+    }
+
     const [pending, history] = await Promise.all([
-      db.list(scheduledInjectionsCollection, { limit: LIST_LIMIT }),
-      db.list(injectionHistoryCollection, { limit: LIST_LIMIT }),
+      db.list(scheduledInjectionsCollection, { limit: PENDING_LIMIT }),
+      db.list(injectionHistoryCollection, historyOpts),
     ]);
 
     const rows: AppointmentRow[] = [];
@@ -85,10 +111,10 @@ export const handler = define.handlers({
         ? data.eventTime
         : null;
       const firedAt = typeof data.firedAt === "string" ? data.firedAt : null;
-      const status =
-        typeof data.status === "string" && data.status.toLowerCase() !== "success"
-          ? "errored"
-          : "fired";
+      const status = typeof data.status === "string" &&
+          data.status.toLowerCase() !== "success"
+        ? "errored"
+        : "fired";
       rows.push({
         phoneNumber: phone10,
         eventTime,
@@ -114,8 +140,8 @@ export const handler = define.handlers({
       if (newT > curT) byPhone.set(r.phoneNumber, r);
     }
 
-    // Apply date range filter on bookedAt (when we received the booking),
-    // matching the dashboard's "Booked At" semantic.
+    const start = startIso ? new Date(startIso).getTime() : null;
+    const end = endIso ? new Date(endIso).getTime() : null;
     const filtered = [...byPhone.values()].filter((r) => {
       if (!r.bookedAt) return start == null && end == null;
       const t = new Date(r.bookedAt).getTime();
@@ -123,7 +149,10 @@ export const handler = define.handlers({
       if (start != null && t < start) return false;
       if (end != null && t > end) return false;
       return true;
-    }).sort((a, b) => (a.bookedAt && b.bookedAt && a.bookedAt < b.bookedAt ? 1 : -1));
+    }).sort((
+      a,
+      b,
+    ) => (a.bookedAt && b.bookedAt && a.bookedAt < b.bookedAt ? 1 : -1));
 
     const total = filtered.length;
     const items = filtered.slice((page - 1) * pageSize, page * pageSize);

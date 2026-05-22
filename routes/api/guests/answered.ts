@@ -14,20 +14,19 @@
 import { define } from "@/utils.ts";
 import {
   guestAnsweredDocPath,
-  injectionHistoryCollection,
-  scheduledInjectionDocPath,
+  injectedPhoneDocPath,
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
 async function phoneHasInjection(phone10: string): Promise<boolean> {
-  const db = getFirestoreClient();
-  // Pending scheduled injection (deleted on fire) — fastest single-doc check.
-  const pending = await db.get(scheduledInjectionDocPath(phone10));
-  if (pending) return true;
-  // Past fired injections — list one row from the prefix.
-  const history = await db.list(injectionHistoryCollection, { limit: 50_000 });
-  return history.some((e) => e.id.startsWith(`${phone10}__`));
+  // Single-doc lookup against the write-side injectedphones index. The
+  // index is populated by scheduleInjection on every booking, so any
+  // phone we've ever scheduled an injection for has a doc here. Pre-fix
+  // this scanned the entire injectionhistory collection (50k cap) on
+  // every dialer-answered webhook — see firestore-safety.md.
+  const marker = await getFirestoreClient().get(injectedPhoneDocPath(phone10));
+  return marker !== null;
 }
 
 async function markAnswered(rawPhone: unknown): Promise<Response> {

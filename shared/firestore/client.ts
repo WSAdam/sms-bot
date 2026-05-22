@@ -19,7 +19,9 @@ import { loadEnv } from "@shared/config/env.ts";
 const dynamicImport: (specifier: string) => Promise<any> = new Function(
   "specifier",
   "return import(specifier)",
-) as (specifier: string) => Promise<unknown> as (specifier: string) => Promise<unknown>;
+) as (specifier: string) => Promise<unknown> as (
+  specifier: string,
+) => Promise<unknown>;
 
 // We cache the in-flight Promise — not just the resolved value — so concurrent
 // callers during cold start all await the same single initialization. Without
@@ -80,7 +82,22 @@ export function getDb(): Promise<any> {
   return dbPromise;
 }
 
+// Exposes the firebase-admin/firestore module for callers that need
+// `FieldValue.increment(...)` / `FieldValue.serverTimestamp(...)`. Cached
+// at module level since the dynamic import is non-trivial. Importing the
+// module via the same `new Function` indirection used in `getDb` keeps
+// Vite's analyzer out of it (see top-of-file comment).
+// deno-lint-ignore no-explicit-any
+let adminFsPromise: Promise<any> | null = null;
+// deno-lint-ignore no-explicit-any
+export function getAdminFirestore(): Promise<any> {
+  if (adminFsPromise) return adminFsPromise;
+  adminFsPromise = dynamicImport("firebase-admin/firestore");
+  return adminFsPromise;
+}
+
 export function resetDbForTests(): void {
   appPromise = null;
   dbPromise = null;
+  adminFsPromise = null;
 }

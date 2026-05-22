@@ -9,10 +9,8 @@ import { define } from "@/utils.ts";
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import {
-  guestActivatedCollection,
   guestActivatedDocPath,
   guestAnsweredDocPath,
-  salesOutsideWindowCollection,
   salesOutsideWindowDocPath,
   salesWithin7dDocPath,
 } from "@shared/firestore/paths.ts";
@@ -83,13 +81,8 @@ export const handler = define.handlers({
     // Diagnostic: did this phone already exist in guestactivated? If yes,
     // the dashboard count won't go up after this claim — useful to surface
     // so we can stop debugging "missing" totals that aren't actually missing.
+    // Single-doc lookup, no whole-collection scan.
     const preActivated = await db.get(guestActivatedDocPath(phone10));
-    const preActivatedList = await db.list(guestActivatedCollection, {
-      limit: 50_000,
-    });
-    const preActivatedCount = preActivatedList.filter((e) =>
-      !isExcludedFromReporting(e.id)
-    ).length;
 
     await db.batch([
       {
@@ -126,29 +119,22 @@ export const handler = define.handlers({
     ]);
 
     // Verify the write actually persisted before responding so the UI can
-    // show a real before/after delta instead of the user wondering whether
-    // the claim "worked".
+    // show that the claim "worked". Pre-fix this did 3 × 50k-limit scans
+    // to compute before/after dashboard counts — overkill for a single-
+    // phone diagnostic. Replaced by single-doc presence checks: either
+    // it's there or it isn't, which is what the UI actually cares about.
     const postActivated = await db.get(guestActivatedDocPath(phone10));
-    const postActivatedList = await db.list(guestActivatedCollection, {
-      limit: 50_000,
-    });
-    const postActivatedCount = postActivatedList.filter((e) =>
-      !isExcludedFromReporting(e.id)
-    ).length;
-    const postOutsideList = await db.list(salesOutsideWindowCollection, {
-      limit: 50_000,
-    });
-    const postOutsideCount = postOutsideList.filter((e) =>
-      !isExcludedFromReporting(e.id)
-    ).length;
 
     const excluded = isExcludedFromReporting(phone10);
     const phoneAlreadyActivated = preActivated !== null;
     const phoneNowActivated = postActivated !== null;
-    const delta = postActivatedCount - preActivatedCount;
 
     console.log(
-      `[claim-outside-window] ✅ ${phone10} appt=${closestAppointmentAt ?? "?"} (${closestDaysDiff ?? "?"}d) office="${office ?? ""}" activator="${activator ?? ""}" — activatedCount ${preActivatedCount}→${postActivatedCount} (delta=${delta}) phoneAlreadyActivated=${phoneAlreadyActivated} excludedFromReporting=${excluded}`,
+      `[claim-outside-window] ✅ ${phone10} appt=${
+        closestAppointmentAt ?? "?"
+      } (${closestDaysDiff ?? "?"}d) office="${office ?? ""}" activator="${
+        activator ?? ""
+      }" — phoneAlreadyActivated=${phoneAlreadyActivated} phoneNowActivated=${phoneNowActivated} excludedFromReporting=${excluded}`,
     );
 
     return Response.json({
@@ -159,10 +145,6 @@ export const handler = define.handlers({
         excludedFromReporting: excluded,
         phoneAlreadyActivated,
         phoneNowActivated,
-        activatedCountBefore: preActivatedCount,
-        activatedCountAfter: postActivatedCount,
-        activatedDelta: delta,
-        outsideWindowCountAfter: postOutsideCount,
       },
     });
   },

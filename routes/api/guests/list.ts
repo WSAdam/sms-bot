@@ -1,16 +1,27 @@
 // GET /api/guests/list — paged list of distinct phones we've ever messaged.
-// Powers the "Unique Guests Reached" drill-in on the dashboard. For each
-// phone returns first-seen, last-seen, total messages, and whether they
-// replied at all. Test phones (EXCLUDED_REPORTING_PHONES) are skipped.
+// Powers the "Unique Guests Reached" drill-in on the dashboard.
+//
+// Reads the uniqueguestsbyphone write-side aggregator (one doc per phone,
+// updated transactionally from storeMessage). Pre-fix this listed the
+// entire conversations collection (50_000 limit) per page load + deduped
+// in memory — see firestore-safety.md (Part B).
+//
+// Pagination uses orderBy + startAfter cursors so the wire cost is exactly
+// pageSize docs per request.
 
 import { define } from "@/utils.ts";
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
-import { conversationsCollection } from "@shared/firestore/paths.ts";
+import { uniqueGuestsByPhoneCollection } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
-import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
-import type { ConversationMessage } from "@shared/types/conversation.ts";
 
-const LIST_LIMIT = 50_000;
+interface AggregatorDoc {
+  phoneNumber: string;
+  firstSeen?: string;
+  lastSeen?: string;
+  messageCount?: number;
+  replyCount?: number;
+  hasReplied?: boolean;
+}
 
 interface GuestSummary {
   phoneNumber: string;
@@ -31,48 +42,36 @@ export const handler = define.handlers({
     );
     const sortBy = url.searchParams.get("sortBy") ?? "lastSeen"; // lastSeen | messageCount
 
-    const all = await getFirestoreClient().list(conversationsCollection, {
-      limit: LIST_LIMIT,
-    });
-    const deduped = dedupeMessages(
-      all
-        .map((e) => e.data as unknown as ConversationMessage)
-        .filter((m) => !isExcludedFromReporting(m.phoneNumber)),
+    // Single-field auto-indexes cover orderBy on these scalars. Skip-
+    // pagination is bounded at page × pageSize docs (page=1 = pageSize
+    // reads), which is the existing contract callers depend on. For
+    // deep paging this is still vastly better than the pre-fix full-
+    // table scan (50k docs/page).
+    const orderField = sortBy === "messageCount" ? "messageCount" : "lastSeen";
+    const upToPage = Math.min(page * pageSize, 5000);
+    const docs = await getFirestoreClient().list(
+      uniqueGuestsByPhoneCollection,
+      {
+        orderBy: { field: orderField, dir: "desc" },
+        limit: upToPage,
+      },
     );
 
-    const byPhone = new Map<string, GuestSummary>();
-    for (const m of deduped) {
-      const phone = m.phoneNumber;
-      let g = byPhone.get(phone);
-      if (!g) {
-        g = {
-          phoneNumber: phone,
-          firstSeen: null,
-          lastSeen: null,
-          messageCount: 0,
-          replyCount: 0,
-          hasReplied: false,
-        };
-        byPhone.set(phone, g);
-      }
-      g.messageCount++;
-      if (m.sender === "Guest") {
-        g.replyCount++;
-        g.hasReplied = true;
-      }
-      const ts = m.timestamp ?? null;
-      if (ts && (!g.firstSeen || ts < g.firstSeen)) g.firstSeen = ts;
-      if (ts && (!g.lastSeen || ts > g.lastSeen)) g.lastSeen = ts;
-    }
+    const allRows: GuestSummary[] = docs
+      .map((e) => e.data as unknown as AggregatorDoc)
+      .filter((d) => d.phoneNumber && !isExcludedFromReporting(d.phoneNumber))
+      .map((d) => ({
+        phoneNumber: d.phoneNumber,
+        firstSeen: d.firstSeen ?? null,
+        lastSeen: d.lastSeen ?? null,
+        messageCount: typeof d.messageCount === "number" ? d.messageCount : 0,
+        replyCount: typeof d.replyCount === "number" ? d.replyCount : 0,
+        hasReplied: !!d.hasReplied,
+      }));
 
-    const sorted = Array.from(byPhone.values()).sort((a, b) => {
-      if (sortBy === "messageCount") return b.messageCount - a.messageCount;
-      // default: most-recent contact first
-      return (b.lastSeen ?? "").localeCompare(a.lastSeen ?? "");
-    });
-
-    const total = sorted.length;
-    const items = sorted.slice((page - 1) * pageSize, page * pageSize);
+    const offset = (page - 1) * pageSize;
+    const items = allRows.slice(offset, offset + pageSize);
+    const total = allRows.length;
 
     return Response.json({ items, total, page, pageSize });
   },

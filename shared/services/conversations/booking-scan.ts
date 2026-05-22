@@ -20,7 +20,7 @@
 
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
-  guestActivatedCollection,
+  guestActivatedDocPath,
   injectionHistoryCollection,
   injectionHistoryDocPath,
   scheduledInjectionDocPath,
@@ -31,8 +31,18 @@ import { scheduleInjection } from "@shared/services/injections/schedule.ts";
 import { injectionHistoryDocId } from "@shared/util/id.ts";
 
 const MONTHS: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
 };
 
 interface BlandMsg {
@@ -44,7 +54,10 @@ interface BlandMsg {
 export interface BookingProposal {
   phone10: string;
   callId: string;
-  signal: "locked_in" | "tag_appointment_scheduled" | "text_appointment_scheduled";
+  signal:
+    | "locked_in"
+    | "tag_appointment_scheduled"
+    | "text_appointment_scheduled";
   signalAt: string;
   eventTime: string | null;
   eventTimeSource: string | null;
@@ -80,9 +93,15 @@ const TZ_RE =
 
 function tzOffsetForToken(tok: string): string {
   const t = tok.toLowerCase();
-  if (t === "pst" || t === "pdt" || t === "pacific" || t === "pt") return "-07:00";
-  if (t === "mst" || t === "mdt" || t === "mountain" || t === "mt") return "-06:00";
-  if (t === "cst" || t === "cdt" || t === "central" || t === "ct") return "-05:00";
+  if (t === "pst" || t === "pdt" || t === "pacific" || t === "pt") {
+    return "-07:00";
+  }
+  if (t === "mst" || t === "mdt" || t === "mountain" || t === "mt") {
+    return "-06:00";
+  }
+  if (t === "cst" || t === "cdt" || t === "central" || t === "ct") {
+    return "-05:00";
+  }
   // ET default
   return "-04:00";
 }
@@ -104,8 +123,11 @@ function parseDateFromText(text: string, refIso: string): string | null {
     const year = refDate.getUTCFullYear() + yearOffset;
     // Build the ISO assuming ET (-04:00 EDT). EST (-05:00) edge cases drift
     // by 1 hour but are good enough for cron sweep targeting.
-    const iso =
-      `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(parseInt(dayStr, 10)).padStart(2, "0")}T${String(h).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-04:00`;
+    const iso = `${year}-${String(monthIdx + 1).padStart(2, "0")}-${
+      String(parseInt(dayStr, 10)).padStart(2, "0")
+    }T${String(h).padStart(2, "0")}:${
+      String(minute).padStart(2, "0")
+    }:00-04:00`;
     const dt = new Date(iso);
     if (!Number.isFinite(dt.getTime())) continue;
     // Allow up to 12 h before signal time (for late-evening bookings into
@@ -126,7 +148,13 @@ function nextOccurrenceFromMessages(
   msgs: BlandMsg[],
   signalIdx: number,
 ):
-  | { eventTime: string; tzOffset: string; hh: number; mm: number; source: string }
+  | {
+    eventTime: string;
+    tzOffset: string;
+    hh: number;
+    mm: number;
+    source: string;
+  }
   | null {
   let hh = -1;
   let mm = 0;
@@ -140,22 +168,31 @@ function nextOccurrenceFromMessages(
       if (/\bnoon\b/.test(tlower)) {
         hh = 12;
         mm = 0;
-        source = `[${(msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"}] ${text.slice(0, 80)}`;
+        source = `[${
+          (msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"
+        }] ${text.slice(0, 80)}`;
       } else if (/\bmidnight\b/.test(tlower)) {
         hh = 0;
         mm = 0;
-        source = `[${(msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"}] ${text.slice(0, 80)}`;
+        source = `[${
+          (msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"
+        }] ${text.slice(0, 80)}`;
       } else {
         const tm = text.match(TIME_RE);
         if (tm) {
           let h = parseInt(tm[1], 10);
           const minute = tm[2] ? parseInt(tm[2], 10) : 0;
-          const ampm = tm[3].toUpperCase().replace(/\./g, "").replace(/M$/, "M");
+          const ampm = tm[3].toUpperCase().replace(/\./g, "").replace(
+            /M$/,
+            "M",
+          );
           if (ampm.startsWith("P") && h < 12) h += 12;
           if (ampm.startsWith("A") && h === 12) h = 0;
           hh = h;
           mm = minute;
-          source = `[${(msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"}] ${text.slice(0, 80)}`;
+          source = `[${
+            (msgs[i].sender ?? "").toUpperCase() === "USER" ? "guest" : "bot"
+          }] ${text.slice(0, 80)}`;
         }
       }
     }
@@ -181,11 +218,20 @@ function nextOccurrenceFromMessages(
   let m = localNow.getUTCMonth();
   let d = localNow.getUTCDate();
   for (let bump = 0; bump < 30; bump++) {
-    const isoLocal =
-      `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00${tzOffset}`;
+    const isoLocal = `${y}-${String(m + 1).padStart(2, "0")}-${
+      String(d).padStart(2, "0")
+    }T${String(hh).padStart(2, "0")}:${
+      String(mm).padStart(2, "0")
+    }:00${tzOffset}`;
     const dt = new Date(isoLocal);
     if (Number.isFinite(dt.getTime()) && dt.getTime() > nowMs) {
-      return { eventTime: dt.toISOString(), tzOffset, hh, mm, source: source ?? "" };
+      return {
+        eventTime: dt.toISOString(),
+        tzOffset,
+        hh,
+        mm,
+        source: source ?? "",
+      };
     }
     // bump by 1 day
     const next = new Date(Date.UTC(y, m, d + 1));
@@ -224,32 +270,17 @@ export async function scanConversationsForBookings(
   force: boolean = false,
 ): Promise<BookingScanSummary> {
   const db = getFirestoreClient();
-  // Pre-load (phone, callId) pairs we've already recovered via this scan
-  // so re-runs are idempotent. With force=true we'll re-process them
-  // anyway and DELETE the stale recovery doc before writing the new one,
-  // so the count doesn't double. Cron-fired injections (firedBy="cron")
-  // and manual fires don't block recovery — multiple bookings per phone
-  // over time are real and shouldn't be collapsed.
-  const history = await db.list(injectionHistoryCollection, { limit: 50_000 });
-  const recoveredDocIdByCallId = new Map<string, string>();
-  for (const e of history) {
-    const data = e.data as Record<string, unknown>;
-    if (data.firedBy === "booking-scan-recovery" && typeof data.recoveredFromCallId === "string") {
-      recoveredDocIdByCallId.set(data.recoveredFromCallId, e.id);
-    }
-  }
-
-  // Phones already credited as sales — skip them entirely. Without this
-  // guard, booking-scan re-processes their old conversations and
-  // re-creates stale scheduledinjections that the sweep would later try
-  // to fire (e.g. 2195884368: sale credited 5/6, then booking-scan on
-  // 5/7 wrote a bogus 5/7 inject from the same convo).
-  const activated = await db.list(guestActivatedCollection, { limit: 50_000 });
-  const activatedPhones = new Set<string>(activated.map((e) => e.id));
+  // Pre-fix this loaded the entire injectionhistory + guestactivated
+  // collections (50k each) once at start. Now per-conversation lookups
+  // hit single docs / narrow where queries. For ~50-200 conversations
+  // per nightly tick, total reads stay in the low hundreds. See
+  // firestore-safety.md.
 
   const list = await bland.listConversationsByDateRange(fromIso, toIso);
   console.log(
-    `[booking-scan] Bland returned ${list.conversations.length} conversations for ${fromIso} → ${toIso ?? "now"}`,
+    `[booking-scan] Bland returned ${list.conversations.length} conversations for ${fromIso} → ${
+      toIso ?? "now"
+    }`,
   );
 
   const summary: BookingScanSummary = {
@@ -284,7 +315,16 @@ export async function scanConversationsForBookings(
       continue;
     }
 
-    if (recoveredDocIdByCallId.has(callId) && !force) {
+    // Per-conversation lookup: has this callId already been recovered?
+    // Indexed where(recoveredFromCallId == callId) — typically 0 docs,
+    // 1 if a prior scan recovered it. Replaces the pre-loaded full-
+    // collection map.
+    const priorRecoveryMatches = await db.list(injectionHistoryCollection, {
+      where: { field: "recoveredFromCallId", op: "==", value: callId },
+      limit: 1,
+    });
+    const existingRecoveryDocId = priorRecoveryMatches[0]?.id;
+    if (existingRecoveryDocId && !force) {
       summary.skippedExisting++;
       console.log(
         `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already recovered)`,
@@ -294,7 +334,9 @@ export async function scanConversationsForBookings(
     // Phone is already a credited sale — booking-scan has no business
     // reprocessing their booking conversation. Force=true still skips
     // because re-parsing won't change the credited record either.
-    if (activatedPhones.has(phone10)) {
+    // Single-doc lookup, replaces the pre-loaded `activatedPhones` set.
+    const activatedDoc = await db.get(guestActivatedDocPath(phone10));
+    if (activatedDoc) {
       summary.skippedExisting++;
       console.log(
         `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  skipped (already activated)`,
@@ -314,7 +356,9 @@ export async function scanConversationsForBookings(
       continue;
     }
     console.log(
-      `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  fetching ${callId.slice(0, 8)}…`,
+      `[booking-scan] [${processed}/${list.conversations.length}] ${phone10}  fetching ${
+        callId.slice(0, 8)
+      }…`,
     );
 
     let r;
@@ -328,7 +372,9 @@ export async function scanConversationsForBookings(
     if (!r.ok || !r.json.data) {
       summary.errored++;
       summary.errors.push(
-        `${phone10}/${callId}: Bland ${r.status} ${JSON.stringify(r.json.errors ?? "").slice(0, 100)}`,
+        `${phone10}/${callId}: Bland ${r.status} ${
+          JSON.stringify(r.json.errors ?? "").slice(0, 100)
+        }`,
       );
       continue;
     }
@@ -384,7 +430,9 @@ export async function scanConversationsForBookings(
           const who = (candidate.sender ?? "").toUpperCase() === "USER"
             ? "guest"
             : "bot";
-          eventTimeSource = `[${who}] ${(candidate.message ?? "").slice(0, 80)}`;
+          eventTimeSource = `[${who}] ${
+            (candidate.message ?? "").slice(0, 80)
+          }`;
           break;
         }
       }
@@ -397,7 +445,9 @@ export async function scanConversationsForBookings(
       const next = nextOccurrenceFromMessages(msgs, signalIdx);
       if (next) {
         eventTime = next.eventTime;
-        eventTimeSource = `time-only ${next.hh}:${String(next.mm).padStart(2, "0")} ${next.tzOffset} from ${next.source}`;
+        eventTimeSource = `time-only ${next.hh}:${
+          String(next.mm).padStart(2, "0")
+        } ${next.tzOffset} from ${next.source}`;
       }
     }
     if (eventTime && new Date(eventTime).getTime() > Date.now()) {
@@ -428,12 +478,16 @@ export async function scanConversationsForBookings(
       // Still log the convo for visibility — useful when auditing why
       // a booking was recovered with a placeholder eventTime.
       console.log(
-        `[booking-scan] [no-time placeholder] ${phone10}/${callId.slice(0, 8)} — convo:`,
+        `[booking-scan] [no-time placeholder] ${phone10}/${
+          callId.slice(0, 8)
+        } — convo:`,
       );
       for (const m of msgs) {
         const who = (m.sender ?? "").toUpperCase() === "USER" ? "guest" : "bot";
         console.log(
-          `    [${(m.created_at ?? "").slice(11, 19)}] ${who}: ${(m.message ?? "").slice(0, 140)}`,
+          `    [${(m.created_at ?? "").slice(11, 19)}] ${who}: ${
+            (m.message ?? "").slice(0, 140)
+          }`,
         );
       }
     }
@@ -441,11 +495,14 @@ export async function scanConversationsForBookings(
       try {
         // With --force, drop the stale recovery doc first so the dashboard
         // count doesn't double up (history-placeholder + new write).
-        if (force && recoveredDocIdByCallId.has(callId)) {
-          const oldId = recoveredDocIdByCallId.get(callId)!;
-          await db.delete(`${injectionHistoryCollection}/${oldId}`);
+        if (force && existingRecoveryDocId) {
+          await db.delete(
+            `${injectionHistoryCollection}/${existingRecoveryDocId}`,
+          );
           console.log(
-            `[booking-scan] [force] deleted stale recovery ${oldId.slice(0, 30)}…`,
+            `[booking-scan] [force] deleted stale recovery ${
+              existingRecoveryDocId.slice(0, 30)
+            }…`,
           );
         }
         if (eventTimeIsFuture && eventTime) {
@@ -454,7 +511,9 @@ export async function scanConversationsForBookings(
           await scheduleInjection(phone10, eventTime, false);
           summary.applied++;
           console.log(
-            `[booking-scan] ✅ ${phone10} scheduledinjection eventTime=${eventTime} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
+            `[booking-scan] ✅ ${phone10} scheduledinjection eventTime=${eventTime} signal=${proposal.signal} via=${
+              callId.slice(0, 8)
+            }…`,
           );
         } else {
           // No parseable time OR time was in the past — record in history
@@ -485,7 +544,9 @@ export async function scanConversationsForBookings(
           });
           summary.applied++;
           console.log(
-            `[booking-scan] ✅ ${phone10} history-placeholder eventTime=${eventTimeFinal}${isPlaceholderTime ? " (unknown)" : ""} signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
+            `[booking-scan] ✅ ${phone10} history-placeholder eventTime=${eventTimeFinal}${
+              isPlaceholderTime ? " (unknown)" : ""
+            } signal=${proposal.signal} via=${callId.slice(0, 8)}…`,
           );
         }
       } catch (e) {
@@ -515,7 +576,7 @@ export function yesterdayEasternRange(): { fromIso: string; toIso: string } {
   const mm = String(yesterday.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(yesterday.getUTCDate()).padStart(2, "0");
   const fromIso = `${yy}-${mm}-${dd}T05:00:00.000Z`;
-  const toIso =
-    new Date(new Date(fromIso).getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const toIso = new Date(new Date(fromIso).getTime() + 24 * 60 * 60 * 1000)
+    .toISOString();
   return { fromIso, toIso };
 }

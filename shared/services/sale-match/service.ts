@@ -6,13 +6,14 @@
 import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import {
-  guestActivatedCollection,
   guestActivatedDocPath,
   guestAnsweredDocPath,
   injectionHistoryCollection,
+  metricsDailyDocPath,
+  metricsLifetimeDocPath,
   salesOutsideWindowDocPath,
   salesWithin7dDocPath,
-  scheduledInjectionsCollection,
+  scheduledInjectionDocPath,
 } from "@shared/firestore/paths.ts";
 import {
   type BatchOp,
@@ -30,7 +31,6 @@ import {
   isWithinDayWindow,
   parseDateishToMs,
 } from "@shared/util/time.ts";
-import { normalizePhone } from "@shared/util/phone.ts";
 
 export interface SaleMatchInput {
   phone10: string;
@@ -100,51 +100,51 @@ export async function processSaleMatches(
     ...(options.verbose ? { skippedNoInjectionList: [] } : {}),
   };
 
-  // Bulk-load every known appointment for every phone — both pending
-  // (scheduledinjections, deleted on fire) and historical (injectionhistory,
-  // append-only). A phone can appear multiple times across rebookings, so we
-  // collect every eventTime we know about and pick the best one per match.
-  // Also load already-activated phones so we don't re-park them in
-  // salesoutsidewindow once they've been credited as a sale.
-  const [pendingDocs, historyDocs, activatedDocs] = await Promise.all([
-    client.list(scheduledInjectionsCollection, { limit: 50_000 }),
-    client.list(injectionHistoryCollection, { limit: 50_000 }),
-    client.list(guestActivatedCollection, { limit: 50_000 }),
-  ]);
-  const alreadyActivated = new Set<string>(activatedDocs.map((e) => e.id));
-
-  const apptMap = new Map<string, ApptCandidate[]>();
-  function add(
-    rawPhone: unknown,
-    rawEventTime: unknown,
-    placeholderTime: boolean,
-  ) {
-    if (typeof rawPhone !== "string" || typeof rawEventTime !== "string") return;
-    const phone10 = normalizePhone(rawPhone);
-    if (!phone10) return;
-    const ms = parseDateishToMs(rawEventTime);
-    if (ms == null) return;
-    const arr = apptMap.get(phone10) ?? [];
-    arr.push({ eventTime: rawEventTime, eventTimeMs: ms, placeholderTime });
-    apptMap.set(phone10, arr);
+  // Per-phone lookups instead of full-table pre-loads. For each row in
+  // the QB report (~100-200 rows/day), we do up to 3 small reads: pending
+  // injection (get), history list (where(phone) — typically 0-2 docs),
+  // activated marker (get). Pre-fix this scanned 3 × 50_000 docs every
+  // morning regardless of report size. See firestore-safety.md.
+  async function loadCandidatesAndActivated(
+    phone10: string,
+  ): Promise<{ candidates: ApptCandidate[]; alreadyActivated: boolean }> {
+    const [pendingDoc, historyDocs, activatedDoc] = await Promise.all([
+      client.get(scheduledInjectionDocPath(phone10)),
+      client.list(injectionHistoryCollection, {
+        where: { field: "phone", op: "==", value: phone10 },
+      }),
+      client.get(guestActivatedDocPath(phone10)),
+    ]);
+    const out: ApptCandidate[] = [];
+    function consider(
+      rawEventTime: unknown,
+      placeholderTime: boolean,
+    ): void {
+      if (typeof rawEventTime !== "string") return;
+      const ms = parseDateishToMs(rawEventTime);
+      if (ms == null) return;
+      out.push({ eventTime: rawEventTime, eventTimeMs: ms, placeholderTime });
+    }
+    if (pendingDoc) {
+      consider(pendingDoc.eventTime, false);
+    }
+    for (const e of historyDocs) {
+      const d = e.data as Record<string, unknown>;
+      consider(d.eventTime, d.eventTimePlaceholder === true);
+    }
+    return { candidates: out, alreadyActivated: activatedDoc !== null };
   }
-  for (const e of pendingDocs) {
-    const d = e.data as Record<string, unknown>;
-    add(d.phone, d.eventTime, false);
-  }
-  for (const e of historyDocs) {
-    const d = e.data as Record<string, unknown>;
-    add(d.phone, d.eventTime, d.eventTimePlaceholder === true);
-  }
-  console.log(
-    `[sale-match] loaded ${pendingDocs.length} pending + ${historyDocs.length} history = ${apptMap.size} unique phones with appointments`,
-  );
 
   // Collect all writes here and commit as one batch at the end. With report
   // 678 we can have hundreds of matches × 2 writes each — sequential
   // client.set() calls easily blew past Deno Deploy's 60s request limit.
   // One Firestore batch.commit() is essentially a single round trip.
   const writes: BatchOp[] = [];
+
+  // Track which phones go from not-activated → activated this run so we
+  // can increment the daily/lifetime activations counters only for NEW
+  // activations (re-runs of the same QB report shouldn't double-count).
+  const newlyActivatedPhones: string[] = [];
 
   for (const { phone10, saleAt, activator, office } of inputs) {
     if (phone10.length !== 10) {
@@ -173,7 +173,8 @@ export async function processSaleMatches(
       continue;
     }
 
-    const candidates = apptMap.get(phone10) ?? [];
+    const { candidates, alreadyActivated: phoneAlreadyActivated } =
+      await loadCandidatesAndActivated(phone10);
     const odrKind = odrReason(activator, office);
 
     // Pick the closest in-window candidate (if any). Day-level diff in ET so
@@ -195,7 +196,9 @@ export async function processSaleMatches(
     const apptSummary = candidates
       .slice(0, 5)
       .map((c) =>
-        `${easternDateString(new Date(c.eventTimeMs))}(d=${dayDiff(c.eventTimeMs, saleMs)})`
+        `${easternDateString(new Date(c.eventTimeMs))}(d=${
+          dayDiff(c.eventTimeMs, saleMs)
+        })`
       )
       .join(",");
 
@@ -219,7 +222,9 @@ export async function processSaleMatches(
       matchReason = "within_window";
       eventTimePlaceholder = best.placeholderTime;
       console.log(
-        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] → matched ${easternDateString(new Date(best.eventTimeMs))} (${bestWithinDays}d)`,
+        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] → matched ${
+          easternDateString(new Date(best.eventTimeMs))
+        } (${bestWithinDays}d)`,
       );
     } else if (candidates.length === 0) {
       // No appointment record — skip even if ODR activated. We can't claim
@@ -242,13 +247,15 @@ export async function processSaleMatches(
       matchReason = odrKind;
       eventTimePlaceholder = ref.placeholderTime;
       console.log(
-        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → matched (${odrKind}, ${withinDays}d)`,
+        `[sale-match] ✅ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${
+          activator ?? ""
+        }" office="${office ?? ""}" → matched (${odrKind}, ${withinDays}d)`,
       );
     } else {
       // Already credited as a sale (manual claim, prior cron match, etc.) —
       // do NOT re-park them in the outside-window drill. Also clean up any
       // pre-existing salesoutsidewindow doc so the drill stops showing them.
-      if (alreadyActivated.has(phone10)) {
+      if (phoneAlreadyActivated) {
         console.log(
           `[sale-match] ⏭ ${phone10} sale=${saleDay} → already activated; skipping outside-window write`,
         );
@@ -259,7 +266,9 @@ export async function processSaleMatches(
         continue;
       }
       console.log(
-        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${activator ?? ""}" office="${office ?? ""}" → outside ${windowDaysConfigured}d window`,
+        `[sale-match] ⏭ ${phone10} sale=${saleDay} appts=[${apptSummary}] activator="${
+          activator ?? ""
+        }" office="${office ?? ""}" → outside ${windowDaysConfigured}d window`,
       );
       summary.skippedOlderThan7Days++;
       const candidateDetails = candidates.map((c) => ({
@@ -362,6 +371,13 @@ export async function processSaleMatches(
     ) {
       summary.matchedByOdr++;
     }
+    // Only count this phone toward the activations counter if we're
+    // actually flipping them from not-activated to activated. The
+    // `phoneAlreadyActivated` flag was captured at the start of this
+    // iteration before any writes.
+    if (!phoneAlreadyActivated) {
+      newlyActivatedPhones.push(phone10);
+    }
     summary.matches.push({
       phone10,
       appointmentAt,
@@ -381,6 +397,50 @@ export async function processSaleMatches(
     await client.batch(writes);
   }
 
+  // Activations counter increments (daily + lifetime). Fire-and-forget;
+  // these power the nightly report and a failure here must not block
+  // the rest of sale-match. Increments are atomic (FieldValue.increment)
+  // and grouped per ET day, so a single cron run typically touches one
+  // daily doc + the lifetime doc.
+  if (newlyActivatedPhones.length > 0) {
+    const byDay = new Map<string, number>();
+    for (const phone10 of newlyActivatedPhones) {
+      // saleAt is what we used for activatedAt above; bucket activations
+      // by the ET day of the sale, not the cron-run day.
+      const match = summary.matches.find((m) => m.phone10 === phone10);
+      const saleMs = match?.activatedAt
+        ? new Date(match.activatedAt).getTime()
+        : Date.now();
+      const day = easternDateString(
+        Number.isFinite(saleMs) ? new Date(saleMs) : new Date(),
+      );
+      byDay.set(day, (byDay.get(day) ?? 0) + 1);
+    }
+    const nowIso = new Date().toISOString();
+    const total = newlyActivatedPhones.length;
+    try {
+      await Promise.all([
+        ...Array.from(byDay.entries()).flatMap(([day, n]) => [
+          client.incrementField(metricsDailyDocPath(day), { activations: n }),
+          client.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
+        ]),
+        client.incrementField(metricsLifetimeDocPath(), { activations: total }),
+        client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
+      ]);
+      console.log(
+        `[sale-match] activations counters: +${total} (lifetime), days=${
+          Array.from(byDay.entries()).map(([d, n]) => `${d}:+${n}`).join(",")
+        }`,
+      );
+    } catch (e) {
+      console.warn(
+        `[sale-match] activations counter writes failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
+  }
+
   // Auto-pull conversations for any sale where withinDays < 0 (sale recorded
   // BEFORE the appointment). The originating Bland conversation is older
   // than yesterday's reseed window, so the dashboard's phone-link search
@@ -395,7 +455,9 @@ export async function processSaleMatches(
       "@shared/services/conversations/reseed.ts"
     );
     console.log(
-      `[sale-match] 🩹 ${negatives.length} sale(s) recorded before appt — auto-pulling Bland conversations: ${negatives.map((n) => n.phone10).join(", ")}`,
+      `[sale-match] 🩹 ${negatives.length} sale(s) recorded before appt — auto-pulling Bland conversations: ${
+        negatives.map((n) => n.phone10).join(", ")
+      }`,
     );
     for (const n of negatives) {
       try {
@@ -405,7 +467,9 @@ export async function processSaleMatches(
         );
       } catch (e) {
         console.error(
-          `[sale-match]   ↳ ${n.phone10}: pull failed — ${(e as Error).message}`,
+          `[sale-match]   ↳ ${n.phone10}: pull failed — ${
+            (e as Error).message
+          }`,
         );
       }
     }

@@ -26,17 +26,22 @@ export async function updatePointer(
 ): Promise<LeadPointer> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
   const path = leadPointerDocPath(phone);
-  const existing = (await client.get(path)) as LeadPointer | null;
-  const next: LeadPointer = {
-    phone,
-    currentLocation: existing?.currentLocation ?? null,
-    originalSource: existing?.originalSource ?? null,
-    status: existing?.status ?? "SCRUBBED",
-    lastAction: existing?.lastAction ?? "INIT",
-    ...update,
-  };
-  await client.set(path, next as unknown as Record<string, unknown>);
-  return next;
+  // Read-then-write inside a transaction so concurrent disposition +
+  // appt-booked webhooks for the same phone don't lose each other's
+  // updates (one would otherwise overwrite the other's field values).
+  const next = await client.transactionalUpdate(path, (existing) => {
+    const prev = existing as LeadPointer | null;
+    const merged: LeadPointer = {
+      phone,
+      currentLocation: prev?.currentLocation ?? null,
+      originalSource: prev?.originalSource ?? null,
+      status: prev?.status ?? "SCRUBBED",
+      lastAction: prev?.lastAction ?? "INIT",
+      ...update,
+    };
+    return merged as unknown as Record<string, unknown>;
+  });
+  return next as unknown as LeadPointer;
 }
 
 export async function logEvent(
@@ -50,9 +55,14 @@ export async function logEvent(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<void> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  const entry: OrchestratorEvent = { ...event, timestamp: Date.now() };
+  // Mirror `phone` as a doc field so getEvents can use where(phone == ...)
+  // instead of listing the whole collection and filtering by doc-ID prefix.
+  const entry: OrchestratorEvent = { ...event, phone, timestamp: Date.now() };
   const docId = orchestratorEventDocId(phone, String(entry.timestamp));
-  await client.set(orchestratorEventDocPath(docId), entry as unknown as Record<string, unknown>);
+  await client.set(
+    orchestratorEventDocPath(docId),
+    entry as unknown as Record<string, unknown>,
+  );
 }
 
 export async function getPointer(
@@ -68,10 +78,12 @@ export async function getEvents(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<OrchestratorEvent[]> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  // Event docIds are `${phone10}__${timestamp}` — list and filter client-side.
-  const all = await client.list(orchestratorEventsCollection, { limit: 500 });
-  return all
-    .filter((e) => e.id.startsWith(`${phone}__`))
+  // Filter at the database via the `phone` field on each doc. Historical
+  // docs predating the field need scripts/backfill-orchestrator-phone.ts.
+  const matches = await client.list(orchestratorEventsCollection, {
+    where: { field: "phone", op: "==", value: phone },
+  });
+  return matches
     .map((e) => e.data as unknown as OrchestratorEvent)
     .sort((a, b) => b.timestamp - a.timestamp);
 }

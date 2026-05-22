@@ -12,11 +12,21 @@
 //
 // WTD = Monday 00:00 ET of the current week through the cron run moment.
 // Lifetime = all-time.
+//
+// Pre-fix this scanned scheduledinjections + injectionhistory +
+// guestactivated (50k each) to compute the counters. Now reads:
+//   - metrics/lifetime/totals — lifetime apptsBooked + activations
+//   - metrics/daily/{YYYY-MM-DD} × 7 — WTD apptsBooked + activations
+//   - uniquerecipientbyphone — lifetime textsSent (unique recipients)
+//   - weeklyrecipientbyphoneweek (current week filter) — WTD textsSent
+// See firestore-safety.md.
+//
+// Historical lifetime + back-dated daily counters are seeded by
+// scripts/backfill-daily-metrics.ts.
 
 import {
-  guestActivatedCollection,
-  injectionHistoryCollection,
-  scheduledInjectionsCollection,
+  metricsDailyDocPath,
+  metricsLifetimeDocPath,
   uniqueRecipientByPhoneCollection,
   weeklyRecipientByPhoneWeekCollection,
 } from "@shared/firestore/paths.ts";
@@ -28,7 +38,6 @@ import {
   easternMondayDateString,
 } from "@shared/util/time.ts";
 
-const LIST_LIMIT = 50_000;
 const DASHBOARD_URL = "https://sms-bot.thetechgoose.deno.net/dashboard";
 
 export interface DailyReportCounts {
@@ -45,31 +54,28 @@ export interface NightlyReportResult {
   counts: DailyReportCounts;
 }
 
-// Monday 00:00:00 of the current ISO week, expressed as a UTC ms. ET is
-// UTC-4 (EDT) / UTC-5 (EST). We approximate with -4 since the report
-// runs spring-summer-fall ~85% of the year; the ±1h DST drift only
-// matters for messages sent in the first/last hour of Monday morning ET
-// during winter, which is acceptable for a high-level rollup.
-function startOfWeekMsEt(now: Date = new Date()): number {
-  // Convert "now" to a wall-clock-in-ET date by shifting -4h.
-  const etNow = new Date(now.getTime() - 4 * 60 * 60 * 1000);
-  const dow = etNow.getUTCDay(); // 0=Sun..6=Sat
-  // Days since Monday: Sun→6, Mon→0, Tue→1, ...
-  const daysSinceMonday = (dow + 6) % 7;
-  const mondayEt = new Date(etNow);
-  mondayEt.setUTCDate(etNow.getUTCDate() - daysSinceMonday);
-  mondayEt.setUTCHours(0, 0, 0, 0);
-  // Shift back to UTC by adding 4h (i.e. Mon 00:00 ET = Mon 04:00 UTC).
-  return mondayEt.getTime() + 4 * 60 * 60 * 1000;
-}
-
-function safeMs(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const t = new Date(v).getTime();
-    return Number.isFinite(t) ? t : null;
+// Walk back 7 ET days from today, return YYYY-MM-DD strings. Today is
+// included so a report fired before midnight ET still counts today's
+// activations toward WTD.
+function weekToDateEtDays(today: string = easternDateString()): string[] {
+  const [y, m, d] = today.split("-").map((s) => Number(s));
+  const base = new Date(Date.UTC(y, m - 1, d));
+  const days: string[] = [];
+  // Walk back until we cross last Monday (inclusive). ET Monday = ISO weekday 1.
+  // We use UTC math here; the date strings are pure ET YYYY-MM-DD so
+  // wall-clock offsets don't matter.
+  for (let back = 0; back < 7; back++) {
+    const dt = new Date(base);
+    dt.setUTCDate(base.getUTCDate() - back);
+    const dow = dt.getUTCDay(); // 0=Sun..6=Sat
+    days.push(
+      `${dt.getUTCFullYear()}-${
+        String(dt.getUTCMonth() + 1).padStart(2, "0")
+      }-${String(dt.getUTCDate()).padStart(2, "0")}`,
+    );
+    if (dow === 1 && back > 0) break; // hit Monday — stop after including it
   }
-  return null;
+  return days;
 }
 
 async function build(reportDate: string): Promise<{
@@ -78,85 +84,48 @@ async function build(reportDate: string): Promise<{
   counts: DailyReportCounts;
 }> {
   const db = getFirestoreClient();
-  const weekStartMs = startOfWeekMsEt();
   const currentWeekKey = easternMondayDateString();
+  const wtdDays = weekToDateEtDays(reportDate);
 
-  // Texts-sent metrics come from the write-side recipient markers
-  // (uniquerecipientbyphone + weeklyrecipientbyphoneweek) so we don't
-  // scan the conversations collection — that scan was the 2026-05-19
-  // Firestore-quota incident. See firestore-safety.md. WTD filter is a
-  // single equality on weekKey so the scan is bounded to one week of
-  // recipients.
-  const [pending, history, activated, lifetimeRecipientDocs, wtdRecipientDocs] =
-    await Promise.all([
-      db.list(scheduledInjectionsCollection, { limit: LIST_LIMIT }),
-      db.list(injectionHistoryCollection, { limit: LIST_LIMIT }),
-      db.list(guestActivatedCollection, { limit: LIST_LIMIT }),
-      db.list(uniqueRecipientByPhoneCollection, { limit: LIST_LIMIT }),
-      db.list(weeklyRecipientByPhoneWeekCollection, {
-        where: { field: "weekKey", op: "==", value: currentWeekKey },
-        limit: LIST_LIMIT,
-      }),
-    ]);
+  // All reads run in parallel — total cost is bounded by 1 lifetime doc
+  // + 7 daily docs + uniquerecipientbyphone (the lifetime unique count)
+  // + weeklyrecipientbyphoneweek filtered to the current week. The
+  // unique-recipient collections are the only multi-doc reads and they
+  // both have indexed where/list. No more full-table scans.
+  const [
+    lifetimeDoc,
+    dailyDocs,
+    lifetimeRecipientDocs,
+    wtdRecipientDocs,
+  ] = await Promise.all([
+    db.get(metricsLifetimeDocPath()),
+    Promise.all(wtdDays.map((d) => db.get(metricsDailyDocPath(d)))),
+    db.list(uniqueRecipientByPhoneCollection, { limit: 200_000 }),
+    db.list(weeklyRecipientByPhoneWeekCollection, {
+      where: { field: "weekKey", op: "==", value: currentWeekKey },
+      limit: 200_000,
+    }),
+  ]);
 
-  // --- Texts Sent (unique recipients) ---
-  // One doc per unique recipient (lifetime) and one per recipient-per-week
-  // (WTD), written write-side after every successful outbound SMS. See
-  // shared/services/readymode/service.ts → recordOutboundRecipientMarkers.
-  // Historical recipients from before the 2026-05-19 fix are not in
-  // these collections — run scripts/backfill-recipient-markers.ts once
-  // to seed lifetime from the existing conversations data.
-  const lifetimeUniquePhones = lifetimeRecipientDocs.length;
-  const wtdUniquePhones = wtdRecipientDocs.length;
+  function num(v: unknown): number {
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  }
 
-  // --- Appts Booked ---
-  // Source of truth is the same as the dashboard "Booked" stat: union of
-  // scheduledinjections (id == phone10) and injectionhistory (id prefix
-  // == phone10). Dedupe by phone, keep earliest booking time.
-  const earliestBookingByPhone = new Map<string, number | null>();
-  function recordBooking(phone: string, ms: number | null): void {
-    if (!phone) return;
-    const prev = earliestBookingByPhone.get(phone);
-    if (prev === undefined) {
-      earliestBookingByPhone.set(phone, ms);
-    } else if (ms != null && (prev == null || ms < prev)) {
-      earliestBookingByPhone.set(phone, ms);
-    }
-  }
-  for (const e of pending) {
-    const d = e.data as Record<string, unknown>;
-    recordBooking(String(d.phone ?? e.id), safeMs(d.scheduledAt));
-  }
-  for (const e of history) {
-    const d = e.data as Record<string, unknown>;
-    const sep = e.id.indexOf("__");
-    const phone = String(d.phone ?? (sep > 0 ? e.id.slice(0, sep) : e.id));
-    recordBooking(phone, safeMs(d.firedAt));
-  }
-  let apptsBookedLifetime = 0;
+  // WTD sums from daily docs.
   let apptsBookedWtd = 0;
-  for (const ms of earliestBookingByPhone.values()) {
-    apptsBookedLifetime++;
-    if (ms != null && ms >= weekStartMs) apptsBookedWtd++;
-  }
-
-  // --- Activations ---
-  let activationsLifetime = 0;
   let activationsWtd = 0;
-  for (const e of activated) {
-    activationsLifetime++;
-    const d = e.data as Record<string, unknown>;
-    const ms = safeMs(d.activatedAt);
-    if (ms != null && ms >= weekStartMs) activationsWtd++;
+  for (const doc of dailyDocs) {
+    apptsBookedWtd += num((doc as Record<string, unknown> | null)?.apptsBooked);
+    activationsWtd += num((doc as Record<string, unknown> | null)?.activations);
   }
 
   const counts: DailyReportCounts = {
-    textsSentWtd: wtdUniquePhones,
-    textsSentLifetime: lifetimeUniquePhones,
+    textsSentWtd: wtdRecipientDocs.length,
+    textsSentLifetime: lifetimeRecipientDocs.length,
     apptsBookedWtd,
-    apptsBookedLifetime,
+    apptsBookedLifetime: num(lifetimeDoc?.apptsBooked),
     activationsWtd,
-    activationsLifetime,
+    activationsLifetime: num(lifetimeDoc?.activations),
   };
 
   const rows: Array<[string, number, number]> = [

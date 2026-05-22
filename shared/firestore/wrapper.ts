@@ -8,7 +8,7 @@
 // Doc paths have an even number of segments after the root collection;
 // collection paths have an odd number.
 
-import { getDb } from "@shared/firestore/client.ts";
+import { getAdminFirestore, getDb } from "@shared/firestore/client.ts";
 
 export type DocPath = string;
 
@@ -48,6 +48,27 @@ export interface FirestoreClient {
     path: DocPath,
     data: Record<string, unknown>,
   ): Promise<AtomicCreateResult>;
+  // FieldValue.increment(n) on each named field, via set({merge:true}).
+  // Concurrent calls are race-free on Firestore's side — no need for a
+  // transaction. Used for counters (daily SMS count, lifetime metrics,
+  // per-phone aggregator counts).
+  incrementField(
+    path: DocPath,
+    fields: Record<string, number>,
+  ): Promise<void>;
+  // set(data, {merge:true}) — upserts the listed fields without
+  // clobbering the rest of the doc. Use for "stamp lastUpdatedAt and
+  // leave everything else alone" semantics.
+  setMerge(path: DocPath, data: Record<string, unknown>): Promise<void>;
+  // Read-modify-write inside a Firestore runTransaction. The closure
+  // receives the existing doc (or null) and returns the next doc state.
+  // Use when conditional logic depends on the current value (e.g.
+  // "set firstSeen only if not already set" or "merge two pointer
+  // updates without losing fields").
+  transactionalUpdate(
+    path: DocPath,
+    fn: (existing: Record<string, unknown> | null) => Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
 }
 
 const MAX_BATCH = 400;
@@ -150,6 +171,45 @@ class FirebaseAdminClient implements FirestoreClient {
       }
       tx.create(ref, data);
       return { created: true, existing: null };
+    });
+  }
+
+  async incrementField(
+    path: DocPath,
+    fields: Record<string, number>,
+  ): Promise<void> {
+    const db = await getDb();
+    const adminFs = await getAdminFirestore();
+    const update: Record<string, unknown> = {};
+    for (const [k, n] of Object.entries(fields)) {
+      update[k] = adminFs.FieldValue.increment(n);
+    }
+    await db.doc(path).set(update, { merge: true });
+  }
+
+  async setMerge(
+    path: DocPath,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const db = await getDb();
+    await db.doc(path).set(data, { merge: true });
+  }
+
+  async transactionalUpdate(
+    path: DocPath,
+    fn: (existing: Record<string, unknown> | null) => Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const db = await getDb();
+    const ref = db.doc(path);
+    // deno-lint-ignore no-explicit-any
+    return await db.runTransaction(async (tx: any) => {
+      const snap = await tx.get(ref);
+      const existing = snap.exists
+        ? (snap.data() as Record<string, unknown>)
+        : null;
+      const next = fn(existing);
+      tx.set(ref, next);
+      return next;
     });
   }
 }

@@ -12,7 +12,8 @@ import {
 import { loadEnv } from "@shared/config/env.ts";
 import {
   globalSmsCountDocPath,
-  leadPointerDocPath,
+  metricsDailyDocPath,
+  metricsLifetimeDocPath,
   smsFlowContextDocPath,
   uniqueRecipientByPhoneDocPath,
   weeklyRecipientByPhoneWeekDocPath,
@@ -87,17 +88,13 @@ async function getGlobalDailyCount(
 
 async function incrementGlobalDailyCount(
   client: FirestoreClient,
-): Promise<number> {
+): Promise<void> {
+  // Atomic FieldValue.increment — concurrent calls are race-free.
+  // updatedAt is a separate non-atomic merge; benign if it races.
   const today = easternDateString();
   const path = globalSmsCountDocPath(today);
-  const existing = await client.get(path);
-  const newCount = (typeof existing?.count === "number" ? existing.count : 0) +
-    1;
-  await client.set(path, {
-    count: newCount,
-    updatedAt: new Date().toISOString(),
-  });
-  return newCount;
+  await client.incrementField(path, { count: 1 });
+  await client.setMerge(path, { updatedAt: new Date().toISOString() });
 }
 
 interface ProcessLeadResult {
@@ -238,7 +235,7 @@ export async function processInboundLead(
   // 200 + skipped, never silently fall through to texting an unqualified
   // lead. Override path skips the lookup entirely.
   if (!isOverride && attempts === undefined) {
-    const r = await fetchAttemptsFromTpi(phone, domain);
+    const r = await fetchAttemptsFromTpi(phone, domain, client);
     if (!r.ok) {
       console.warn(`[trigger] ❌ TPI lookup failed for ${phone}: ${r.reason}`);
       return { status: "skipped", reason: `attempts-unknown:${r.reason}` };
@@ -370,12 +367,20 @@ export async function processInboundLead(
 // it was and only do one wasted read. See firestore-safety.md (Part B
 // follow-up: nightly report no longer scans the conversations collection
 // to compute unique-recipient counts).
+//
+// Also bumps the daily and lifetime textsSent counters — `+1` per send,
+// not "+1 per unique recipient". The unique-recipient counts are derived
+// from the marker collections (one doc per phone), so we keep textsSent
+// as a separate raw-send total for "how many SMSes did we actually fire
+// today" surfaces. FieldValue.increment is atomic, so concurrent sends
+// can't lose updates here.
 async function recordOutboundRecipientMarkers(
   client: FirestoreClient,
   phone: string,
 ): Promise<void> {
   const nowIsoStr = new Date().toISOString();
   const weekKey = easternMondayDateString();
+  const today = easternDateString();
   await Promise.all([
     client.atomicCreate(uniqueRecipientByPhoneDocPath(phone), {
       phone,
@@ -385,6 +390,10 @@ async function recordOutboundRecipientMarkers(
       weeklyRecipientByPhoneWeekDocPath(weekKey, phone),
       { phone, weekKey, firstSentAt: nowIsoStr },
     ),
+    client.incrementField(metricsDailyDocPath(today), { textsSent: 1 }),
+    client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIsoStr }),
+    client.incrementField(metricsLifetimeDocPath(), { textsSent: 1 }),
+    client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIsoStr }),
   ]);
 }
 
@@ -634,7 +643,7 @@ async function dncLead(
   params.append("API_user", user);
   params.append("API_pass", pass);
   params.append("entry[phone]", phone);
-  params.append("entry[reason] ", reason);
+  params.append("entry[reason]", reason);
 
   try {
     const res = await rateLimitSchedule(() =>

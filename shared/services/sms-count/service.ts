@@ -21,8 +21,17 @@ export async function increment(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<number> {
   const path = globalSmsCountDocPath(date);
-  const existing = await client.get(path);
-  const newCount = (typeof existing?.count === "number" ? existing.count : 0) + 1;
-  await client.set(path, { count: newCount, updatedAt: new Date().toISOString() });
-  return newCount;
+  // FieldValue.increment is atomic on Firestore's side — no transaction
+  // required. Pre-fix this was a read-then-write that lost increments
+  // under concurrent /trigger/readymode webhooks, letting the daily cap
+  // be exceeded by however many lost updates.
+  await client.incrementField(path, { count: 1 });
+  await client.setMerge(path, { updatedAt: new Date().toISOString() });
+  // Re-read for the return value. Callers that only need the new count
+  // for logging tolerate the small race between the increment and read
+  // (a concurrent increment might bump the value above what we just
+  // added) — the atomicity guarantee of the increment is what matters
+  // for the daily cap enforcement upstream.
+  const after = await client.get(path);
+  return typeof after?.count === "number" ? after.count : 0;
 }

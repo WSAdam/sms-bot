@@ -9,10 +9,7 @@
 
 import * as bland from "@shared/services/bland/client.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
-import {
-  type BatchOp,
-  getFirestoreClient,
-} from "@shared/firestore/wrapper.ts";
+import { type BatchOp, getFirestoreClient } from "@shared/firestore/wrapper.ts";
 
 const PARALLEL = 4;
 
@@ -38,12 +35,20 @@ async function getCurrentMessagesForCall(
   phone10: string,
   callId: string,
 ): Promise<{ count: number; docIds: string[] }> {
-  const all = await getFirestoreClient().list(conversationsCollection, {
-    limit: 50_000,
+  // Filter at the database via callId — auto-indexed single-field, same
+  // path storeMessage's dedupe uses. Pre-fix this scanned the entire
+  // conversations collection (50k limit) per Bland conversation, which
+  // during the nightly reseed multiplied into N × full-table scans. See
+  // firestore-safety.md.
+  const matches = await getFirestoreClient().list(conversationsCollection, {
+    where: { field: "callId", op: "==", value: callId },
   });
-  const matching = all.filter((e) => {
-    if (!e.id.startsWith(`${phone10}__${callId}__`)) return false;
-    return true;
+  // Cross-check phoneNumber as a safety belt: callId is globally unique
+  // in practice but we don't want a hypothetical collision to silently
+  // delete another phone's history during reseed.
+  const matching = matches.filter((e) => {
+    const m = e.data as { phoneNumber?: string };
+    return m.phoneNumber === phone10;
   });
   return { count: matching.length, docIds: matching.map((e) => e.id) };
 }
@@ -51,13 +56,17 @@ async function getCurrentMessagesForCall(
 async function reseedOne(
   phone10: string,
   callId: string,
-): Promise<{ status: "reseeded" | "skipped" | "error"; delta: number; reason?: string }> {
+): Promise<
+  { status: "reseeded" | "skipped" | "error"; delta: number; reason?: string }
+> {
   const r = await bland.getConversation(callId);
   if (!r.ok || !r.json.data) {
     return {
       status: "error",
       delta: 0,
-      reason: `Bland ${r.status}: ${JSON.stringify(r.json.errors ?? r.json).slice(0, 120)}`,
+      reason: `Bland ${r.status}: ${
+        JSON.stringify(r.json.errors ?? r.json).slice(0, 120)
+      }`,
     };
   }
   const blandMsgs = (r.json.data.messages ?? []).filter((m: BlandMsg) =>
@@ -107,7 +116,9 @@ export async function reseedConversationsByDateRange(
     errors: [],
   };
   console.log(
-    `[reseed] Bland returned ${list.conversations.length} conversations for ${fromIso} → ${toIso ?? "now"}`,
+    `[reseed] Bland returned ${list.conversations.length} conversations for ${fromIso} → ${
+      toIso ?? "now"
+    }`,
   );
 
   // Process in parallel batches so Bland fetches overlap.
@@ -242,7 +253,7 @@ export function yesterdayEasternRange(): { fromIso: string; toIso: string } {
   // -04:00 in EDT, -05:00 in EST. Use a wide window (UTC offset -05) and a
   // hard upper bound 24h later — we slightly over-fetch but never miss.
   const fromIso = `${yy}-${mm}-${dd}T05:00:00.000Z`;
-  const toIso =
-    new Date(new Date(fromIso).getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const toIso = new Date(new Date(fromIso).getTime() + 24 * 60 * 60 * 1000)
+    .toISOString();
   return { fromIso, toIso };
 }

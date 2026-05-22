@@ -28,17 +28,21 @@ export async function sweepScheduledInjections(
   firedBy: "cron" | "manual" = "cron",
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<SweepResult> {
-  const all = await client.list(scheduledInjectionsCollection, { limit: 500 });
-  const now = Date.now();
-  const due: Array<{ phone: string; injection: FutureInjection }> = [];
-
-  for (const e of all) {
-    const inj = e.data as unknown as FutureInjection;
-    const eventMs = new Date(inj.eventTime).getTime();
-    if (Number.isFinite(eventMs) && eventMs <= now) {
-      due.push({ phone: e.id, injection: inj });
-    }
-  }
+  // Filter at the database to eventTime <= now. Per-tick read cost drops
+  // from "size of scheduledinjections" to "number of due appointments",
+  // which is usually 0. See firestore-safety.md.
+  const dueDocs = await client.list(scheduledInjectionsCollection, {
+    where: {
+      field: "eventTime",
+      op: "<=",
+      value: new Date().toISOString(),
+    },
+    orderBy: { field: "eventTime", dir: "asc" },
+    limit: 50,
+  });
+  const due: Array<{ phone: string; injection: FutureInjection }> = dueDocs.map(
+    (e) => ({ phone: e.id, injection: e.data as unknown as FutureInjection }),
+  );
 
   const errors: SweepResult["errors"] = [];
   let fired = 0;
@@ -75,7 +79,10 @@ export async function sweepScheduledInjections(
     await client.delete(scheduledInjectionDocPath(phone));
   }
 
-  return { scanned: all.length, fired, errors };
+  // `scanned` now means "due docs the sweep considered" — what was
+  // historically the full list (since we filtered in memory). With the
+  // database-side where filter, that's identical to `dueDocs.length`.
+  return { scanned: dueDocs.length, fired, errors };
 }
 
 export async function fireSingle(

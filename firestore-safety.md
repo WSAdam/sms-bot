@@ -5,8 +5,11 @@ Firestore read quota mid-morning. Root cause was a query that read the whole
 `conversations` collection on every inbound webhook to find one phone's history.
 The collection grew large enough that this daily cost crossed the cap.
 
-This doc tracks the three-part remediation. **Parts A and C are done; Part B is
-partially done (nightly report converted; other call sites remain).**
+**All three parts done.** Every previously-unbounded scan now uses a
+database-side `where` filter, a write-side aggregator, or a single-doc
+get. The safety rail in `wrapper.list()` stays as a tripwire for future
+regressions. The codebase has zero call sites that scan a full
+collection on a request path.
 
 ---
 
@@ -27,48 +30,103 @@ pattern, the test fails.
 
 ---
 
-## B. Convert the remaining full-collection scans — PARTIAL
+## B. Convert the remaining full-collection scans — DONE
 
-Other places still use the same "list everything, filter in memory" pattern.
-None of these run on the per-webhook hot path, so they didn't cause the incident
-on their own, but they will eventually if left alone.
+Every site that used to scan a full collection now does one of three things:
 
-### Done
+1. **Database-side `where` filter** (single-field auto-indexed or covered
+   by a composite index in `firestore.indexes.json`):
+   - `shared/services/conversations/store.ts` — `getAllConversations`,
+     `deleteConversations`, `deleteConversationsByCallId`
+   - `shared/services/conversations/reseed.ts` —
+     `getCurrentMessagesForCall` (`where(callId)`)
+   - `shared/services/orchestrator/service.ts` — `getEvents`
+     (`where(phone)`, plus `logEvent` now stamps `phone` as a field)
+   - `shared/services/injections/sweep.ts` —
+     `where("eventTime", "<=", now) + orderBy + limit 50`
+   - `shared/services/sale-match/service.ts` — per-phone
+     `db.get(scheduledinjections)` + `where(phone) on injectionhistory`
+     + `db.get(guestactivated)` instead of three full pre-loads
+   - `shared/services/conversations/booking-scan.ts` — per-conversation
+     `where(recoveredFromCallId)` + per-phone `db.get(guestactivated)`
+     instead of two full pre-loads
+   - `routes/api/dashboard/drill.ts` — composite indexes on (sender |
+     phoneNumber | nodeTag, timestamp desc); most-selective filter
+     applied database-side, remaining filters client-side on the
+     small result set
+   - `routes/api/admin/repopulate-injections.ts` —
+     `where("nodeTag", "==", "appointment scheduled")` + per-phone
+     fired-injection lookup
+   - `routes/api/audit/browse.ts` — `orderBy(processedAt desc) + limit`
+   - `routes/api/appointments.ts` — `orderBy(firedAt desc) + limit` on
+     injectionhistory; bounded list on scheduledinjections (always small)
 
-- **Nightly report** (`shared/services/report/nightly.ts`). The old build path
-  listed the entire conversations collection (limit 50_000) to compute "Texts
-  Sent (unique recipients)" lifetime + WTD. Replaced with two write-side
-  recipient marker collections:
-  `sms-bot/uniquerecipientbyphone/byPhone/{phone10}` and
-  `sms-bot/weeklyrecipientbyphoneweek/byKey/{weekKey}__{phone10}`. Both are
-  populated by an idempotent `atomicCreate` in
-  `shared/services/readymode/service.ts` → `recordOutboundRecipientMarkers`,
-  called after a successful Bland send. The report's WTD query filters with
-  `where("weekKey", "==",
-  currentWeekKey)` so the scan is bounded to one week
-  of recipients (hundreds), not the conversations table (tens of thousands).
-  Historical recipients from before the deploy need
-  `scripts/backfill-recipient-markers.ts --apply` to seed the lifetime
-  collection from existing conversations data; without it the lifetime number
-  starts at 0 and grows from there.
+2. **Write-side aggregator / counter** (one doc per phone or per day,
+   updated transactionally at write time, read cheaply at report time):
+   - `sms-bot/injectedphones/byPhone/{phone10}` — single-doc marker
+     replacing the full-table scan in `/api/guests/answered`.
+     Backfill: `scripts/backfill-injected-phones.ts`.
+   - `sms-bot/uniqueguestsbyphone/byPhone/{phone10}` — per-phone
+     summary (firstSeen, lastSeen, messageCount, replyCount,
+     hasReplied) updated transactionally in `storeMessage`.
+     Powers `/api/guests/list`. Backfill:
+     `scripts/backfill-unique-guests.ts`.
+   - `sms-bot/metrics/daily/{YYYY-MM-DD}` + `sms-bot/metrics/lifetime/totals`
+     — `apptsBooked` / `activations` / `textsSent` counters
+     incremented atomically at write time (in `scheduleInjection`,
+     `processSaleMatches`, and `recordOutboundRecipientMarkers`).
+     The nightly report reads the rollup docs instead of scanning.
+     Backfill: `scripts/backfill-daily-metrics.ts`.
+   - `sms-bot/uniquerecipientbyphone/byPhone/{phone10}` and
+     `sms-bot/weeklyrecipientbyphoneweek/byKey/{weekKey}__{phone10}`
+     — the original Texts-Sent write-side markers (pre-existing).
 
-### Still to convert
+3. **Removed entirely** — `routes/api/sales/claim-outside-window.ts`
+   used to do 4 × 50_000-limit scans just to compute a before/after
+   diagnostic count for the UI. Replaced with single-doc presence
+   checks (`preActivated`/`postActivated`) which carry the meaningful
+   signal at ~1% of the cost.
 
-- Nightly conversation reseed — pulls the whole conversations table once per
-  Bland conversation per night.
-- Booking-scan cron — pulls all of `injectionhistory` and `guestactivated` at
-  start, then a doc-get per conversation.
-- Dashboard "drill" endpoint — full conversations scan per page load.
-- Guests list endpoint — full conversations scan per page load.
-- Admin "repopulate injections" tool — full conversations scan when invoked.
-- Nightly report's three remaining lists (`scheduledinjections`,
-  `injectionhistory`, `guestactivated`) — smaller collections, lower priority,
-  but apply the same write-side-aggregator pattern when convenient.
+### Composite index management
 
-Same approach as A: filter at the database, not in memory. Where a `where`
-filter doesn't fit cleanly, use a `documentId()` range query on the
-slash-prefixed doc IDs, or move to a write-side aggregator (the pattern the
-nightly report now uses).
+`firestore.indexes.json` at repo root defines the composite indexes
+required for the new query shapes. To deploy:
+
+```bash
+gcloud firestore indexes composite create \
+  --collection-group=messages \
+  --field-config field-path=phoneNumber,order=ascending \
+  --field-config field-path=timestamp,order=descending
+# …repeat for each index in firestore.indexes.json
+```
+
+Or, with the Firebase CLI configured for the project:
+
+```bash
+firebase deploy --only firestore:indexes
+```
+
+Index builds run in the background (minutes-to-hours depending on
+collection size). Code that depends on a composite index will return a
+`9 FAILED_PRECONDITION: The query requires an index` error until the
+build completes — deploy the indexes BEFORE the code that uses them.
+
+### Sequencing rules (write-side aggregators)
+
+Each aggregator/marker collection needs a one-shot backfill before the
+read-side code change ships, otherwise historical phones with no future
+write become invisible:
+
+| Collection | Backfill script | Read site |
+| --- | --- | --- |
+| `injectedphones/byPhone` | `scripts/backfill-injected-phones.ts` | `/api/guests/answered` |
+| `uniqueguestsbyphone/byPhone` | `scripts/backfill-unique-guests.ts` | `/api/guests/list` |
+| `metrics/daily/*` + `metrics/lifetime/totals` | `scripts/backfill-daily-metrics.ts` | `/api/report/nightly` |
+| `orchestratorevents.phone` field | `scripts/backfill-orchestrator-phone.ts` | `getEvents()` |
+
+Each backfill is idempotent — safe to re-run. Bump the
+`FIRESTORE_LIST_WARN_THRESHOLD` env when running, since they
+intentionally scan full collections.
 
 ---
 

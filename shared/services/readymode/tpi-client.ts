@@ -31,6 +31,7 @@
 
 import { getRmCreds } from "@shared/services/readymode/auth.ts";
 import { getGatesConfig } from "@shared/services/config/gates-config.ts";
+import type { FirestoreClient } from "@shared/firestore/wrapper.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
 
 const TPI_MAX_WAIT_MS = Number(Deno.env.get("RM_TPI_MAX_WAIT_MS") ?? 5000);
@@ -65,10 +66,12 @@ export interface TpiThrottleSnapshot {
   circuitThreshold: number;
 }
 
-export async function getTpiThrottleSnapshot(): Promise<TpiThrottleSnapshot> {
+export async function getTpiThrottleSnapshot(
+  client?: FirestoreClient,
+): Promise<TpiThrottleSnapshot> {
   const now = Date.now();
   pruneWindow(now);
-  const gates = await getGatesConfig();
+  const gates = await getGatesConfig(client);
   return {
     now,
     windowMs: WINDOW_MS,
@@ -110,7 +113,7 @@ function recordFailure(): void {
 // token is "consumed" on success — we update `lastCallAt` and append to
 // `recentCalls` BEFORE the HTTP fires, so a stuck call still counts
 // against the budget.
-async function acquireToken(): Promise<string | null> {
+async function acquireToken(client?: FirestoreClient): Promise<string | null> {
   const now = Date.now();
 
   // Circuit first — cheapest check, and if open we don't burn the
@@ -124,7 +127,7 @@ async function acquireToken(): Promise<string | null> {
   // dashboard). gatesConfig caches for 60s so reading per call is cheap;
   // on Firestore failure it falls back to GATES_CONFIG_DEFAULTS so the
   // throttle still enforces sane limits.
-  const gates = await getGatesConfig();
+  const gates = await getGatesConfig(client);
 
   // Sliding window.
   pruneWindow(now);
@@ -238,16 +241,19 @@ export interface FetchAttemptsFailure {
 }
 
 // Per-phone attempts lookup. Goes through the full throttle stack and
-// the circuit breaker. Use this from the live trigger path.
+// the circuit breaker. Use this from the live trigger path. `client` is
+// optional and only matters for tests — production callers use the
+// default Firestore client via the gates-config layer.
 export async function fetchAttemptsFromTpi(
   phone10: string,
   domain: DialerDomain,
+  client?: FirestoreClient,
 ): Promise<FetchAttemptsResult | FetchAttemptsFailure> {
   if (!/^\d{10}$/.test(phone10)) {
     return { ok: false, reason: "invalid-phone" };
   }
 
-  const gate = await acquireToken();
+  const gate = await acquireToken(client);
   if (gate !== null) {
     console.warn(`[tpi] ⛔ throttled phone=${phone10} reason=${gate}`);
     return { ok: false, reason: gate };

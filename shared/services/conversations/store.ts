@@ -1,10 +1,15 @@
 // Conversation message store. Writes BOTH the message AND the
 // callId→phone secondary lookup index — the lookup write happens FIRST so
 // getConversationByCallId never races with the message write (gotcha §15).
+// Also updates the per-phone aggregator (uniqueguestsbyphone) so the
+// dashboard's "Unique Guests Reached" drill-in can paginate cheaply
+// instead of scanning the full conversations table — see firestore-safety.md.
 
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
   conversationDocPath,
   conversationsCollection,
+  uniqueGuestByPhoneDocPath,
 } from "@shared/firestore/paths.ts";
 import {
   type FirestoreClient,
@@ -96,7 +101,60 @@ export async function storeMessage(
     conversationDocPath(conversationDocId(phone, callId, timestamp)),
     msg as unknown as Record<string, unknown>,
   );
+
+  // Update the dashboard aggregator. Fire-and-forget so a write failure
+  // here never breaks the message write — the aggregator can be rebuilt
+  // any time by scripts/backfill-unique-guests.ts. Test phones are
+  // excluded so they don't pollute the dashboard counts.
+  if (!isExcludedFromReporting(phone)) {
+    updateUniqueGuestAggregator(client, phone, sender, timestamp).catch((e) => {
+      console.warn(
+        `[storeMessage] aggregator write failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    });
+  }
+
   return msg;
+}
+
+interface UniqueGuestDoc {
+  phoneNumber: string;
+  firstSeen: string;
+  lastSeen: string;
+  messageCount: number;
+  replyCount: number;
+  hasReplied: boolean;
+  updatedAt: string;
+}
+
+async function updateUniqueGuestAggregator(
+  client: FirestoreClient,
+  phone: string,
+  sender: "Guest" | "AI Bot",
+  timestamp: string,
+): Promise<void> {
+  // Transactional read-modify-write so concurrent storeMessage calls
+  // for the same phone don't lose count increments. The aggregator doc
+  // is small (handful of scalars) so the transaction round-trip is fast.
+  const isGuest = sender === "Guest";
+  await client.transactionalUpdate(
+    uniqueGuestByPhoneDocPath(phone),
+    (existing) => {
+      const prev = existing as unknown as UniqueGuestDoc | null;
+      const next: UniqueGuestDoc = {
+        phoneNumber: phone,
+        firstSeen: prev?.firstSeen ?? timestamp,
+        lastSeen: prev && prev.lastSeen > timestamp ? prev.lastSeen : timestamp,
+        messageCount: (prev?.messageCount ?? 0) + 1,
+        replyCount: (prev?.replyCount ?? 0) + (isGuest ? 1 : 0),
+        hasReplied: prev?.hasReplied || isGuest,
+        updatedAt: new Date().toISOString(),
+      };
+      return next as unknown as Record<string, unknown>;
+    },
+  );
 }
 
 export async function getAllConversations(
@@ -148,8 +206,12 @@ export async function deleteConversations(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<number> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  const all = await client.list(conversationsCollection, { limit: 1000 });
-  const toDelete = all.filter((e) => e.id.startsWith(`${phone}__`));
+  // Filter at the database — listing everything then prefix-matching can
+  // silently miss messages once the collection grows beyond the limit
+  // window (the legacy 500/1000 cap). See firestore-safety.md.
+  const toDelete = await client.list(conversationsCollection, {
+    where: { field: "phoneNumber", op: "==", value: phone },
+  });
   await client.batch(
     toDelete.map((e) => ({
       type: "delete" as const,
@@ -165,8 +227,17 @@ export async function deleteConversationsByCallId(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<number> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  const all = await client.list(conversationsCollection, { limit: 500 });
-  const toDelete = all.filter((e) => e.id.startsWith(`${phone}__${callId}__`));
+  // Per-callId there are ≤ ~50 messages in practice, so filter on the
+  // callId field (cheaper + already auto-indexed) and verify phoneNumber
+  // client-side as a safety belt against a hypothetical cross-phone
+  // collision.
+  const matches = await client.list(conversationsCollection, {
+    where: { field: "callId", op: "==", value: callId },
+  });
+  const toDelete = matches.filter((e) => {
+    const m = e.data as { phoneNumber?: string };
+    return m.phoneNumber === phone;
+  });
   await client.batch(
     toDelete.map((e) => ({
       type: "delete" as const,

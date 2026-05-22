@@ -71,6 +71,30 @@ export const uniqueRecipientByPhoneContainer = `${R}/uniquerecipientbyphone`;
 export const uniqueRecipientByPhoneCollection =
   `${uniqueRecipientByPhoneContainer}/byPhone`;
 
+// Write-side index of "phones we've ever scheduled an injection for".
+// One doc per phone, atomicCreate on first scheduleInjection — collapses
+// the /api/guests/answered "is this our lead" check from a 50k-limit
+// injectionhistory scan to a single doc.get. See firestore-safety.md.
+export const injectedPhonesContainer = `${R}/injectedphones`;
+export const injectedPhonesCollection = `${injectedPhonesContainer}/byPhone`;
+
+// Write-side aggregator for the dashboard's "Unique Guests Reached"
+// drill-in. One doc per phone we've ever messaged, updated transactionally
+// from storeMessage. Replaces the 50k conversations scan + in-memory
+// dedupe that powered /api/guests/list. See firestore-safety.md.
+export const uniqueGuestsByPhoneContainer = `${R}/uniqueguestsbyphone`;
+export const uniqueGuestsByPhoneCollection =
+  `${uniqueGuestsByPhoneContainer}/byPhone`;
+
+// Write-side daily and lifetime metric counters. Replace the
+// scheduledinjections + injectionhistory + guestactivated scans the
+// nightly report used to do. Daily docs keyed by ET YYYY-MM-DD, lifetime
+// is a single rollup doc. Counters are incremented at each write site
+// (scheduleInjection, sale-match guestactivated, outbound SMS marker).
+export const metricsDailyContainer = `${R}/metrics`;
+export const metricsDailyCollection = `${metricsDailyContainer}/daily`;
+export const metricsLifetimeCollection = `${metricsDailyContainer}/lifetime`;
+
 // Per-week recipient index for the WTD count. Doc id is
 // `{weekKey}__{phone10}` so atomicCreate dedupes within the same week.
 // `weekKey` is the ISO date of Monday 00:00 ET for that week, e.g.
@@ -164,6 +188,18 @@ export function weeklyRecipientByPhoneWeekDocPath(
   phone10: string,
 ): string {
   return `${weeklyRecipientByPhoneWeekCollection}/${weekKey}__${phone10}`;
+}
+export function injectedPhoneDocPath(phone10: string): string {
+  return `${injectedPhonesCollection}/${phone10}`;
+}
+export function uniqueGuestByPhoneDocPath(phone10: string): string {
+  return `${uniqueGuestsByPhoneCollection}/${phone10}`;
+}
+export function metricsDailyDocPath(easternDate: string): string {
+  return `${metricsDailyCollection}/${easternDate}`;
+}
+export function metricsLifetimeDocPath(): string {
+  return `${metricsLifetimeCollection}/totals`;
 }
 export function abTestDocPath(phone10: string): string {
   return `${abTestCollection}/${phone10}`;

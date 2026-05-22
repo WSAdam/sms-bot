@@ -4,6 +4,9 @@
 
 import { assertEquals } from "@std/assert";
 import {
+  _clearGatesConfigCache,
+} from "@shared/services/config/gates-config.ts";
+import {
   __resetTpiStateForTests,
   extractTimesCalled,
   fetchAttemptsFromTpi,
@@ -11,6 +14,13 @@ import {
   pickBiggestLeadId,
 } from "@shared/services/readymode/tpi-client.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
+import { FirestoreMock } from "@tests/mocks/firestore-mock.ts";
+
+// Shared mock client for all throttle-layer tests. The TPI client reads
+// gatesConfig on every call; passing the mock through (instead of
+// letting it fall through to the real firebase-admin path with no creds)
+// keeps test output clean and isolates us from any env-loaded state.
+const gatesMock = new FirestoreMock();
 
 // Stub fetch + RM creds before every test. The client reads creds via
 // Deno.env, so we set the env var here too. Real fetch is restored after.
@@ -24,6 +34,8 @@ function withStubFetch(
     Deno.env.set("RM_USER", "test-user");
     Deno.env.set("RM_PASS", "test-pass");
     __resetTpiStateForTests();
+    _clearGatesConfigCache();
+    gatesMock.reset();
     globalThis.fetch = async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       return await handler(url);
@@ -109,7 +121,11 @@ Deno.test(
       return new Response("unexpected", { status: 500 });
     },
     async () => {
-      const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
+      const r = await fetchAttemptsFromTpi(
+        "8432222986",
+        DialerDomain.ACT,
+        gatesMock,
+      );
       assertEquals(r.ok, true);
       if (r.ok) {
         assertEquals(r.attempts, 7);
@@ -127,11 +143,18 @@ Deno.test(
         "Profile,1": { typeId: "Profile", itemId: "1" },
       }),
     async () => {
-      const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
+      const r = await fetchAttemptsFromTpi(
+        "8432222986",
+        DialerDomain.ACT,
+        gatesMock,
+      );
       assertEquals(r.ok, false);
       if (!r.ok) assertEquals(r.reason, "no-lead-in-rm");
       // RM responded fine, so the circuit shouldn't have moved.
-      assertEquals((await getTpiThrottleSnapshot()).consecutiveFailures, 0);
+      assertEquals(
+        (await getTpiThrottleSnapshot(gatesMock)).consecutiveFailures,
+        0,
+      );
     },
   ),
 );
@@ -148,7 +171,11 @@ Deno.test(
       return jsonResponse({ result: {} });
     },
     async () => {
-      const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
+      const r = await fetchAttemptsFromTpi(
+        "8432222986",
+        DialerDomain.ACT,
+        gatesMock,
+      );
       assertEquals(r.ok, false);
       if (!r.ok) assertEquals(r.reason, "no-times-called-field");
     },
@@ -162,10 +189,14 @@ Deno.test(
     async () => {
       // Drive 5 failures.
       for (let i = 0; i < 5; i++) {
-        const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
+        const r = await fetchAttemptsFromTpi(
+          "8432222986",
+          DialerDomain.ACT,
+          gatesMock,
+        );
         assertEquals(r.ok, false);
       }
-      const snap = await getTpiThrottleSnapshot();
+      const snap = await getTpiThrottleSnapshot(gatesMock);
       assertEquals(snap.circuitOpen, true);
 
       // 6th call: should short-circuit BEFORE fetching. Swap the stub
@@ -177,7 +208,11 @@ Deno.test(
         return Promise.resolve(new Response("nope", { status: 200 }));
       }) as typeof globalThis.fetch;
       try {
-        const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
+        const r = await fetchAttemptsFromTpi(
+          "8432222986",
+          DialerDomain.ACT,
+          gatesMock,
+        );
         assertEquals(r.ok, false);
         if (!r.ok) assertEquals(r.reason, "tpi-circuit-open");
         assertEquals(fetchedAgain, false);
@@ -193,11 +228,15 @@ Deno.test(
   withStubFetch(
     () => new Response("should not be called", { status: 500 }),
     async () => {
-      const r = await fetchAttemptsFromTpi("not-a-phone", DialerDomain.ACT);
+      const r = await fetchAttemptsFromTpi(
+        "not-a-phone",
+        DialerDomain.ACT,
+        gatesMock,
+      );
       assertEquals(r.ok, false);
       if (!r.ok) assertEquals(r.reason, "invalid-phone");
       // No token consumed.
-      assertEquals((await getTpiThrottleSnapshot()).callsInWindow, 0);
+      assertEquals((await getTpiThrottleSnapshot(gatesMock)).callsInWindow, 0);
     },
   ),
 );
@@ -220,19 +259,23 @@ Deno.test(
     Deno.env.delete("RM_TPI_MIN_SPACING_MS");
 
     __resetTpiStateForTests();
-    globalThis.fetch = async (input: RequestInfo | URL) => {
+    globalThis.fetch = (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/TPI/search/lead/")) {
-        return jsonResponse({
+        return Promise.resolve(jsonResponse({
           "Lead,1": { typeId: "Lead", itemId: "1" },
-        });
+        }));
       }
-      return jsonResponse({ result: { "times called": 1 } });
+      return Promise.resolve(jsonResponse({ result: { "times called": 1 } }));
     };
     try {
       let capHit = false;
       for (let i = 0; i < 35; i++) {
-        const r = await fetchAttemptsFromTpi("8432222986", DialerDomain.ACT);
+        const r = await fetchAttemptsFromTpi(
+          "8432222986",
+          DialerDomain.ACT,
+          gatesMock,
+        );
         if (!r.ok && r.reason === "tpi-window-cap-reached") {
           capHit = true;
           break;

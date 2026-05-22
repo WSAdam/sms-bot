@@ -49,6 +49,19 @@ one Deno Deploy project:
 - **shape-checker abandoned** — fundamentally incompatible with Fresh's
   `routes/` convention. The script is still wired to `deno task shape-check` for
   completeness; ignore its output.
+- **Reads always filter at the database; hot-path metrics use write-side
+  aggregators.** After the 2026-05-19 quota incident and the follow-up cleanup,
+  every code path that needs many docs uses one of: (a) a database-side `where`
+  filter (single-field auto-indexed, or composite indexes in
+  [firestore.indexes.json](firestore.indexes.json)), (b) a write-side
+  aggregator/marker doc updated transactionally at write time, or (c) a single
+  `db.get` against a known-id doc. No code path scans an unbounded collection at
+  request time. The tripwire in
+  [shared/firestore/wrapper.ts](shared/firestore/wrapper.ts) `list()` logs a
+  stack trace if any single call returns more than
+  `FIRESTORE_LIST_WARN_THRESHOLD` docs (default 500) — production code should
+  rewrite the query, not raise the threshold. See
+  [firestore-safety.md](firestore-safety.md) for the full inventory.
 
 ### 0.2 Critical gotchas discovered during implementation
 
@@ -130,6 +143,30 @@ one Deno Deploy project:
     reads now scan one week of recipients (hundreds), not the full conversations
     table. Same pattern applies to any future metric you might be tempted to
     derive from a full-table scan.
+
+11. **Every hot-path scan is now bounded.** Same incident, broader fix completed
+    in May 2026. Every site that used to list a full collection now uses either
+    (a) a database-side `where` filter, (b) a write-side aggregator/marker doc,
+    or (c) a single `db.get`. See [firestore-safety.md](firestore-safety.md) for
+    the full inventory. New write-side collections introduced:
+    - `injectedphones/byPhone/{phone10}` — `/api/guests/answered` lookup
+    - `uniqueguestsbyphone/byPhone/{phone10}` — dashboard "Unique Guests"
+      drill-in (updated transactionally inside `storeMessage`)
+    - `metrics/daily/{YYYY-MM-DD}` + `metrics/lifetime/totals` — nightly report
+      counters (incremented at every fire/activate/send site)
+
+    Each has a one-shot backfill script in `scripts/`. Run those BEFORE the
+    read-side code that depends on the aggregator ships, otherwise historical
+    phones go missing.
+
+12. **Wrapper extensions for atomic writes.**
+    [shared/firestore/wrapper.ts](shared/firestore/wrapper.ts) exposes
+    `incrementField`, `setMerge`, and `transactionalUpdate` on top of the basic
+    `get`/`set`/`list`/`batch`/`atomicCreate`. Use `incrementField` for counters
+    (atomic via `FieldValue.increment`), `setMerge` for "stamp this field, leave
+    the rest alone", and `transactionalUpdate` for read-modify-write under
+    concurrency (e.g. `orchestrator.updatePointer`). Don't go back to
+    read-then-write — that's how the daily SMS cap could be overshot before.
 
 ### 0.3 Env vars (current canonical list)
 
@@ -297,7 +334,7 @@ Sections:
 ```bash
 deno task dev          # Fresh on port 5173/5174 with --env-file=env/local
 deno task tunnel --env=dev    # ngrok exposing the dev server
-deno task test         # 33 unit tests (all mocked)
+deno task test         # 109 unit tests (all mocked)
 deno task build        # Vite production build
 deno task migrate      # KV → Firestore one-shot
 deno task shape-check  # ignore output, structure incompatible with Fresh
@@ -312,6 +349,26 @@ set `GOOGLE_APPLICATION_CREDENTIALS=./data/service-account.dev.json` (default
 already in `env/local`). Or set `FIREBASE_SERVICE_ACCOUNT_JSON` with the inline
 JSON — that takes precedence.
 
+**Write-side aggregator backfill scripts** — one-shots that seed the new index
+collections from existing data. Idempotent; run them BEFORE deploying the
+read-side code that depends on them, or historical phones go invisible. Each
+scans a full source collection on purpose; bump `FIRESTORE_LIST_WARN_THRESHOLD`
+to silence the safety-rail warning while they run.
+
+```bash
+FIRESTORE_LIST_WARN_THRESHOLD=1000000 \
+  deno run -A --env-file=env/local scripts/backfill-injected-phones.ts
+FIRESTORE_LIST_WARN_THRESHOLD=1000000 \
+  deno run -A --env-file=env/local scripts/backfill-orchestrator-phone.ts
+FIRESTORE_LIST_WARN_THRESHOLD=1000000 \
+  deno run -A --env-file=env/local scripts/backfill-unique-guests.ts
+FIRESTORE_LIST_WARN_THRESHOLD=1000000 \
+  deno run -A --env-file=env/local scripts/backfill-daily-metrics.ts
+```
+
+All four accept `--dry-run` for a no-write preview. See the file headers for
+what each one reads/writes.
+
 ### 0.9 Deploy
 
 - **Project**: Deno Deploy auto-deploys from `main` branch of
@@ -322,6 +379,14 @@ JSON — that takes precedence.
 - **Cron tab in Deploy panel** confirms both Deno.cron jobs registered.
 - **Logs**: every request logs ET-time + method + path + status + ms via
   `routes/_middleware.ts`.
+- **Firestore composite indexes** live in
+  [firestore.indexes.json](firestore.indexes.json) at repo root. Deploy with
+  `firebase deploy --only firestore:indexes` (or the gcloud equivalent in
+  [firestore-safety.md](firestore-safety.md)). Index builds run in the
+  background and can take minutes-to-hours; deploy them BEFORE shipping code
+  that uses them, otherwise the dependent queries return
+  `9 FAILED_PRECONDITION: The query requires an index` until the build
+  completes.
 
 ### 0.10 Bland webhook config (cutover guide)
 
@@ -368,8 +433,9 @@ truly safe re-runs. Not built yet.
 
 ### 0.12 What's NOT done (vs. original plan)
 
-- **Emulator tests** (`tests/emulator/*`) — never built. All 33 tests are unit +
-  mocked.
+- **Emulator tests** (`tests/emulator/*`) — never built. All 109 tests are
+  unit + mocked. The `deno task test:emulator` task in `deno.json` still points
+  at the missing dir; left in place but harmless if not invoked.
 - **MostRecentPackage QB fields** — `MostRecentPackageIdDateOfBooking`,
   `MostRecentPackageIdCreditCardType`,
   `MostRecentPackageIdLast4OfCreditCardOnly` come back as empty strings from
@@ -382,6 +448,30 @@ truly safe re-runs. Not built yet.
   not built. We initiate bookings, Cal.com doesn't currently call us.
 - **Per-domain RM creds** — env vars exist conceptually but `RM_USER`/`RM_PASS`
   covers all 5 domains in practice.
+- **`QUICKBASE_FAIL_OPEN` env var** — read by
+  [shared/config/env.ts](shared/config/env.ts) but never consulted downstream.
+  Fail-open behavior is hardcoded in
+  [shared/services/crm/reservations.ts](shared/services/crm/reservations.ts)'s
+  try/catch. Either wire it through or delete.
+
+**Done since the original plan was written** (i.e. _not_ TODOs):
+
+- **Firestore safety cleanup** — Parts A, B, C of
+  [firestore-safety.md](firestore-safety.md) are all complete. Every
+  request-path code path now filters at the database, uses a write-side
+  aggregator, or does a single `db.get`. No code path scans an unbounded
+  collection.
+- **New write-side collections**: `injectedphones/byPhone`,
+  `uniqueguestsbyphone/byPhone`, `metrics/daily/*` + `metrics/lifetime/totals`.
+  See §6 schema and [firestore-safety.md](firestore-safety.md). Each has a
+  backfill script in [scripts/](scripts/).
+- **Wrapper extensions** — `incrementField`, `setMerge`, `transactionalUpdate`
+  on `FirestoreClient` so counters and read-modify-write patterns are race-free
+  without bespoke transaction blocks at call sites.
+- **Composite Firestore indexes** —
+  [firestore.indexes.json](firestore.indexes.json) defines the 4 composite
+  indexes the new query shapes require. Deploy with
+  `firebase deploy --only firestore:indexes`.
 
 ### 0.13 Memory rules (Adam's preferences)
 
@@ -701,6 +791,30 @@ sms-bot (collection)
 │              { phone, weekKey, firstSentAt }      weekKey = ET Monday
 │                                                   ISO date (YYYY-MM-DD).
 │
+├── injectedphones (doc)                          ← write-side marker per
+│   └── byPhone (subcollection)                     phone we've ever
+│       └── {phone10}                               scheduled an injection
+│              { phone, firstInjectedAt,            for. Collapses
+│                lastInjectedAt }                   /api/guests/answered to
+│                                                   a single doc.get.
+│
+├── uniqueguestsbyphone (doc)                     ← dashboard "Unique
+│   └── byPhone (subcollection)                     Guests Reached"
+│       └── {phone10}                               aggregator. Updated
+│              { phoneNumber, firstSeen, lastSeen,  transactionally inside
+│                messageCount, replyCount,          storeMessage. /api/guests/
+│                hasReplied, updatedAt }            list reads only this.
+│
+├── metrics (doc)                                 ← daily + lifetime
+│   ├── daily (subcollection)                       counters for the
+│   │   └── {YYYY-MM-DD}                            morning report.
+│   │          { apptsBooked, activations,          Incremented at every
+│   │            textsSent, updatedAt }             write site (atomic
+│   └── lifetime (subcollection)                    FieldValue.increment).
+│       └── totals                                  Report reads, never
+│              { apptsBooked, activations,          scans.
+│                textsSent, updatedAt }
+│
 ├── abtest (doc)
 │   └── byPhone (subcollection)
 │       └── {phone10}
@@ -712,13 +826,28 @@ sms-bot (collection)
               { partnerStoreRedFlag, ... }
 ```
 
-**Recommended Firestore indexes** (composite — define in
-`firestore.indexes.json`):
+**Firestore composite indexes** — defined in
+[firestore.indexes.json](firestore.indexes.json), deployed via
+`firebase deploy --only firestore:indexes`:
 
-- `sms-bot/conversations/messages` — `(phoneNumber asc, timestamp desc)`,
-  `(sender asc, timestamp desc)`, `(nodeTag asc, timestamp desc)`
-- `sms-bot/injectionhistory/byPhone` — `(phone asc, firedAt desc)`
-- `sms-bot/scheduledinjections/byPhone` — `(eventTime asc)` for the cron sweep
+- `messages` collection group — `(phoneNumber asc, timestamp desc)`,
+  `(sender asc, timestamp desc)`, `(nodeTag asc, timestamp desc)` — powers the
+  database-side filters in
+  [routes/api/dashboard/drill.ts](routes/api/dashboard/drill.ts) and the nodeTag
+  query in
+  [routes/api/admin/repopulate-injections.ts](routes/api/admin/repopulate-injections.ts)
+- `byPhone` collection group — `(phone asc, firedAt desc)` — powers per-phone
+  history paging in [routes/api/appointments.ts](routes/api/appointments.ts)
+
+Single-field auto-indexes cover the rest:
+
+- `scheduledinjections/byPhone` — `eventTime` (sweep filter)
+- `conversations/messages` — `callId` (dedupe + reseed lookup)
+- `injectionhistory/byPhone` — `phone`, `recoveredFromCallId`, `firedAt`
+- `orchestratorevents/byPhone` — `phone`
+- `weeklyrecipientbyphoneweek/byKey` — `weekKey`
+- `uniqueguestsbyphone/byPhone` — `lastSeen`, `messageCount`
+- `audit/byRecordId` + `auditstage/{stage}` — `processedAt`
 
 ---
 
@@ -1125,14 +1254,13 @@ What's in the dump and what to do with each piece during the port:
 
 - [ ] Quickbase auth model for non-`getReports` operations (user token? app
       token?). Add env vars to §13 once decided.
-- [ ] Do we want Deno Deploy's built-in `Deno.cron` for the scheduled-injection
-      sweep, or keep the external cron model? (Built-in cron is simpler;
-      external cron decouples scheduling from the deploy.)
-- [ ] Indexes: which composite indexes do we actually need on day 1 vs. add
-      later when queries get slow?
-- [ ] Backwards-compat for the ngrok tunnels — repoint them, or mount handlers
-      at `/confirmations/v001/...` to keep them working unchanged?
-- [ ] Do we need to port the `seedConversations` backfill endpoint, or is
-      migration via the script enough?
-- [ ] DNC: separate Firestore collection (`dnc/byPhone/{phone10}`) or just a
-      flag inside `smsflowcontext`?
+- [x] **Resolved** — Deno Deploy's built-in `Deno.cron` for the
+      scheduled-injection sweep (decoupled from external cron, see §0.6).
+- [x] **Resolved** — composite indexes live in
+      [firestore.indexes.json](firestore.indexes.json); see §6 schema.
+- [x] **Resolved** — webhooks moved to clean `/sms-callback/*`, `/trigger/*`,
+      `/cal/*` paths; ngrok tunnels repointed (§0.1).
+- [x] **Resolved** — `seedConversations` backfill endpoint exists at
+      `POST /sms-callback/seed-conversations` (see §0.5).
+- [x] **Resolved** — DNC lives in its own `sms-bot/dnc/byPhone/{phone10}`
+      collection (§6 schema).

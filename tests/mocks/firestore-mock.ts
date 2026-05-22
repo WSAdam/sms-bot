@@ -45,11 +45,16 @@ export class FirestoreMock implements FirestoreClient {
       entries = entries.filter((e) => {
         const v = e.data[field];
         switch (op) {
-          case "==": return v === value;
-          case "<": return compare(v, value) < 0;
-          case "<=": return compare(v, value) <= 0;
-          case ">": return compare(v, value) > 0;
-          case ">=": return compare(v, value) >= 0;
+          case "==":
+            return v === value;
+          case "<":
+            return compare(v, value) < 0;
+          case "<=":
+            return compare(v, value) <= 0;
+          case ">":
+            return compare(v, value) > 0;
+          case ">=":
+            return compare(v, value) >= 0;
         }
       });
     }
@@ -89,15 +94,51 @@ export class FirestoreMock implements FirestoreClient {
     path: string,
     data: Record<string, unknown>,
   ): Promise<AtomicCreateResult> {
-    const existing = this.docs.get(path);
-    if (existing) {
-      return Promise.resolve({
-        created: false,
-        existing: structuredClone(existing),
-      });
-    }
-    this.docs.set(path, structuredClone(data));
-    return Promise.resolve({ created: true, existing: null });
+    return this.withLock(() => {
+      const existing = this.docs.get(path);
+      if (existing) {
+        return {
+          created: false,
+          existing: structuredClone(existing),
+        };
+      }
+      this.docs.set(path, structuredClone(data));
+      return { created: true, existing: null };
+    });
+  }
+
+  incrementField(
+    path: string,
+    fields: Record<string, number>,
+  ): Promise<void> {
+    return this.withLock(() => {
+      const existing = this.docs.get(path) ?? {};
+      const next = { ...existing };
+      for (const [k, n] of Object.entries(fields)) {
+        const cur = typeof next[k] === "number" ? next[k] as number : 0;
+        next[k] = cur + n;
+      }
+      this.docs.set(path, structuredClone(next));
+    });
+  }
+
+  setMerge(path: string, data: Record<string, unknown>): Promise<void> {
+    return this.withLock(() => {
+      const existing = this.docs.get(path) ?? {};
+      this.docs.set(path, structuredClone({ ...existing, ...data }));
+    });
+  }
+
+  transactionalUpdate(
+    path: string,
+    fn: (existing: Record<string, unknown> | null) => Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.withLock(() => {
+      const existing = this.docs.get(path) ?? null;
+      const next = fn(existing ? structuredClone(existing) : null);
+      this.docs.set(path, structuredClone(next));
+      return structuredClone(next);
+    });
   }
 
   // Test helpers
@@ -107,6 +148,19 @@ export class FirestoreMock implements FirestoreClient {
 
   size(): number {
     return this.docs.size;
+  }
+
+  // Serializes concurrent mutations through a Promise chain so concurrent
+  // incrementField / atomicCreate / transactionalUpdate calls don't lose
+  // updates. Mirrors the atomicity Firestore provides server-side from the
+  // SDK's point of view, which is what the unit tests for race-condition
+  // fixes need to assert against.
+  // deno-lint-ignore no-explicit-any
+  private mutationLock: Promise<any> = Promise.resolve();
+  private withLock<T>(fn: () => T): Promise<T> {
+    const next = this.mutationLock.then(() => fn());
+    this.mutationLock = next.catch(() => {});
+    return next;
   }
 }
 
