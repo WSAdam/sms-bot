@@ -1645,45 +1645,26 @@ document.getElementById("activatedCard").addEventListener("click", async functio
   openDrill();
   drillLoading.style.display = "block";
   try{
-    // Parallel fetch: activated guests + leadpointers (for Campaign column)
-    // + calldispositions (for Confirmed Called + Last Disposition columns)
-    // + RM campaign-id→name map (for rendering campaign names instead of ids).
+    // Pre-refactor this scanned guestactivated + leadpointer (~1.3k docs)
+    // + calldispositions (~5.3k docs) via three parallel /api/kv/list
+    // calls at limit:50_000. Now: single /api/dashboard/activated call
+    // returns the visible rows pre-decorated with pointer + confirmedCall
+    // + lastDisposition via per-phone gets/where on the server. ~50 ops
+    // total instead of 6.5k.
     var responses = await Promise.all([
-      fetch("/api/kv/list", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ prefix: ["guestactivated"], limit: 50000 }) }),
-      fetch("/api/kv/list", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ prefix: ["leadpointer"], limit: 50000 }) }),
-      fetch("/api/kv/list", { method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ prefix: ["calldispositions"], limit: 50000 }) }),
+      fetch("/api/dashboard/activated?page=1&pageSize=500"),
       fetch("/api/admin/readymode-campaigns")
     ]);
     var actData = await responses[0].json();
     if(!responses[0].ok) throw new Error(actData.error || "Failed loading activated");
-    var pointerData = responses[1].ok ? await responses[1].json() : { entries: [] };
-    var dispoData = responses[2].ok ? await responses[2].json() : { entries: [] };
-    var rmCampaignsData = responses[3].ok ? await responses[3].json() : { campaigns: {} };
+    var rmCampaignsData = responses[1].ok ? await responses[1].json() : { campaigns: {} };
     drillLoading.style.display = "none";
 
-    // Build per-phone lookups.
-    var pointerByPhone = {};
-    (pointerData.entries || []).forEach(function(e){
-      var v = e.value;
-      if(v && v.phone10) pointerByPhone[v.phone10] = v;
-    });
     var rmCampaigns = rmCampaignsData.campaigns || {};
-
-    // For each phone, collect ALL dispositions and pick: earliest answered
-    // (for Confirmed Called timestamp) and most recent of any (for Last
-    // Disposition column). Doc id format: "{phone10}__{callLogId}".
-    var dispoByPhone = {};
-    (dispoData.entries || []).forEach(function(e){
-      var v = e.value; if(!v || !v.phone10) return;
-      var p = v.phone10;
-      var arr = dispoByPhone[p] || (dispoByPhone[p] = []);
-      arr.push(v);
-    });
-
-    var allItems = (actData.entries || []).map(function(e){ return e.value; });
+    var allItems = actData.items || [];
+    // Items are already sorted by activatedAt desc on the server, but
+    // keep this defensive sort in case the column header sort logic
+    // mutates the array later.
     allItems.sort(function(a, b){
       var at = a.activatedAt ? new Date(a.activatedAt).getTime() : 0;
       var bt = b.activatedAt ? new Date(b.activatedAt).getTime() : 0;
@@ -1703,41 +1684,15 @@ document.getElementById("activatedCard").addEventListener("click", async functio
       return Math.round(Math.abs(aMs - eMs) / 86400000 * 10) / 10;
     }
 
-    // Confirmed-called signal: at least one calldisposition exists for the
-    // phone with callTime <= the sale's activatedAt (i.e. our dialer talked
-    // to them BEFORE the QB activation came through). Returns the earliest
-    // such call, or null if no qualifying call exists.
-    function earliestConfirmedCall(m){
-      var arr = dispoByPhone[m.phone10];
-      if(!arr || arr.length === 0) return null;
-      var saleMs = m.activatedAt ? new Date(m.activatedAt).getTime() : Infinity;
-      var best = null;
-      for(var i = 0; i < arr.length; i++){
-        var d = arr[i];
-        var t = d.callTime ? new Date(d.callTime).getTime() : NaN;
-        if(!isFinite(t)) continue;
-        if(t > saleMs) continue;
-        if(!best || t < new Date(best.callTime).getTime()) best = d;
-      }
-      return best;
-    }
-    // Most recent disposition before the sale — surfaces what the dialer
-    // last heard from this phone (e.g. "Sale (NO MCC)", "Not interested").
-    function lastDispoBeforeSale(m){
-      var arr = dispoByPhone[m.phone10];
-      if(!arr || arr.length === 0) return null;
-      var saleMs = m.activatedAt ? new Date(m.activatedAt).getTime() : Infinity;
-      var best = null;
-      for(var i = 0; i < arr.length; i++){
-        var d = arr[i];
-        var t = d.callTime ? new Date(d.callTime).getTime() : NaN;
-        if(!isFinite(t) || t > saleMs) continue;
-        if(!best || t > new Date(best.callTime).getTime()) best = d;
-      }
-      return best;
-    }
+    // Per-row decoration is now done server-side by /api/dashboard/activated.
+    // Each item carries confirmedCall (full disposition object), lastDisposition
+    // (most-recent disposition before the sale), and pointer (the leadpointer
+    // doc for the phone). These accessors just pull from those fields — no
+    // client-side aggregation across full collections.
+    function earliestConfirmedCall(m){ return m.confirmedCall || null; }
+    function lastDispoBeforeSale(m){ return m.lastDisposition || null; }
     function campaignNameFor(m){
-      var p = pointerByPhone[m.phone10];
+      var p = m.pointer;
       var cid = p && p.originalSource && p.originalSource.campaignId
         ? String(p.originalSource.campaignId) : null;
       if(!cid) return null;
@@ -1839,20 +1794,13 @@ document.getElementById("answeredCard").addEventListener("click", async function
   openDrill();
   drillLoading.style.display = "block";
   try{
-    var res = await fetch("/api/kv/list", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefix: ["guestanswered"], limit: 50000 })
-    });
+    // Server-side orderBy(answeredAt desc) + pagination. Pre-refactor
+    // this scanned the entire guestanswered collection via /api/kv/list.
+    var res = await fetch("/api/dashboard/answered?page=1&pageSize=500");
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
     drillLoading.style.display = "none";
-    var items = (data.entries || []).map(function(e){ return e.value; });
-    items.sort(function(a, b){
-      var at = a.answeredAt ? new Date(a.answeredAt).getTime() : 0;
-      var bt = b.answeredAt ? new Date(b.answeredAt).getTime() : 0;
-      return bt - at;
-    });
+    var items = data.items || [];
     renderDrillTable(items, [
       { label: "Phone", render: function(m){ return phoneLink(m.phone10); }, sortKey: function(m){ return m.phone10; } },
       { label: "Answered At", render: function(m){ return escapeHtml(formatTimestamp(m.answeredAt)); }, cls: "muted", sortKey: function(m){ return m.answeredAt || ""; } },
@@ -3919,6 +3867,22 @@ details.auth .auth-row .filter-group{flex:1;min-width:280px}
         <div class="resp"><pre></pre></div>
       </div>
 
+      <div class="endpoint-card" data-id="cron-health" style="grid-column: 1 / -1">
+        <div class="ep-head">
+          <div>
+            <div class="ep-title">🩺 Cron health <span class="tag">silent-failure guard</span></div>
+            <div class="ep-desc">Last-run timestamp + status for every Deno.cron job. If any row is highlighted red, that cron has been silently failing or stopped running. The May 2026 sale-match outage went 16 days without anyone noticing — this card is the early-warning surface for next time.</div>
+          </div>
+          <span class="ep-method method-GET">GET</span>
+        </div>
+        <code class="path">/api/admin/cron-health</code>
+        <div class="actions">
+          <button onclick="runCronHealth(this)">Check now</button>
+          <span class="status muted"></span>
+        </div>
+        <div class="resp"><pre></pre></div>
+      </div>
+
       <div class="endpoint-card" data-id="cron-config" style="grid-column: 1 / -1">
         <div class="ep-head">
           <div>
@@ -4581,6 +4545,50 @@ async function runRepopulateInjections(btn){
     headers: { "content-type": "application/json" },
     body: { dryRun },
   });
+}
+async function runCronHealth(btn){
+  // Cron-health endpoint returns one marker per Deno.cron job + an
+  // anyStale / anyErrored aggregate. Render a compact table to make
+  // it easy to scan; the raw JSON is in the response panel below.
+  const card = btn.closest(".endpoint-card");
+  btn.disabled = true;
+  const stat = card.querySelector(".actions .status");
+  stat.className = "status muted";
+  stat.textContent = "checking...";
+  const t0 = performance.now();
+  try {
+    const res = await fetch("/api/admin/cron-health");
+    const ms = Math.round(performance.now() - t0);
+    const body = await res.json();
+    const resp = card.querySelector(".resp");
+    const pre = resp.querySelector("pre");
+    resp.classList.add("show");
+    const summary = body.ok
+      ? "✅ all crons healthy"
+      : body.anyErrored
+      ? "❌ at least one cron errored"
+      : "⚠️ at least one cron stale";
+    stat.className = "status " + (body.ok ? "status-2xx" : "status-4xx");
+    stat.textContent = summary + " · " + ms + "ms";
+    // Compact table on top, full JSON below.
+    const tableLines = ["name                            last run        aged   status     duration"];
+    for (const c of body.crons){
+      const name = (c.name || "").padEnd(32).slice(0, 32);
+      const lastRun = (c.lastRunAt || "(never)").slice(0, 16).padEnd(16);
+      const aged = c.agedHours === null ? "?".padStart(5) :
+                   c.agedHours < 1 ? (Math.round(c.agedHours * 60) + "m").padStart(5) :
+                   c.agedHours < 24 ? (Math.round(c.agedHours) + "h").padStart(5) :
+                   (Math.round(c.agedHours / 24) + "d").padStart(5);
+      const status = (c.stale ? "STALE  " : c.lastStatus === "error" ? "ERROR  " : "ok     ").padEnd(9);
+      const dur = c.lastDurationMs ? (c.lastDurationMs + "ms") : "-";
+      tableLines.push(name + lastRun + "  " + aged + "  " + status + "  " + dur);
+    }
+    pre.textContent = tableLines.join("\\n") + "\\n\\n" + JSON.stringify(body, null, 2);
+  } catch (err) {
+    showError(card, err);
+  } finally {
+    btn.disabled = false;
+  }
 }
 async function runProbeIndex(btn, name){
   // Composite-index probe. Fires the query and renders one of two

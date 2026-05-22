@@ -94,6 +94,16 @@ export const uniqueGuestsByPhoneCollection =
 export const metricsDailyContainer = `${R}/metrics`;
 export const metricsDailyCollection = `${metricsDailyContainer}/daily`;
 export const metricsLifetimeCollection = `${metricsDailyContainer}/lifetime`;
+// One doc per Deno.cron job. Stamped at the END of every cron run so
+// /api/admin/cron-health can detect silent failures (the daily QB
+// sale-match cron 502'd for 16 days before we noticed). Doc shape:
+// { lastRunAt, lastStatus: "ok"|"error", lastError?, lastDurationMs }.
+export const metricsCronRunsCollection = `${metricsDailyContainer}/cronruns`;
+// Per-container row counters for the dashboard's kvBreakdown sidebar.
+// Single doc with one field per container — no full-collection scans
+// on dashboard load. See plan part 2.C.
+export const metricsKvBreakdownCollection =
+  `${metricsDailyContainer}/kvBreakdown`;
 
 // Per-week recipient index for the WTD count. Doc id is
 // `{weekKey}__{phone10}` so atomicCreate dedupes within the same week.
@@ -200,6 +210,12 @@ export function metricsDailyDocPath(easternDate: string): string {
 }
 export function metricsLifetimeDocPath(): string {
   return `${metricsLifetimeCollection}/totals`;
+}
+export function metricsCronRunDocPath(cronName: string): string {
+  return `${metricsCronRunsCollection}/${cronName}`;
+}
+export function metricsKvBreakdownDocPath(): string {
+  return `${metricsKvBreakdownCollection}/totals`;
 }
 export function abTestDocPath(phone10: string): string {
   return `${abTestCollection}/${phone10}`;

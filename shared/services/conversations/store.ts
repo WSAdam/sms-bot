@@ -9,6 +9,7 @@ import { isExcludedFromReporting } from "@shared/config/constants.ts";
 import {
   conversationDocPath,
   conversationsCollection,
+  metricsKvBreakdownDocPath,
   uniqueGuestByPhoneDocPath,
 } from "@shared/firestore/paths.ts";
 import {
@@ -115,6 +116,19 @@ export async function storeMessage(
       );
     });
   }
+
+  // Atomic counter increment on the dashboard's kvBreakdown sidebar
+  // doc — keeps the conversation row count fresh between daily refreshes.
+  // Fire-and-forget; the daily metrics-kvbreakdown-refresh cron is the
+  // floor that corrects any drift.
+  client.incrementField(metricsKvBreakdownDocPath(), { conversations: 1 })
+    .catch((e) => {
+      console.warn(
+        `[storeMessage] kvBreakdown increment failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    });
 
   return msg;
 }

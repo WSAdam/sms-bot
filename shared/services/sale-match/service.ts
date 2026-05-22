@@ -11,6 +11,7 @@ import {
   guestAnsweredDocPath,
   injectionHistoryCollection,
   metricsDailyDocPath,
+  metricsKvBreakdownDocPath,
   metricsLifetimeDocPath,
   salesOutsideWindowDocPath,
   salesWithin7dDocPath,
@@ -451,6 +452,11 @@ export async function processSaleMatches(
         ]),
         client.incrementField(metricsLifetimeDocPath(), { activations: total }),
         client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
+        // Dashboard kvBreakdown sidebar counter — atomic increment for
+        // every new guestactivated doc we just wrote.
+        client.incrementField(metricsKvBreakdownDocPath(), {
+          guestactivated: total,
+        }),
       ]);
       console.log(
         `[sale-match] activations counters: +${total} (lifetime), days=${
