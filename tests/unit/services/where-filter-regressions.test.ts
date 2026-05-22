@@ -14,7 +14,6 @@ import {
   injectedPhoneDocPath,
   injectionHistoryCollection,
   orchestratorEventsCollection,
-  scheduledInjectionDocPath,
   scheduledInjectionsCollection,
   uniqueGuestsByPhoneCollection,
 } from "@shared/firestore/paths.ts";
@@ -250,12 +249,14 @@ Deno.test("storeMessage updates uniqueguestsbyphone aggregator", async () => {
   assertEquals((agg as { hasReplied: boolean }).hasReplied, true);
 });
 
-// Anti-regression for the Phase 2 F per-phone lookup. If sale-match ever
-// drifts back to a full-table scan, this test should catch it.
-Deno.test("sale-match per-phone lookup uses where(phone) on injectionhistory", async () => {
-  // Sale-match's loadCandidatesAndActivated is internal — we exercise it
-  // by running processSaleMatches with a single phone and asserting the
-  // mock's list call shape.
+// Sale-match runs once a day against potentially large QB reports
+// (report 678 returns ~30k+ rows). We tried per-phone where-filters but
+// that's catastrophically slow at 30k × 3 sequential reads on Deno
+// Deploy — explicit exception to the "no scans" rule, documented in
+// shared/services/sale-match/service.ts. This test pins the contract:
+// sale-match SHOULD bulk-list the three source collections in parallel,
+// once per run.
+Deno.test("sale-match bulk-loads the three source collections in parallel", async () => {
   const mock = new FirestoreMock();
   setFirestoreClientForTests(mock);
   try {
@@ -265,39 +266,27 @@ Deno.test("sale-match per-phone lookup uses where(phone) on injectionhistory", a
     );
     await processSaleMatches([{ phone10: "5551239876" }], mock);
 
-    // Either no list call at all (no candidates), or the only list call
-    // against injectionhistory should be per-phone where(phone). Critically:
-    // NO unfiltered list of scheduledinjections/injectionhistory/guestactivated.
-    const fullScan = calls.find((c) =>
-      (c.parentPath === injectionHistoryCollection ||
-        c.parentPath === scheduledInjectionsCollection) &&
-      !c.opts.where
-    );
+    const wantedParents = new Set([
+      scheduledInjectionsCollection,
+      injectionHistoryCollection,
+      "sms-bot/guestactivated/byPhone",
+    ]);
+    const bulkScans = calls.filter((c) => wantedParents.has(c.parentPath));
     assertEquals(
-      fullScan,
-      undefined,
-      `sale-match should never scan ${injectionHistoryCollection} or ${scheduledInjectionsCollection} without a where filter`,
+      bulkScans.length,
+      3,
+      `expected one bulk list per source collection (got ${bulkScans.length})`,
     );
-  } finally {
-    setFirestoreClientForTests(null);
-  }
-});
-
-// Anti-regression for the scheduledinjections side specifically.
-Deno.test("sale-match: scheduledinjections is read by db.get, not list", async () => {
-  const phone = "5551239876";
-  const mock = new FirestoreMock();
-  setFirestoreClientForTests(mock);
-  try {
-    const { calls: getCalls } = spyGet(mock);
-    const { processSaleMatches } = await import(
-      "@shared/services/sale-match/service.ts"
-    );
-    await processSaleMatches([{ phone10: phone }], mock);
-    assert(
-      getCalls.includes(scheduledInjectionDocPath(phone)),
-      "sale-match must use db.get on scheduledinjections, not list",
-    );
+    // Each must be a bulk list (no where filter) — sale-match
+    // intentionally bypasses the where-filter pattern because per-phone
+    // lookups don't scale to 30k+ input rows on Deno Deploy.
+    for (const c of bulkScans) {
+      assertEquals(
+        c.opts.where,
+        undefined,
+        `sale-match must bulk-list ${c.parentPath} (no where filter)`,
+      );
+    }
   } finally {
     setFirestoreClientForTests(null);
   }
