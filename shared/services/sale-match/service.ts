@@ -105,7 +105,17 @@ export async function processSaleMatches(
   // injection (get), history list (where(phone) — typically 0-2 docs),
   // activated marker (get). Pre-fix this scanned 3 × 50_000 docs every
   // morning regardless of report size. See firestore-safety.md.
-  async function loadCandidatesAndActivated(
+  //
+  // CRITICAL: pre-load all unique phones IN PARALLEL (chunks of
+  // LOOKUP_CONCURRENCY) and stash results in a map before the main loop.
+  // The naive "await loadCandidatesAndActivated(phone) inside the for-
+  // loop" pattern was sequential — 100 rows × ~150ms RTT = 15s of pure
+  // Firestore latency, on top of QB + writes. With a 200-row report on
+  // Deno Deploy that pushed past the request budget and surfaced as a
+  // BOOT_FAILED 502 to the caller.
+  const LOOKUP_CONCURRENCY = 20;
+
+  async function loadOne(
     phone10: string,
   ): Promise<{ candidates: ApptCandidate[]; alreadyActivated: boolean }> {
     const [pendingDoc, historyDocs, activatedDoc] = await Promise.all([
@@ -134,6 +144,31 @@ export async function processSaleMatches(
     }
     return { candidates: out, alreadyActivated: activatedDoc !== null };
   }
+
+  // Pre-fetch all unique phones in parallel chunks. For 100 rows at
+  // concurrency 20, that's 5 sequential round-trips of 20 parallel
+  // requests each — roughly 5 × ~150ms = ~750ms total instead of 15s.
+  const uniquePhones = Array.from(
+    new Set(
+      inputs
+        .map((i) => i.phone10)
+        .filter((p) => p.length === 10 && !isExcludedFromReporting(p)),
+    ),
+  );
+  const phoneDataMap = new Map<
+    string,
+    { candidates: ApptCandidate[]; alreadyActivated: boolean }
+  >();
+  for (let i = 0; i < uniquePhones.length; i += LOOKUP_CONCURRENCY) {
+    const chunk = uniquePhones.slice(i, i + LOOKUP_CONCURRENCY);
+    const results = await Promise.all(chunk.map((p) => loadOne(p)));
+    chunk.forEach((p, idx) => phoneDataMap.set(p, results[idx]));
+  }
+  console.log(
+    `[sale-match] pre-fetched ${phoneDataMap.size} unique phones (${
+      Math.ceil(uniquePhones.length / LOOKUP_CONCURRENCY)
+    } batches of ${LOOKUP_CONCURRENCY})`,
+  );
 
   // Collect all writes here and commit as one batch at the end. With report
   // 678 we can have hundreds of matches × 2 writes each — sequential
@@ -173,8 +208,13 @@ export async function processSaleMatches(
       continue;
     }
 
-    const { candidates, alreadyActivated: phoneAlreadyActivated } =
-      await loadCandidatesAndActivated(phone10);
+    // Pulled from the pre-fetched parallel map above. Missing entries
+    // (shouldn't happen — we built the map from the same input set) get
+    // the empty-candidate fallback so the decision tree still runs.
+    const lookup = phoneDataMap.get(phone10) ??
+      { candidates: [] as ApptCandidate[], alreadyActivated: false };
+    const candidates = lookup.candidates;
+    const phoneAlreadyActivated = lookup.alreadyActivated;
     const odrKind = odrReason(activator, office);
 
     // Pick the closest in-window candidate (if any). Day-level diff in ET so
