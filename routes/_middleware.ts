@@ -38,12 +38,34 @@ export const handler = [
     try {
       res = await ctx.next();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Capture EVERYTHING we can — Error.message is empty for some
+      // throws (e.g. `throw new Error()` or non-Error throws), and a
+      // blank "error": "" body is useless for debugging from the
+      // client. Fall back through name → stack → JSON.stringify so
+      // there's always something to act on.
+      const errAsError = err instanceof Error ? err : null;
+      const message = errAsError?.message ||
+        errAsError?.name ||
+        (() => {
+          try {
+            return JSON.stringify(err);
+          } catch {
+            return String(err);
+          }
+        })();
+      const stack = errAsError?.stack;
       console.error(
-        `❌ [${easternTimestamp()}] ${ctx.req.method} ${url.pathname} — ${message}`,
+        `❌ [${easternTimestamp()}] ${ctx.req.method} ${url.pathname} — ${message}` +
+          (stack ? `\n${stack}` : ""),
       );
       res = Response.json(
-        { error: message },
+        {
+          error: message,
+          name: errAsError?.name,
+          // Truncate stack so we don't ship a 10kb response body for
+          // run-of-the-mill failures.
+          stack: stack ? stack.split("\n").slice(0, 8).join("\n") : undefined,
+        },
         { status: 500 },
       );
     }
