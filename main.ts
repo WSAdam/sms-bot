@@ -30,17 +30,31 @@ app.fsRoutes();
 // Scheduled jobs (Deno Deploy only — gated on DENO_DEPLOYMENT_ID so local dev
 // doesn't try to register them). Times are UTC.
 //
-// Deno.cron is a stable runtime API on Deno Deploy but the TS lib still ships
-// it under "unstable", so we narrow it via a local typed alias.
+// CRITICAL: Deno.cron MUST be called as a literal `Deno.cron(...)` expression
+// for Deno Deploy's build-time scanner to find and register the cron. Previous
+// versions of this file used a `denoCron` variable alias which the scanner
+// missed — every cron was registered at runtime but Deploy never actually
+// fired them, which is what caused the May 2026 "sweep cron silently stopped
+// for 16 days" incident. See:
+//   https://docs.deno.com/deploy/manual/cron
+// The TS lib still ships Deno.cron under "unstable" — we silence the type
+// error with a top-level declaration rather than typecasts at each call site,
+// so the actual call expressions look exactly like `Deno.cron("name", ...)`.
 // ---------------------------------------------------------------------------
-type DenoCron = (
-  name: string,
-  schedule: string,
-  handler: () => Promise<void> | void,
-) => void;
-const denoCron = (Deno as unknown as { cron?: DenoCron }).cron;
 
-if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
+declare global {
+  namespace Deno {
+    function cron(
+      name: string,
+      schedule: string,
+      handler: () => Promise<void> | void,
+    ): void;
+  }
+}
+
+if (
+  Deno.env.get("DENO_DEPLOYMENT_ID") && typeof Deno.cron === "function"
+) {
   // Cron handler shape note: we wrap every handler as a plain `async
   // () => { try { await ... } catch { ... } }` rather than a chained
   // `() => recordCronRun(...).catch(...)`. The chained form works in
@@ -53,7 +67,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // marker write succeeded.
 
   // Every minute: fire any scheduled injections whose eventTime <= now.
-  denoCron("scheduled-injection-sweep", "* * * * *", async () => {
+
+  Deno.cron("scheduled-injection-sweep", "* * * * *", async () => {
     console.log(
       `[cron-tick] scheduled-injection-sweep ${new Date().toISOString()}`,
     );
@@ -73,7 +88,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // conversation from the previous ET day and re-syncs each one against
   // Firestore. The reseed is safe: if Bland has fewer messages than we
   // have stored, we leave the existing docs alone.
-  denoCron("nightly-conversation-reseed", "0 7 * * *", async () => {
+
+  Deno.cron("nightly-conversation-reseed", "0 7 * * *", async () => {
     console.log(
       `[cron-tick] nightly-conversation-reseed ${new Date().toISOString()}`,
     );
@@ -103,7 +119,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // Once a day at 09:00 UTC = 4 AM EST (5 AM EDT during summer). Pulls
   // today's QB bookings and writes saleswithin7d markers for any matched
   // scheduled injections.
-  denoCron("daily-qb-sale-match", "0 9 * * *", async () => {
+
+  Deno.cron("daily-qb-sale-match", "0 9 * * *", async () => {
     console.log(
       `[cron-tick] daily-qb-sale-match ${new Date().toISOString()}`,
     );
@@ -136,7 +153,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // today). We only stamp the cron-health marker when there's actual
   // work to log — every-minute marker writes for the "nothing to do"
   // path would be wasted I/O.
-  denoCron("nightly-report", "* * * * *", async () => {
+
+  Deno.cron("nightly-report", "* * * * *", async () => {
     try {
       const cfg = await getCronConfig();
       if (!cfg.report.enabled) return;
@@ -182,7 +200,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
   // "floor" for the dashboard's kvBreakdown sidebar — even if the
   // write-site increments drift (e.g. missed instrumentation on some
   // write path), this daily refresh corrects within 24 hours.
-  denoCron("metrics-kvbreakdown-refresh", "0 6 * * *", async () => {
+
+  Deno.cron("metrics-kvbreakdown-refresh", "0 6 * * *", async () => {
     console.log(
       `[cron-tick] metrics-kvbreakdown-refresh ${new Date().toISOString()}`,
     );
@@ -200,7 +219,8 @@ if (Deno.env.get("DENO_DEPLOYMENT_ID") && denoCron) {
 
   // Once a day at 09:30 UTC = 5:30 AM EST. Pulls yesterday's full call
   // log from the ReadyMode portal.
-  denoCron("readymode-daily-pull", "30 9 * * *", async () => {
+
+  Deno.cron("readymode-daily-pull", "30 9 * * *", async () => {
     console.log(
       `[cron-tick] readymode-daily-pull ${new Date().toISOString()}`,
     );
