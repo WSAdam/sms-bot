@@ -210,6 +210,87 @@ Deno.test("excluded test phones never become proposals", async () => {
   }
 });
 
+Deno.test("filters synthetic appt_* callIds before signal detection", async () => {
+  // cal.com / appointment-booked / prior booking-scan-recovery writes
+  // synthetic conversation messages with callIds like `appt_xxx`. Those
+  // contain bot-written "Appointment Scheduled: ..." text that would
+  // re-trigger the text_appointment_scheduled signal if re-parsed.
+  // Booking-scan must skip them at the group-by stage and surface them
+  // as `skippedSyntheticAppt` so the operator can see they were dropped.
+  const mock = new FirestoreMock();
+  setFirestoreClientForTests(mock);
+  try {
+    seed(mock, [
+      {
+        phone: "5551239879",
+        callId: "appt_FakeBotConfirmation123",
+        sender: "AI Bot",
+        message: "Appointment Scheduled: May 19, 9:00 AM",
+        timestamp: "2026-05-12T13:32:46.000Z",
+      },
+      // A real Bland UUID-shaped callId for the same phone — should
+      // still surface as 1 conversation with a real signal (no signal
+      // here either, but we're isolating the filter).
+      {
+        phone: "5551239879",
+        callId: "3fec4a5b-354b-4f98-aacd-b6a97863ec0c",
+        sender: "Guest",
+        message: "ok thanks",
+        timestamp: "2026-05-12T13:32:50.000Z",
+      },
+    ]);
+    const summary = await scanConversationsForBookings(
+      "2026-05-01T00:00:00.000Z",
+      "2026-05-22T23:59:59.999Z",
+      false,
+    );
+    // Synthetic group dropped.
+    assertEquals(summary.skippedSyntheticAppt, 1);
+    // blandConversations counts only real conversations (the UUID one).
+    assertEquals(summary.blandConversations, 1);
+    // No proposal — the real convo has no booking signal.
+    assertEquals(summary.proposed, 0);
+  } finally {
+    setFirestoreClientForTests(null);
+  }
+});
+
+Deno.test("drops proposals whose eventTime is > 24h in the past", async () => {
+  // Old retrospective signals shouldn't generate new proposals — there's
+  // no useful dial possible. The 24h grace window lets just-missed
+  // appointments through (handles "appt was at 9am, scan ran at 11am").
+  // Beyond 24h overdue, skippedPast++ and we don't propose.
+  //
+  // Engineering the test: scan window fromIso is set to 2024-01-01 so a
+  // very-old conversation is included. The bot message "Jan 15 at 9 AM"
+  // matches the parseDateFromText regex (DATE_RE requires whitespace
+  // between day and hour — no comma) against a 2024-01-14 timestamp,
+  // producing an eventTime in early 2024 — clearly more than 24h before
+  // any plausible test-run "now". past-skip should fire.
+  const mock = new FirestoreMock();
+  setFirestoreClientForTests(mock);
+  try {
+    seed(mock, [
+      {
+        phone: "5551239880",
+        callId: "real-uuid-old-convo",
+        sender: "AI Bot",
+        message: "Locked in for Jan 15 at 9 AM",
+        timestamp: "2024-01-14T18:00:00.000Z",
+      },
+    ]);
+    const summary = await scanConversationsForBookings(
+      "2024-01-01T00:00:00.000Z",
+      "2024-01-31T23:59:59.999Z",
+      false,
+    );
+    assertEquals(summary.skippedPast, 1);
+    assertEquals(summary.proposed, 0);
+  } finally {
+    setFirestoreClientForTests(null);
+  }
+});
+
 Deno.test("upper-bound timestamp filter trims messages outside the window", async () => {
   // The Firestore list uses where(timestamp >= fromIso) — the toIso
   // upper bound is enforced client-side after the query. This test

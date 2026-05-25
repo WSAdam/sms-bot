@@ -3,7 +3,10 @@
 
 import { BLAND_API_BASE } from "@shared/config/constants.ts";
 import { loadEnv } from "@shared/config/env.ts";
-import { parseBlandDesiredTimeMs } from "@shared/util/time.ts";
+import {
+  normalizeAppointmentTime,
+  parseBlandDesiredTimeMs,
+} from "@shared/util/time.ts";
 
 interface BlandHeaders {
   [key: string]: string;
@@ -105,8 +108,14 @@ export async function getBlandDesiredTime(
     if (!Number.isFinite(nowMs)) return null;
     if (desiredMs < nowMs - DESIRED_TIME_PAST_TOLERANCE_MS) return null;
     if (desiredMs > nowMs + DESIRED_TIME_MAX_FUTURE_MS) return null;
+    // Normalize at the source so every downstream caller (booking-scan,
+    // recovery scripts, manual triggers) gets canonical UTC. Bland's
+    // raw `Desired_Time` is sometimes TZ-naive (e.g. "2026-06-14T07:30:00"
+    // with no Z or offset) which JS would interpret as UTC and fire ~4h
+    // early in EDT. normalizeAppointmentTime interprets naive strings as
+    // the customer's local wall-clock using Bland's `variables.timezone`.
     return {
-      iso: dt,
+      iso: normalizeAppointmentTime(dt, tz),
       ms: desiredMs,
       source: `bland.variables.Desired_Time (tz=${tz ?? "?"})`,
     };

@@ -38,6 +38,21 @@ export async function scheduleInjection(
   const isoTime = typeof eventTime === "string"
     ? eventTime
     : eventTime.toISOString();
+  // Boundary guard: refuse TZ-naive eventTimes. JS interprets strings
+  // without a Z or ±HH:MM as UTC, so a naive `"2026-06-14T07:30:00"`
+  // would fire at 3:30am EDT (4h early) for an "intended" 7:30am
+  // local appointment. Every write path is required to normalize via
+  // normalizeAppointmentTime() before getting here. Throwing here
+  // means any future code-path that forgets will fail loud at deploy
+  // time instead of producing a customer-facing bug months later.
+  // See [shared/util/time.ts](shared/util/time.ts).
+  if (!/Z$|[+-]\d{2}:?\d{2}$/.test(isoTime)) {
+    throw new Error(
+      `scheduleInjection: eventTime must be canonical UTC (Z) or ` +
+        `offset-tagged (±HH:MM). Got TZ-naive: ${isoTime}. ` +
+        `Pipe through normalizeAppointmentTime() at the write site.`,
+    );
+  }
   const nowIso = new Date().toISOString();
   const data: FutureInjection = {
     phone,

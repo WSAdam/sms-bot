@@ -30,7 +30,27 @@ import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import * as bland from "@shared/services/bland/client.ts";
 import { scheduleInjection } from "@shared/services/injections/schedule.ts";
 import { injectionHistoryDocId } from "@shared/util/id.ts";
+import { normalizeAppointmentTime } from "@shared/util/time.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
+
+// Synthetic conversation callIds — written by cal.com / appointment-booked /
+// prior booking-scan recovery — start with `appt_`. They contain bot
+// confirmation messages (e.g. "Appointment Scheduled: May 19, 9:00 AM")
+// that the booking-scan parser would happily re-interpret as fresh
+// signals. Re-parsing our own output produces duplicate proposals and,
+// worse, the time-only fallback drift bug observed 2026-05-25. Filter
+// them out at the source — booking-scan only consumes real Bland
+// conversation callIds (UUIDs).
+function isSyntheticCallId(callId: string): boolean {
+  return callId.startsWith("appt_");
+}
+
+// Past-eventTime tolerance for proposals. Anything older than this is
+// dropped (counted as `skippedPast`). 24h gives recovery a wide window
+// for genuinely-just-missed appointments without re-injecting week-old
+// stale slots. The 72h sweep dedup catches anything that slipped past
+// this and was already dialed, so this is the *front-line* filter.
+const PROPOSAL_PAST_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 
 const MONTHS: Record<string, number> = {
   jan: 0,
@@ -74,6 +94,14 @@ export interface BookingScanSummary {
   applied: number;
   skippedExisting: number;
   skippedNoTime: number;
+  // Conversations whose callId is a synthetic `appt_*` id (written by
+  // cal.com / appointment-booked / prior recovery). Dropped at the
+  // group-by stage before signal detection.
+  skippedSyntheticAppt: number;
+  // Proposals whose derived eventTime is more than 24h in the past.
+  // Dropped from the proposals list; no dial would have ever been
+  // useful.
+  skippedPast: number;
   errored: number;
   proposals: BookingProposal[];
   errors: string[];
@@ -89,20 +117,27 @@ export interface BookingScanOutcome {
   callId: string;
   messageCount: number;
   // What happened to this conversation:
+  // - "skipped-synthetic-appt" — callId starts with `appt_` (bot-written
+  //   confirmation, not a real Bland conversation). Filtered before
+  //   signal detection to prevent re-parsing of our own output.
   // - "skipped-excluded"       — phone is in EXCLUDED_REPORTING_PHONES
   // - "skipped-already-recovered" — prior booking-scan run already
   //   wrote an injectionhistory doc for this callId
   // - "skipped-activated"      — phone already has a guestactivated doc
   // - "skipped-pending"        — phone has a pending scheduledinjection
+  // - "skipped-past"           — eventTime is > 24h before now; no dial
+  //   would have ever been useful.
   // - "no-signal"              — conversation processed but no "locked in"
   //   / "Appointment Scheduled" message detected
   // - "proposed"               — signal detected, proposal added to the
   //   proposals array
   outcome:
+    | "skipped-synthetic-appt"
     | "skipped-excluded"
     | "skipped-already-recovered"
     | "skipped-activated"
     | "skipped-pending"
+    | "skipped-past"
     | "no-signal"
     | "proposed";
   signal?: BookingProposal["signal"];
@@ -113,30 +148,6 @@ export interface BookingScanOutcome {
 // month name + day + (optional 'at') + h:mm or h + AM/PM.
 const DATE_RE =
   /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:[a-z]{0,3})?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM|a\.?m\.?|p\.?m\.?)/i;
-
-// Match time-only patterns: "2:00 pm", "2pm", "11:30 a.m.", "noon", "midnight".
-const TIME_RE = /\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM|a\.?m\.?|p\.?m\.?)\b/i;
-
-// Match common timezone hints. Default: ET. CST/CDT and PST/PDT etc. each
-// resolve to a fixed offset for the May→October DST window. Drift at DST
-// boundaries is acceptable — cron sweep tolerates ±1h.
-const TZ_RE =
-  /\b(eastern|et|edt|est|central|ct|cdt|cst|mountain|mt|mdt|mst|pacific|pt|pdt|pst)\b/i;
-
-function tzOffsetForToken(tok: string): string {
-  const t = tok.toLowerCase();
-  if (t === "pst" || t === "pdt" || t === "pacific" || t === "pt") {
-    return "-07:00";
-  }
-  if (t === "mst" || t === "mdt" || t === "mountain" || t === "mt") {
-    return "-06:00";
-  }
-  if (t === "cst" || t === "cdt" || t === "central" || t === "ct") {
-    return "-05:00";
-  }
-  // ET default
-  return "-04:00";
-}
 
 function parseDateFromText(text: string, refIso: string): string | null {
   const m = text.match(DATE_RE);
@@ -167,104 +178,6 @@ function parseDateFromText(text: string, refIso: string): string | null {
     if (dt.getTime() >= refDate.getTime() - 12 * 60 * 60 * 1000) {
       return dt.toISOString();
     }
-  }
-  return null;
-}
-
-// Walk the conversation messages and extract a {hour, minute, tz} from any
-// guest or bot message that mentions a time. Returns the NEXT occurrence of
-// that local time (in the inferred timezone) at or after the signal moment.
-// e.g. customer said "2:00 pm" + "CST" with bot's "locked in!" at 18:26 ET on
-// 5/6 → returns 2:00 PM CDT on 5/7 (the next available 2pm CDT slot).
-function nextOccurrenceFromMessages(
-  msgs: BlandMsg[],
-  signalIdx: number,
-):
-  | {
-    eventTime: string;
-    tzOffset: string;
-    hh: number;
-    mm: number;
-    source: string;
-  }
-  | null {
-  let hh = -1;
-  let mm = 0;
-  let tz: string | null = null;
-  let source: string | null = null;
-  // Walk backward from signal to find a time and (separately) a timezone hint.
-  for (let i = signalIdx; i >= 0; i--) {
-    const text = msgs[i]?.message ?? "";
-    if (hh < 0) {
-      const tlower = text.toLowerCase();
-      const who = senderIsGuest(msgs[i].sender) ? "guest" : "bot";
-      if (/\bnoon\b/.test(tlower)) {
-        hh = 12;
-        mm = 0;
-        source = `[${who}] ${text.slice(0, 80)}`;
-      } else if (/\bmidnight\b/.test(tlower)) {
-        hh = 0;
-        mm = 0;
-        source = `[${who}] ${text.slice(0, 80)}`;
-      } else {
-        const tm = text.match(TIME_RE);
-        if (tm) {
-          let h = parseInt(tm[1], 10);
-          const minute = tm[2] ? parseInt(tm[2], 10) : 0;
-          const ampm = tm[3].toUpperCase().replace(/\./g, "").replace(
-            /M$/,
-            "M",
-          );
-          if (ampm.startsWith("P") && h < 12) h += 12;
-          if (ampm.startsWith("A") && h === 12) h = 0;
-          hh = h;
-          mm = minute;
-          source = `[${who}] ${text.slice(0, 80)}`;
-        }
-      }
-    }
-    if (!tz) {
-      const tzm = text.match(TZ_RE);
-      if (tzm) tz = tzm[1];
-    }
-    if (hh >= 0 && tz) break;
-  }
-  if (hh < 0) return null;
-  const tzOffset = tzOffsetForToken(tz ?? "et");
-
-  // Compute the next occurrence of HH:MM in the target tz at or after now.
-  // We use the offset (e.g. -05:00) to map "today HH:MM in that tz" to UTC,
-  // then bump by 24h until it's in the future.
-  const nowMs = Date.now();
-  // Today's date in the target timezone (rough — we use UTC date offset).
-  // For tzOffset like "-05:00", UTC date matching local day requires
-  // adding the offset hours to UTC. Build a "today YYYY-MM-DD" relative to tz.
-  const tzHours = parseInt(tzOffset.slice(0, 3), 10); // -5 etc
-  const localNow = new Date(nowMs + tzHours * 60 * 60 * 1000);
-  let y = localNow.getUTCFullYear();
-  let m = localNow.getUTCMonth();
-  let d = localNow.getUTCDate();
-  for (let bump = 0; bump < 30; bump++) {
-    const isoLocal = `${y}-${String(m + 1).padStart(2, "0")}-${
-      String(d).padStart(2, "0")
-    }T${String(hh).padStart(2, "0")}:${
-      String(mm).padStart(2, "0")
-    }:00${tzOffset}`;
-    const dt = new Date(isoLocal);
-    if (Number.isFinite(dt.getTime()) && dt.getTime() > nowMs) {
-      return {
-        eventTime: dt.toISOString(),
-        tzOffset,
-        hh,
-        mm,
-        source: source ?? "",
-      };
-    }
-    // bump by 1 day
-    const next = new Date(Date.UTC(y, m, d + 1));
-    y = next.getUTCFullYear();
-    m = next.getUTCMonth();
-    d = next.getUTCDate();
   }
   return null;
 }
@@ -327,13 +240,20 @@ export async function scanConversationsForBookings(
 
   // Group by (phoneNumber, callId) so each iteration of the main loop
   // gets a full conversation message list — same shape detectSignal /
-  // parseDateFromText / nextOccurrenceFromMessages expect. We drop
-  // messages outside the upper window bound here.
+  // parseDateFromText expect. We drop messages outside the upper window
+  // bound here, AND we drop any group whose callId is a synthetic
+  // `appt_*` id (bot-written confirmation, not a real Bland convo —
+  // re-parsing produces duplicates + wrong dates).
   const byConvo = new Map<string, ConversationMessage[]>();
+  let droppedSynthetic = 0;
   for (const e of messages) {
     const m = e.data as unknown as ConversationMessage;
     if (!m.phoneNumber || !m.callId) continue;
     if (toIso && (m.timestamp ?? "") > toIso) continue;
+    if (isSyntheticCallId(m.callId)) {
+      droppedSynthetic++;
+      continue;
+    }
     const key = `${m.phoneNumber}__${m.callId}`;
     const arr = byConvo.get(key) ?? [];
     arr.push(m);
@@ -351,12 +271,15 @@ export async function scanConversationsForBookings(
     toIso: toIso ?? null,
     // Keep field name for backwards-compat with the response shape
     // /test page renders. Same meaning post-refactor (count of distinct
-    // conversations in the window).
+    // real Bland conversations in the window — synthetic `appt_*`
+    // groups are excluded).
     blandConversations: byConvo.size,
     proposed: 0,
     applied: 0,
     skippedExisting: 0,
     skippedNoTime: 0,
+    skippedSyntheticAppt: droppedSynthetic,
+    skippedPast: 0,
     errored: 0,
     proposals: [],
     errors: [],
@@ -501,11 +424,25 @@ export async function scanConversationsForBookings(
 
     const blandDt = await bland.getBlandDesiredTime(callId);
     if (blandDt) {
-      eventTime = blandDt.iso;
+      // Bland normalizes at its boundary (getBlandDesiredTime). Re-running
+      // here is a cheap defense-in-depth — any change to the upstream
+      // pathway that re-introduces TZ-naive output gets caught here
+      // instead of silently propagating.
+      eventTime = normalizeAppointmentTime(blandDt.iso, undefined);
       eventTimeSource = blandDt.source;
     }
 
-    // Fallback 1: walk backward looking for an explicit date+time match.
+    // Fallback: walk backward looking for an explicit date+time match
+    // (month + day + h:mm + AM/PM in a single message). parseDateFromText
+    // emits ISO with `-04:00` so it's already canonical, but normalize
+    // for symmetry with the Bland path.
+    //
+    // NOTE: The pre-2026-05-25 "time-only next-occurrence" fallback used
+    // to live here. It re-anchored matches like "9:00 AM" to TODAY's
+    // 9 AM regardless of the original message's date, which produced
+    // the wrong-date proposals that caused the 5/25 incident. Deleted
+    // intentionally — if we can't get a confident full date, we fall
+    // through to the placeholder-injectionhistory path instead.
     if (!eventTime) {
       for (let i = signalIdx; i >= 0; i--) {
         const candidate = msgs[i];
@@ -515,7 +452,7 @@ export async function scanConversationsForBookings(
           candidate.created_at ?? signalInfo.signalAt,
         );
         if (parsed) {
-          eventTime = parsed;
+          eventTime = normalizeAppointmentTime(parsed, undefined);
           const who = senderIsGuest(candidate.sender) ? "guest" : "bot";
           eventTimeSource = `[${who}] ${
             (candidate.message ?? "").slice(0, 80)
@@ -524,21 +461,32 @@ export async function scanConversationsForBookings(
         }
       }
     }
-    // Fallback 2: time-only (e.g. "2:00 pm" + "CST") → next occurrence
-    // of that local time at or after now. Customer said a time, Cal.com
-    // picked the date — we re-pick the next available matching slot so
-    // the cron sweep can actually inject them.
-    if (!eventTime) {
-      const next = nextOccurrenceFromMessages(msgs, signalIdx);
-      if (next) {
-        eventTime = next.eventTime;
-        eventTimeSource = `time-only ${next.hh}:${
-          String(next.mm).padStart(2, "0")
-        } ${next.tzOffset} from ${next.source}`;
+
+    // 24h past-tolerance front-line filter. Anything older than this
+    // doesn't represent a usefully-dialable appointment, even if the
+    // sweep's 72h dedup would catch any duplicate. We drop these from
+    // the proposals list AND from the recovery-placeholder path.
+    if (eventTime) {
+      const eventMs = new Date(eventTime).getTime();
+      if (
+        Number.isFinite(eventMs) &&
+        eventMs < Date.now() - PROPOSAL_PAST_TOLERANCE_MS
+      ) {
+        summary.skippedPast++;
+        trace({
+          phone10,
+          callId,
+          messageCount: convoMessages.length,
+          outcome: "skipped-past",
+          signal: signalInfo.signal,
+          eventTime,
+        });
+        console.log(
+          `[booking-scan] [${processed}/${byConvo.size}] ${phone10}  skipped (eventTime ${eventTime} is > 24h past)`,
+        );
+        continue;
       }
-    }
-    if (eventTime && new Date(eventTime).getTime() > Date.now()) {
-      eventTimeIsFuture = true;
+      if (eventMs > Date.now()) eventTimeIsFuture = true;
     }
 
     const proposal: BookingProposal = {
@@ -652,7 +600,10 @@ export async function scanConversationsForBookings(
   }
 
   console.log(
-    `[booking-scan] done — proposed=${summary.proposed} applied=${summary.applied} skippedExisting=${summary.skippedExisting} skippedNoTime=${summary.skippedNoTime} errored=${summary.errored}`,
+    `[booking-scan] done — proposed=${summary.proposed} applied=${summary.applied} ` +
+      `skippedExisting=${summary.skippedExisting} skippedNoTime=${summary.skippedNoTime} ` +
+      `skippedSyntheticAppt=${summary.skippedSyntheticAppt} skippedPast=${summary.skippedPast} ` +
+      `errored=${summary.errored}`,
   );
   return summary;
 }
