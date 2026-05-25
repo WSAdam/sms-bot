@@ -7,7 +7,10 @@
 // answered-backfill script reconstructing them after the fact.
 
 import { define } from "@/utils.ts";
-import { injectionHistoryDocPath } from "@shared/firestore/paths.ts";
+import {
+  injectionHistoryDocPath,
+  scheduledInjectionDocPath,
+} from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import {
   CAMPAIGN_MASTER_MAP,
@@ -92,6 +95,20 @@ export const handler = define.handlers({
       );
     } catch (e) {
       console.warn(`[talk-now] ih write failed (non-fatal): ${(e as Error).message}`);
+    }
+
+    // Clean up the companion scheduledinjection doc so the sweep doesn't
+    // re-fire later. The 2026-05-25 near-miss was caused by this exact
+    // race: talk-now wrote an injectionhistory entry but left the
+    // pending doc in place, and when the sweep came back online it
+    // dialed the same customer again. Idempotent — db.delete on a
+    // missing doc is a no-op. Best-effort: failure here doesn't block.
+    try {
+      await getFirestoreClient().delete(scheduledInjectionDocPath(phone));
+    } catch (e) {
+      console.warn(
+        `[talk-now] scheduledinjection delete failed (non-fatal): ${(e as Error).message}`,
+      );
     }
 
     return Response.json({

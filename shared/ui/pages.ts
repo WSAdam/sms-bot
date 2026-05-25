@@ -4766,6 +4766,8 @@ function renderGatesConfigForm(cfg){
     +   '<label>Earnings per sale (USD) <span class="muted small">(drives Profit card; default $50)</span><input type="number" min="0" step="0.01" data-gatecfg="earningsPerSale" value="' + escapeHtml(String(cfg.earningsPerSale ?? "")) + '"></label>'
     +   '<label>RM TPI min spacing (ms) <span class="muted small">(min ms between RM TPI lookups; default 2000)</span><input type="number" min="0" step="100" data-gatecfg="tpiMinSpacingMs" value="' + escapeHtml(String(cfg.tpiMinSpacingMs ?? "")) + '"></label>'
     +   '<label>RM TPI max per 5 min <span class="muted small">(sliding-window cap on TPI lookups; default 30)</span><input type="number" min="0" step="1" data-gatecfg="tpiMaxPer5Min" value="' + escapeHtml(String(cfg.tpiMaxPer5Min ?? "")) + '"></label>'
+    +   '<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" data-gatecfg="scheduledInjectionSweepEnabled"' + (cfg.scheduledInjectionSweepEnabled ? ' checked' : '') + '> Scheduled-injection sweep enabled <span class="muted small">(master kill-switch for the every-minute dial sweep; default OFF)</span></label>'
+    +   '<label>Sweep dedup window (hours) <span class="muted small">(skip dial if injectionhistory has entry within N hours; default 72)</span><input type="number" min="0" step="1" data-gatecfg="scheduledInjectionDedupHours" value="' + escapeHtml(String(cfg.scheduledInjectionDedupHours ?? "")) + '"></label>'
     + '</div>'
     + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '. Enforcement layer caches for 60s — your change will be live within a minute.</div>';
 }
@@ -4774,6 +4776,10 @@ function readGatesConfigForm(card){
   const out = {};
   card.querySelectorAll('[data-gatecfg]').forEach(function(el){
     const key = el.getAttribute("data-gatecfg");
+    if(el.type === "checkbox"){
+      out[key] = el.checked;
+      return;
+    }
     const n = Number(el.value);
     if(Number.isFinite(n) && n >= 0) out[key] = n;
   });

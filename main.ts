@@ -16,6 +16,7 @@ import { easternDateString } from "@shared/util/time.ts";
 import { scrapeReadymode } from "@shared/services/readymode/scrape-orchestrator.ts";
 import { recordCronRun } from "@shared/services/cron-health/marker.ts";
 import { refreshKvBreakdown } from "@shared/services/cron-health/kv-breakdown.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 
 export const app = new App<State>();
 
@@ -80,9 +81,16 @@ if (
     );
     try {
       await recordCronRun("scheduled-injection-sweep-v2", async () => {
+        // Runtime kill-switch via gatesConfig. Paused by default after
+        // the 2026-05-25 near-miss; flip via /test → Gates Config form.
+        const gates = await getGatesConfig();
+        if (!gates.scheduledInjectionSweepEnabled) {
+          console.log(`⏸  sweep paused via gatesConfig`);
+          return;
+        }
         const r = await sweepScheduledInjections("cron");
         console.log(
-          `⏰ sweep: scanned=${r.scanned} fired=${r.fired} errors=${r.errors.length}`,
+          `⏰ sweep: scanned=${r.scanned} fired=${r.fired} skipped=${r.skipped} errors=${r.errors.length}`,
         );
       });
     } catch (e) {

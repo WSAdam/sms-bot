@@ -27,7 +27,14 @@ export interface InjectionHistoryEntry {
   scheduledAt: number;
   firedAt: string;
   firedBy: "cron" | "manual" | "talk-now";
-  status: "success" | "error";
+  // "skipped" = dedup guard fired: phone had a recent injectionhistory
+  // entry within scheduledInjectionDedupHours, so we did NOT dial. The
+  // scheduledinjection doc is deleted regardless (the dedup guard's
+  // whole point is to short-circuit the dial without leaving the doc
+  // around to fire again). `skipReason` carries the human-readable
+  // explanation, e.g. "fired 42m ago".
+  status: "success" | "error" | "skipped";
+  skipReason?: string;
   callbackStatus?: number;
   isTest?: boolean;
   error?: string;

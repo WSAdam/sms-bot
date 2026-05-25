@@ -41,6 +41,14 @@ export interface GatesConfig {
   // is comfortably under RM's tolerance for the ACT volume.
   tpiMinSpacingMs: number; // min ms between TPI calls
   tpiMaxPer5Min: number; // sliding-window cap on TPI calls
+  // Scheduled-injection sweep safety. After the 2026-05-25 incident where
+  // 19 stale pending docs almost got dialed when the cron came back from
+  // a 22-day silent outage, we need a runtime kill-switch + a dedup
+  // window. The sweep is paused by default; flip the bool here to arm it.
+  // Dedup blocks handleDelayedInjection from re-dialing any phone that
+  // already has an injectionhistory entry within the last N hours.
+  scheduledInjectionSweepEnabled: boolean;
+  scheduledInjectionDedupHours: number;
   updatedAt: string;
 }
 
@@ -53,6 +61,8 @@ export const GATES_CONFIG_DEFAULTS: GatesConfig = {
   earningsPerSale: 50,
   tpiMinSpacingMs: 2000,
   tpiMaxPer5Min: 30,
+  scheduledInjectionSweepEnabled: false,
+  scheduledInjectionDedupHours: 72,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -96,6 +106,14 @@ function mergeWithDefaults(doc: Record<string, unknown> | null): GatesConfig {
       doc.tpiMaxPer5Min,
       GATES_CONFIG_DEFAULTS.tpiMaxPer5Min,
     ),
+    scheduledInjectionSweepEnabled:
+      typeof doc.scheduledInjectionSweepEnabled === "boolean"
+        ? doc.scheduledInjectionSweepEnabled
+        : GATES_CONFIG_DEFAULTS.scheduledInjectionSweepEnabled,
+    scheduledInjectionDedupHours: numOr(
+      doc.scheduledInjectionDedupHours,
+      GATES_CONFIG_DEFAULTS.scheduledInjectionDedupHours,
+    ),
     updatedAt: typeof doc.updatedAt === "string"
       ? doc.updatedAt
       : GATES_CONFIG_DEFAULTS.updatedAt,
@@ -133,6 +151,8 @@ export async function setGatesConfig(
       | "earningsPerSale"
       | "tpiMinSpacingMs"
       | "tpiMaxPer5Min"
+      | "scheduledInjectionSweepEnabled"
+      | "scheduledInjectionDedupHours"
     >
   >,
   client: FirestoreClient = getFirestoreClient(),
@@ -149,6 +169,10 @@ export async function setGatesConfig(
     earningsPerSale: partial.earningsPerSale ?? current.earningsPerSale,
     tpiMinSpacingMs: partial.tpiMinSpacingMs ?? current.tpiMinSpacingMs,
     tpiMaxPer5Min: partial.tpiMaxPer5Min ?? current.tpiMaxPer5Min,
+    scheduledInjectionSweepEnabled: partial.scheduledInjectionSweepEnabled ??
+      current.scheduledInjectionSweepEnabled,
+    scheduledInjectionDedupHours: partial.scheduledInjectionDedupHours ??
+      current.scheduledInjectionDedupHours,
     updatedAt: new Date().toISOString(),
   };
   await client.set(

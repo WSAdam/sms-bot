@@ -21,6 +21,7 @@ import { handleDelayedInjection } from "@shared/services/orchestrator/queue.ts";
 export interface SweepResult {
   scanned: number;
   fired: number;
+  skipped: number;
   errors: Array<{ phone: string; error: string }>;
 }
 
@@ -46,15 +47,23 @@ export async function sweepScheduledInjections(
 
   const errors: SweepResult["errors"] = [];
   let fired = 0;
+  let skipped = 0;
 
   for (const { phone, injection } of due) {
     const firedAt = new Date().toISOString();
     let status: InjectionHistoryEntry["status"] = "success";
     let errorMsg: string | undefined;
+    let skipReason: string | undefined;
 
     try {
-      await handleDelayedInjection(phone);
-      fired++;
+      const r = await handleDelayedInjection(phone);
+      if (r.skipped) {
+        status = "skipped";
+        skipReason = r.reason;
+        skipped++;
+      } else {
+        fired++;
+      }
     } catch (e) {
       status = "error";
       errorMsg = (e as Error).message;
@@ -70,26 +79,31 @@ export async function sweepScheduledInjections(
       status,
       ...(injection.isTest ? { isTest: true } : {}),
       ...(errorMsg ? { error: errorMsg } : {}),
+      ...(skipReason ? { skipReason } : {}),
     };
 
     await client.set(
       injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
       history as unknown as Record<string, unknown>,
     );
+    // Always delete the scheduledinjection doc, even when the dedup
+    // guard skipped the dial. Leaving it would mean the sweep keeps
+    // re-evaluating it every minute forever; the doc has served its
+    // purpose once an injectionhistory entry has been recorded.
     await client.delete(scheduledInjectionDocPath(phone));
   }
 
   // `scanned` now means "due docs the sweep considered" — what was
   // historically the full list (since we filtered in memory). With the
   // database-side where filter, that's identical to `dueDocs.length`.
-  return { scanned: dueDocs.length, fired, errors };
+  return { scanned: dueDocs.length, fired, skipped, errors };
 }
 
 export async function fireSingle(
   phone: string,
   firedBy: "cron" | "manual" = "manual",
   client: FirestoreClient = getFirestoreClient(),
-): Promise<{ fired: boolean; error?: string }> {
+): Promise<{ fired: boolean; skipped?: boolean; error?: string }> {
   const inj = await client.get(scheduledInjectionDocPath(phone)) as
     | FutureInjection
     | null;
@@ -98,8 +112,13 @@ export async function fireSingle(
   const firedAt = new Date().toISOString();
   let status: InjectionHistoryEntry["status"] = "success";
   let errorMsg: string | undefined;
+  let skipReason: string | undefined;
   try {
-    await handleDelayedInjection(phone);
+    const r = await handleDelayedInjection(phone);
+    if (r.skipped) {
+      status = "skipped";
+      skipReason = r.reason;
+    }
   } catch (e) {
     status = "error";
     errorMsg = (e as Error).message;
@@ -114,6 +133,7 @@ export async function fireSingle(
     status,
     ...(inj.isTest ? { isTest: true } : {}),
     ...(errorMsg ? { error: errorMsg } : {}),
+    ...(skipReason ? { skipReason } : {}),
   };
 
   await client.set(
@@ -121,5 +141,9 @@ export async function fireSingle(
     history as unknown as Record<string, unknown>,
   );
   await client.delete(scheduledInjectionDocPath(phone));
-  return { fired: status === "success", error: errorMsg };
+  return {
+    fired: status === "success",
+    ...(status === "skipped" ? { skipped: true } : {}),
+    ...(errorMsg ? { error: errorMsg } : {}),
+  };
 }

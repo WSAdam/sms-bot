@@ -31,6 +31,8 @@ export const handler = define.handlers({
           | "earningsPerSale"
           | "tpiMinSpacingMs"
           | "tpiMaxPer5Min"
+          | "scheduledInjectionSweepEnabled"
+          | "scheduledInjectionDedupHours"
         >
       >
       | null;
