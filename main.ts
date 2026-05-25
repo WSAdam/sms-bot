@@ -68,12 +68,18 @@ if (
 
   // Every minute: fire any scheduled injections whose eventTime <= now.
 
-  Deno.cron("scheduled-injection-sweep", "* * * * *", async () => {
+  // Renamed from "scheduled-injection-sweep" 2026-05-25: Deno Deploy's
+  // runtime had gotten stuck on the old name (28k errors over 30 days
+  // with the handler body never being entered — same failure mode the
+  // comment above describes). Renaming forces Deploy to register a fresh
+  // cron under a new identifier. The old registration will decay on its
+  // own once Deploy garbage-collects vanished cron names.
+  Deno.cron("scheduled-injection-sweep-v2", "* * * * *", async () => {
     console.log(
-      `[cron-tick] scheduled-injection-sweep ${new Date().toISOString()}`,
+      `[cron-tick] scheduled-injection-sweep-v2 ${new Date().toISOString()}`,
     );
     try {
-      await recordCronRun("scheduled-injection-sweep", async () => {
+      await recordCronRun("scheduled-injection-sweep-v2", async () => {
         const r = await sweepScheduledInjections("cron");
         console.log(
           `⏰ sweep: scanned=${r.scanned} fired=${r.fired} errors=${r.errors.length}`,

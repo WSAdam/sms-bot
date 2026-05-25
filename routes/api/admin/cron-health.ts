@@ -15,7 +15,7 @@ import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 // threshold, the response marks the cron as "stale" — that's the
 // signal that Adam should investigate.
 const CRON_FRESHNESS_HOURS: Record<string, number> = {
-  "scheduled-injection-sweep": 0.05, // 3 minutes — runs every minute
+  "scheduled-injection-sweep-v2": 0.05, // 3 minutes — runs every minute
   "nightly-conversation-reseed": 26,
   "daily-qb-sale-match": 26,
   "nightly-report": 26,
