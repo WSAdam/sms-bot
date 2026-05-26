@@ -74,12 +74,15 @@ function minutesToHhMm(min: number): string {
 }
 
 export function effectiveInboundWindow(
-  mode: "off" | "explicit" | "random",
+  mode: "off" | "none" | "explicit" | "random",
   explicitStartEt: string,
   explicitEndEt: string,
   todayEt: string,
 ): { startEt: string; endEt: string } | null {
-  if (mode === "off") return null;
+  // Both "off" (master kill-switch, handled separately by caller) and
+  // "none" (no gate) produce no window here. The trigger handler is
+  // responsible for the kill-switch short-circuit BEFORE calling this.
+  if (mode === "off" || mode === "none") return null;
   if (mode === "explicit") {
     return { startEt: explicitStartEt, endEt: explicitEndEt };
   }

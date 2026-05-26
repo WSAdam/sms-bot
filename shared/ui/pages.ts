@@ -4774,18 +4774,40 @@ function renderGatesConfigForm(cfg){
 
 function renderInboundWindowBlock(iw){
   if(!iw) return "";
+  const mode = String(iw.mode || "none");
+  // Banner styling + summary line per mode.
+  let bannerColor = "var(--border)";
+  let bannerEmoji = "⏱";
+  let summary = "";
+  if(mode === "off"){
+    bannerColor = "#b34343";
+    bannerEmoji = "❌";
+    summary = '<strong style="color:#ff7676">Inbound disabled (kill-switch active)</strong> — every trigger returns 200/skipped, no Firestore work.';
+  } else if(mode === "none"){
+    summary = 'No gate — all triggers process normally.';
+  } else if(mode === "explicit"){
+    summary = 'Fixed window: <strong>' + escapeHtml(String(iw.explicitStartEt || "")) + ' – ' + escapeHtml(String(iw.explicitEndEt || "")) + ' ET</strong>.';
+  } else if(mode === "random"){
+    summary = 'Per-day randomized 5h window (start in [09:00, 16:00] ET).';
+  }
+  // Today's effective window line — only meaningful for explicit/random.
   const win = iw.currentEffectiveWindow;
-  const winLine = win
-    ? '<strong>' + escapeHtml(win.startEt) + ' – ' + escapeHtml(win.endEt) + '</strong>'
-    : '<strong>none</strong> (no gate)';
-  const explicitLine = iw.mode === "explicit"
-    ? ' explicit fields: ' + escapeHtml(iw.explicitStartEt) + ' – ' + escapeHtml(iw.explicitEndEt) + '.'
-    : '';
+  let todayLine = "";
+  if(mode === "explicit" || mode === "random"){
+    todayLine = '<div class="muted small" style="margin-top:4px">Today\'s effective window ('
+      + escapeHtml(String(iw.currentTodayEt || ""))
+      + ' ET): '
+      + (win
+          ? '<strong>' + escapeHtml(win.startEt) + ' – ' + escapeHtml(win.endEt) + '</strong>'
+          : '<strong>(unset)</strong>')
+      + '</div>';
+  }
   return ''
-    + '<div style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:6px">'
-    +   '<h4 style="color:var(--accentHi);margin:0 0 6px">⏱ Inbound Window (env-controlled)</h4>'
-    +   '<div class="muted small">Mode: <strong>' + escapeHtml(String(iw.mode || "off")) + '</strong> (set via INBOUND_WINDOW_MODE).' + explicitLine + ' Redeploy required to change.</div>'
-    +   '<div class="muted small" style="margin-top:4px">Today\'s effective window (' + escapeHtml(String(iw.currentTodayEt || "")) + ' ET): ' + winLine + '</div>'
+    + '<div style="margin-top:14px;padding:10px;border:1px solid ' + bannerColor + ';border-radius:6px">'
+    +   '<h4 style="color:var(--accentHi);margin:0 0 6px">' + bannerEmoji + ' Inbound Window (env-controlled)</h4>'
+    +   '<div class="muted small">Mode: <strong>' + escapeHtml(mode) + '</strong> (set via INBOUND_WINDOW_MODE). Redeploy required to change.</div>'
+    +   '<div class="muted small" style="margin-top:4px">' + summary + '</div>'
+    +   todayLine
     + '</div>';
 }
 

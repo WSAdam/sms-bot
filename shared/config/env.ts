@@ -93,17 +93,20 @@ export function loadEnv(): AppEnv {
 
 function parseInboundMode(
   v: string | null,
-): "off" | "explicit" | "random" {
+): "off" | "none" | "explicit" | "random" {
   const s = (v ?? "").trim().toLowerCase();
-  if (s === "random" || s === "explicit") return s;
-  // Anything else (including unset, empty, typo) → "off". Default to
-  // no-gate so a misconfigured env never silently drops traffic.
-  if (s !== "" && s !== "off") {
+  if (
+    s === "random" || s === "explicit" || s === "off" || s === "none"
+  ) return s;
+  // Anything else (typo, junk) → "none". Default is "none" (no gate,
+  // all traffic processes) so a misconfigured env never silently
+  // activates the "off" kill-switch and drops every trigger.
+  if (s !== "") {
     console.warn(
-      `[env] ⚠️ INBOUND_WINDOW_MODE="${v}" is not one of off|explicit|random — falling back to "off"`,
+      `[env] ⚠️ INBOUND_WINDOW_MODE="${v}" is not one of off|none|explicit|random — falling back to "none"`,
     );
   }
-  return "off";
+  return "none";
 }
 
 function parseHhMmOr(v: string | null, fallback: string): string {

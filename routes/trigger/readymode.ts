@@ -78,6 +78,20 @@ export const handler = define.handlers({
     // INBOUND_WINDOW_START_ET / INBOUND_WINDOW_END_ET. Change requires
     // a redeploy. See shared/config/env.ts for parsing/validation.
     const env = loadEnv();
+
+    // Master kill-switch. Drops every trigger before any window math.
+    // Use this when we want to halt inbound entirely without lowering
+    // globalDailySmsCap or touching any other knobs.
+    if (env.inboundWindowMode === "off") {
+      console.log(
+        `[trigger] ⏸ inbound disabled (mode=off) phone=${validation.dto.phone}`,
+      );
+      return Response.json(
+        { status: "skipped", reason: "mode-off", mode: "off" },
+        { status: 200 },
+      );
+    }
+
     const nowEt = easternTimeHhMm();
     const effective = effectiveInboundWindow(
       env.inboundWindowMode,

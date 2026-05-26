@@ -33,7 +33,13 @@ export interface AppEnv {
   // Inbound trigger window gate. Env-driven so the gate decision in
   // routes/trigger/readymode.ts requires ZERO Firestore reads — see
   // shared/config/env.ts. Change requires a redeploy.
-  inboundWindowMode: "off" | "explicit" | "random";
+  //
+  // Modes:
+  //   "none"     — no gate; process every trigger normally (default)
+  //   "off"      — master kill-switch; drop every trigger
+  //   "explicit" — use start/end times below
+  //   "random"   — per-day randomized 5h window, start in [09:00,16:00] ET
+  inboundWindowMode: "off" | "none" | "explicit" | "random";
   inboundWindowStartEt: string; // "HH:MM", used only when mode=explicit
   inboundWindowEndEt: string; // "HH:MM", used only when mode=explicit
 
