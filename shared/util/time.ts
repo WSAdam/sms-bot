@@ -27,6 +27,73 @@ export function easternTimeHhMm(date: Date = new Date()): string {
   return TIME_HHMM_FORMATTER.format(date);
 }
 
+// ---------------------------------------------------------------------------
+// Inbound trigger window math.
+//
+// `effectiveInboundWindow` returns today's effective gate window from
+// (mode, explicitStart, explicitEnd, todayEt). null = no gate. Used by
+// routes/trigger/readymode.ts to early-return outside the window.
+//
+// The random-mode params are hardcoded by design (per Adam's call
+// 2026-05-26): start in [09:00, 16:00], window length 5h. Adjust by
+// code change + redeploy. Daily randomization is deterministic from
+// `todayEt` so the same window applies all day with no Firestore
+// writes — and crossing midnight ET naturally produces a fresh roll.
+// ---------------------------------------------------------------------------
+
+const RANDOM_EARLIEST_START_MIN = 9 * 60; // 09:00
+const RANDOM_LATEST_START_MIN = 16 * 60; // 16:00 (4pm — "before 4pm")
+const RANDOM_LENGTH_MIN = 5 * 60; // 5 hours
+const MAX_END_MIN = 23 * 60 + 59; // 23:59 clamp
+
+function dayHash01(s: string): number {
+  // FNV-1a 32-bit + MurmurHash3 fmix finalizer. We need GOOD distribution
+  // across sequential date strings — naive djb2 produces near-identical
+  // outputs for "2026-05-26", "2026-05-27", "2026-05-28", because each
+  // string only differs in the last char and djb2's mixing is too linear.
+  // FNV-1a's multiply step plus fmix's XOR-shift cycles spread one-char
+  // input deltas across all output bits, so consecutive days land in
+  // genuinely different positions of [0, 1).
+  let h = 2166136261; // FNV-1a 32-bit offset basis
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619); // FNV-1a 32-bit prime
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return ((h >>> 0) % 1_000_000) / 1_000_000;
+}
+
+function minutesToHhMm(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+export function effectiveInboundWindow(
+  mode: "off" | "explicit" | "random",
+  explicitStartEt: string,
+  explicitEndEt: string,
+  todayEt: string,
+): { startEt: string; endEt: string } | null {
+  if (mode === "off") return null;
+  if (mode === "explicit") {
+    return { startEt: explicitStartEt, endEt: explicitEndEt };
+  }
+  // mode === "random"
+  const r = dayHash01(todayEt);
+  const rangeMin = RANDOM_LATEST_START_MIN - RANDOM_EARLIEST_START_MIN;
+  const startMin = RANDOM_EARLIEST_START_MIN + Math.floor(r * rangeMin);
+  const endMin = Math.min(startMin + RANDOM_LENGTH_MIN, MAX_END_MIN);
+  return {
+    startEt: minutesToHhMm(startMin),
+    endEt: minutesToHhMm(endMin),
+  };
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }

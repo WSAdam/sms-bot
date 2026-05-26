@@ -12,11 +12,29 @@ import {
   getGatesConfig,
   setGatesConfig,
 } from "@shared/services/config/gates-config.ts";
+import {
+  easternDateString,
+  effectiveInboundWindow,
+} from "@shared/util/time.ts";
 
 export const handler = define.handlers({
   async GET() {
     const config = await getGatesConfig();
-    return Response.json(config);
+    // Surface today's effective inbound window so the form can show
+    // it (especially valuable in random mode where the actual window
+    // isn't visible from the raw fields). Computed, not stored.
+    const todayEt = easternDateString();
+    const currentEffectiveWindow = effectiveInboundWindow(
+      config.inboundWindowMode,
+      config.inboundWindowStartEt,
+      config.inboundWindowEndEt,
+      todayEt,
+    );
+    return Response.json({
+      ...config,
+      currentEffectiveWindow,
+      currentTodayEt: todayEt,
+    });
   },
   async POST(ctx) {
     const body = await ctx.req.json().catch(() => null) as
@@ -33,6 +51,7 @@ export const handler = define.handlers({
           | "tpiMaxPer5Min"
           | "scheduledInjectionSweepEnabled"
           | "scheduledInjectionDedupHours"
+          | "inboundWindowMode"
           | "inboundWindowStartEt"
           | "inboundWindowEndEt"
         >
