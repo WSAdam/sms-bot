@@ -155,52 +155,44 @@ if (
     }
   });
 
-  // Every-minute tick. Reads cronConfig.report.timeOfDayEt + lastSentEtDate
-  // to decide if it should send. This replaces the old fixed "15 9 * * *"
-  // schedule so Adam can edit the send time from the dashboard without a
-  // redeploy. Exactly-once-per-day is enforced by stamping
-  // report.lastSentEtDate after a successful send — once a day has
-  // already been sent, subsequent ticks skip even if the time still
-  // matches. Subject is prefixed with [REPORT] for easy mailbox filtering.
-  // Note: this cron ticks every minute but only does meaningful work
-  // once per day (when target time hits + report hasn't been sent
-  // today). We only stamp the cron-health marker when there's actual
-  // work to log — every-minute marker writes for the "nothing to do"
-  // path would be wasted I/O.
+  // Once a day at 08:15 UTC = 4:15 AM EDT (3:15 AM EST). The
+  // every-minute "live-editable send time" schedule was retired
+  // 2026-05-26 — it cluttered the Cron tab with 1,440 invocations/
+  // day. Changing the time now requires a code change + redeploy.
+  // `cronConfig.report.lastSentEtDate` is kept as an idempotency
+  // belt against duplicate fires (Deno Deploy retries, manual
+  // "Run Now" clicks). `cronConfig.report.timeOfDayEt` is now
+  // ignored by this handler but left in the type for backward
+  // compat with existing Firestore docs.
 
-  Deno.cron("nightly-report", "* * * * *", async () => {
+  Deno.cron("nightly-report", "15 8 * * *", async () => {
+    console.log(
+      `[cron-tick] nightly-report ${new Date().toISOString()}`,
+    );
     try {
-      const cfg = await getCronConfig();
-      if (!cfg.report.enabled) return;
-
-      // Current ET wall-clock HH:MM. -4 approximation matches the rest of
-      // the report path; off-by-one minute around DST is acceptable since
-      // the next tick will catch it.
-      const now = new Date();
-      const etNow = new Date(now.getTime() - 4 * 60 * 60 * 1000);
-      const hh = String(etNow.getUTCHours()).padStart(2, "0");
-      const mm = String(etNow.getUTCMinutes()).padStart(2, "0");
-      const currentHhMm = `${hh}:${mm}`;
-      const targetHhMm = (cfg.report.timeOfDayEt ?? "04:15").trim();
-      // Once configured time has passed in current ET day, fire once.
-      if (currentHhMm < targetHhMm) return;
-
-      const todayEt = easternDateString(now);
-      if (cfg.report.lastSentEtDate === todayEt) return;
-
       await recordCronRun("nightly-report", async () => {
+        const cfg = await getCronConfig();
+        if (!cfg.report.enabled) {
+          console.log(`⏸  nightly-report disabled via cronConfig`);
+          return;
+        }
+        const todayEt = easternDateString(new Date());
+        if (cfg.report.lastSentEtDate === todayEt) {
+          console.log(`⏭  nightly-report already sent for ${todayEt}`);
+          return;
+        }
         const r = await runNightlyReport(todayEt);
         if (r.skipped) return;
         await setCronConfig({ report: { lastSentEtDate: todayEt } });
         console.log(
-          `⏰ daily report sent: date=${r.date} time=${currentHhMm}ET ` +
+          `⏰ daily report sent: date=${r.date} ` +
             `texts wtd=${r.counts.textsSentWtd}/lt=${r.counts.textsSentLifetime} ` +
             `appts wtd=${r.counts.apptsBookedWtd}/lt=${r.counts.apptsBookedLifetime} ` +
             `acts wtd=${r.counts.activationsWtd}/lt=${r.counts.activationsLifetime}`,
         );
       });
     } catch (e) {
-      console.error(`❌ nightly report tick threw: ${(e as Error).message}`);
+      console.error(`❌ nightly-report failed: ${(e as Error).message}`);
     }
   });
 
