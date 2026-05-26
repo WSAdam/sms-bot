@@ -33,6 +33,8 @@ export const handler = define.handlers({
           | "tpiMaxPer5Min"
           | "scheduledInjectionSweepEnabled"
           | "scheduledInjectionDedupHours"
+          | "inboundWindowStartEt"
+          | "inboundWindowEndEt"
         >
       >
       | null;

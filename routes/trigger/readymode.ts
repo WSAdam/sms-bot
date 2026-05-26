@@ -6,8 +6,10 @@
 // Content-Type, falling back to JSON for everything else.
 
 import { define } from "@/utils.ts";
+import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import { processInboundLead } from "@shared/services/readymode/service.ts";
 import { parseTriggerPayload } from "@shared/services/readymode/validate-trigger.ts";
+import { easternTimeHhMm } from "@shared/util/time.ts";
 
 function parseBody(contentType: string, raw: string): Record<string, unknown> {
   if (!raw) return {};
@@ -62,6 +64,34 @@ export const handler = define.handlers({
           field: validation.error.field,
         },
         { status: 400 },
+      );
+    }
+
+    // Inbound time-window gate. ET wall-clock string-compare against
+    // gatesConfig.inboundWindow{Start,End}Et (zero-padded "HH:MM"
+    // sorts chronologically). Outside the window: zero Firestore
+    // reads, zero TPI calls, zero Bland API. Inside: behavior
+    // unchanged. Live-editable via /test → Gates Config form;
+    // gatesConfig is 60s-cached so steady-state cost is ~0.
+    const gates = await getGatesConfig();
+    const nowEt = easternTimeHhMm();
+    const inWindow =
+      nowEt >= gates.inboundWindowStartEt &&
+      nowEt < gates.inboundWindowEndEt;
+    if (!inWindow) {
+      console.log(
+        `[trigger] ⏸ outside window ${gates.inboundWindowStartEt}-${gates.inboundWindowEndEt}, ` +
+          `nowEt=${nowEt} phone=${validation.dto.phone}`,
+      );
+      return Response.json(
+        {
+          status: "skipped",
+          reason: "outside-window",
+          windowStartEt: gates.inboundWindowStartEt,
+          windowEndEt: gates.inboundWindowEndEt,
+          nowEt,
+        },
+        { status: 200 },
       );
     }
 

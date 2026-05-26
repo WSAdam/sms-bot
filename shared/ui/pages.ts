@@ -4767,6 +4767,8 @@ function renderGatesConfigForm(cfg){
     +   '<label>RM TPI max per 5 min <span class="muted small">(sliding-window cap on TPI lookups; default 30)</span><input type="number" min="0" step="1" data-gatecfg="tpiMaxPer5Min" value="' + escapeHtml(String(cfg.tpiMaxPer5Min ?? "")) + '"></label>'
     +   '<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" data-gatecfg="scheduledInjectionSweepEnabled"' + (cfg.scheduledInjectionSweepEnabled ? ' checked' : '') + '> Scheduled-injection sweep enabled <span class="muted small">(master kill-switch for the every-minute dial sweep; default OFF)</span></label>'
     +   '<label>Sweep dedup window (hours) <span class="muted small">(skip dial if injectionhistory has entry within N hours; default 72)</span><input type="number" min="0" step="1" data-gatecfg="scheduledInjectionDedupHours" value="' + escapeHtml(String(cfg.scheduledInjectionDedupHours ?? "")) + '"></label>'
+    +   '<label>Inbound window start (ET, HH:MM 24h) <span class="muted small">(triggers before this are dropped with no Firestore work; default 00:00)</span><input type="text" pattern="^[0-2][0-9]:[0-5][0-9]$" data-gatecfg="inboundWindowStartEt" value="' + escapeHtml(String(cfg.inboundWindowStartEt ?? "00:00")) + '" placeholder="09:00"></label>'
+    +   '<label>Inbound window end (ET, HH:MM 24h) <span class="muted small">(triggers at/after this are dropped; default 23:59)</span><input type="text" pattern="^[0-2][0-9]:[0-5][0-9]$" data-gatecfg="inboundWindowEndEt" value="' + escapeHtml(String(cfg.inboundWindowEndEt ?? "23:59")) + '" placeholder="21:00"></label>'
     + '</div>'
     + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '. Enforcement layer caches for 60s — your change will be live within a minute.</div>';
 }
@@ -4777,6 +4779,14 @@ function readGatesConfigForm(card){
     const key = el.getAttribute("data-gatecfg");
     if(el.type === "checkbox"){
       out[key] = el.checked;
+      return;
+    }
+    // Text inputs with an HH:MM pattern (inbound window gates) — pass
+    // the raw string through, but only if it actually matches HH:MM.
+    // Anything else is silently dropped so a malformed entry doesn't
+    // overwrite a valid gate value.
+    if(el.type === "text" && /^[0-2][0-9]:[0-5][0-9]$/.test(el.value)){
+      out[key] = el.value;
       return;
     }
     const n = Number(el.value);

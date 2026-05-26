@@ -49,6 +49,14 @@ export interface GatesConfig {
   // already has an injectionhistory entry within the last N hours.
   scheduledInjectionSweepEnabled: boolean;
   scheduledInjectionDedupHours: number;
+  // Inbound trigger time-window gate. The /trigger/readymode handler
+  // early-returns 200 (with `status: "skipped"`) if the current ET
+  // wall-clock is outside [start, end). Outside the window: zero
+  // Firestore reads, zero TPI calls, zero Bland API. Inside the
+  // window: behavior unchanged. Strings are "HH:MM" 24h ET.
+  // Defaults are wide-open (00:00–23:59) so first deploy is a no-op.
+  inboundWindowStartEt: string;
+  inboundWindowEndEt: string;
   updatedAt: string;
 }
 
@@ -63,6 +71,8 @@ export const GATES_CONFIG_DEFAULTS: GatesConfig = {
   tpiMaxPer5Min: 30,
   scheduledInjectionSweepEnabled: false,
   scheduledInjectionDedupHours: 72,
+  inboundWindowStartEt: "00:00",
+  inboundWindowEndEt: "23:59",
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -114,10 +124,25 @@ function mergeWithDefaults(doc: Record<string, unknown> | null): GatesConfig {
       doc.scheduledInjectionDedupHours,
       GATES_CONFIG_DEFAULTS.scheduledInjectionDedupHours,
     ),
+    inboundWindowStartEt: hhMmOr(
+      doc.inboundWindowStartEt,
+      GATES_CONFIG_DEFAULTS.inboundWindowStartEt,
+    ),
+    inboundWindowEndEt: hhMmOr(
+      doc.inboundWindowEndEt,
+      GATES_CONFIG_DEFAULTS.inboundWindowEndEt,
+    ),
     updatedAt: typeof doc.updatedAt === "string"
       ? doc.updatedAt
       : GATES_CONFIG_DEFAULTS.updatedAt,
   };
+}
+
+// Accept only zero-padded "HH:MM" strings — that's what the lex-compare
+// at the gate site relies on. Anything malformed falls back to the
+// default so the field never silently mis-interprets.
+function hhMmOr(v: unknown, fallback: string): string {
+  return typeof v === "string" && /^\d{2}:\d{2}$/.test(v) ? v : fallback;
 }
 
 export async function getGatesConfig(
@@ -153,6 +178,8 @@ export async function setGatesConfig(
       | "tpiMaxPer5Min"
       | "scheduledInjectionSweepEnabled"
       | "scheduledInjectionDedupHours"
+      | "inboundWindowStartEt"
+      | "inboundWindowEndEt"
     >
   >,
   client: FirestoreClient = getFirestoreClient(),
@@ -173,6 +200,10 @@ export async function setGatesConfig(
       current.scheduledInjectionSweepEnabled,
     scheduledInjectionDedupHours: partial.scheduledInjectionDedupHours ??
       current.scheduledInjectionDedupHours,
+    inboundWindowStartEt: partial.inboundWindowStartEt ??
+      current.inboundWindowStartEt,
+    inboundWindowEndEt: partial.inboundWindowEndEt ??
+      current.inboundWindowEndEt,
     updatedAt: new Date().toISOString(),
   };
   await client.set(

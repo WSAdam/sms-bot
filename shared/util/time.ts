@@ -11,6 +11,22 @@ export function easternDateString(date: Date = new Date()): string {
   return DATE_FORMATTER.format(date);
 }
 
+// 24h "HH:MM" formatter in ET. Used by the inbound trigger window gate
+// (gatesConfig.inboundWindow{Start,End}Et) to lexicographically compare
+// against zero-padded HH:MM strings — the lex order matches chrono
+// order for that format, so no parsing or date math is needed at the
+// comparison site. en-GB locale gives us 24h without AM/PM.
+const TIME_HHMM_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: EASTERN_TZ,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+export function easternTimeHhMm(date: Date = new Date()): string {
+  return TIME_HHMM_FORMATTER.format(date);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
