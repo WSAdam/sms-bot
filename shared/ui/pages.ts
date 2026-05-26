@@ -4767,18 +4767,26 @@ function renderGatesConfigForm(cfg){
     +   '<label>RM TPI max per 5 min <span class="muted small">(sliding-window cap on TPI lookups; default 30)</span><input type="number" min="0" step="1" data-gatecfg="tpiMaxPer5Min" value="' + escapeHtml(String(cfg.tpiMaxPer5Min ?? "")) + '"></label>'
     +   '<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" data-gatecfg="scheduledInjectionSweepEnabled"' + (cfg.scheduledInjectionSweepEnabled ? ' checked' : '') + '> Scheduled-injection sweep enabled <span class="muted small">(master kill-switch for the every-minute dial sweep; default OFF)</span></label>'
     +   '<label>Sweep dedup window (hours) <span class="muted small">(skip dial if injectionhistory has entry within N hours; default 72)</span><input type="number" min="0" step="1" data-gatecfg="scheduledInjectionDedupHours" value="' + escapeHtml(String(cfg.scheduledInjectionDedupHours ?? "")) + '"></label>'
-    +   '<label>Inbound window mode <span class="muted small">(off=no gate · explicit=use fields below · random=daily 5h window with start in 09:00-16:00 ET)</span><select data-gatecfg="inboundWindowMode">'
-    +     '<option value="off"' + (cfg.inboundWindowMode === "off" ? " selected" : "") + '>off — no gate</option>'
-    +     '<option value="explicit"' + (cfg.inboundWindowMode === "explicit" ? " selected" : "") + '>explicit — use start/end fields</option>'
-    +     '<option value="random"' + (cfg.inboundWindowMode === "random" ? " selected" : "") + '>random — per-day, 09:00-16:00 start, 5h</option>'
-    +   '</select></label>'
-    +   '<label>Inbound window start (ET, HH:MM 24h) <span class="muted small">(used when mode=explicit; default 00:00)</span><input type="text" pattern="^[0-2][0-9]:[0-5][0-9]$" data-gatecfg="inboundWindowStartEt" value="' + escapeHtml(String(cfg.inboundWindowStartEt ?? "00:00")) + '" placeholder="09:00"></label>'
-    +   '<label>Inbound window end (ET, HH:MM 24h) <span class="muted small">(used when mode=explicit; default 23:59)</span><input type="text" pattern="^[0-2][0-9]:[0-5][0-9]$" data-gatecfg="inboundWindowEndEt" value="' + escapeHtml(String(cfg.inboundWindowEndEt ?? "23:59")) + '" placeholder="21:00"></label>'
     + '</div>'
-    + (cfg.currentEffectiveWindow
-        ? '<div class="muted small" style="margin-top:6px">Today\'s effective window (' + escapeHtml(String(cfg.currentTodayEt || "")) + ' ET): <strong>' + escapeHtml(cfg.currentEffectiveWindow.startEt) + ' – ' + escapeHtml(cfg.currentEffectiveWindow.endEt) + '</strong> (mode=' + escapeHtml(String(cfg.inboundWindowMode || "")) + ')</div>'
-        : '<div class="muted small" style="margin-top:6px">Today\'s effective window: <strong>none</strong> (mode=' + escapeHtml(String(cfg.inboundWindowMode || "off")) + ' → no gate)</div>')
+    + renderInboundWindowBlock(cfg.inboundWindow)
     + '<div class="muted small" style="margin-top:10px">Last saved: ' + escapeHtml(cfg.updatedAt || "(never)") + '. Enforcement layer caches for 60s — your change will be live within a minute.</div>';
+}
+
+function renderInboundWindowBlock(iw){
+  if(!iw) return "";
+  const win = iw.currentEffectiveWindow;
+  const winLine = win
+    ? '<strong>' + escapeHtml(win.startEt) + ' – ' + escapeHtml(win.endEt) + '</strong>'
+    : '<strong>none</strong> (no gate)';
+  const explicitLine = iw.mode === "explicit"
+    ? ' explicit fields: ' + escapeHtml(iw.explicitStartEt) + ' – ' + escapeHtml(iw.explicitEndEt) + '.'
+    : '';
+  return ''
+    + '<div style="margin-top:14px;padding:10px;border:1px solid var(--border);border-radius:6px">'
+    +   '<h4 style="color:var(--accentHi);margin:0 0 6px">⏱ Inbound Window (env-controlled)</h4>'
+    +   '<div class="muted small">Mode: <strong>' + escapeHtml(String(iw.mode || "off")) + '</strong> (set via INBOUND_WINDOW_MODE).' + explicitLine + ' Redeploy required to change.</div>'
+    +   '<div class="muted small" style="margin-top:4px">Today\'s effective window (' + escapeHtml(String(iw.currentTodayEt || "")) + ' ET): ' + winLine + '</div>'
+    + '</div>';
 }
 
 function readGatesConfigForm(card){
@@ -4787,21 +4795,6 @@ function readGatesConfigForm(card){
     const key = el.getAttribute("data-gatecfg");
     if(el.type === "checkbox"){
       out[key] = el.checked;
-      return;
-    }
-    // <select> elements (e.g. inboundWindowMode) — pass the raw value
-    // through. The server-side validator (modeOr in gates-config.ts)
-    // rejects unknown enum strings on read.
-    if(el.tagName === "SELECT"){
-      out[key] = el.value;
-      return;
-    }
-    // Text inputs with an HH:MM pattern (inbound window gates) — pass
-    // the raw string through, but only if it actually matches HH:MM.
-    // Anything else is silently dropped so a malformed entry doesn't
-    // overwrite a valid gate value.
-    if(el.type === "text" && /^[0-2][0-9]:[0-5][0-9]$/.test(el.value)){
-      out[key] = el.value;
       return;
     }
     const n = Number(el.value);

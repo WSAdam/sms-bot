@@ -3,10 +3,17 @@
 // change the attempts threshold, sale-match window, global daily SMS cap,
 // and per-phone rate-limit window from the dashboard without redeploying.
 //
-// GET  → current merged config (Firestore doc overrides shipped defaults)
-// POST → merge body into current and save
+// The inbound-window gate is NOT live-editable — it's env-driven (see
+// shared/config/env.ts) so the /trigger/readymode handler can decide
+// without any Firestore read. The GET response includes the current
+// env-derived state under `inboundWindow.*` so the form can display it
+// as read-only.
+//
+// GET  → current merged config + env-derived inbound window
+// POST → merge body into current and save (Firestore-stored fields only)
 
 import { define } from "@/utils.ts";
+import { loadEnv } from "@shared/config/env.ts";
 import {
   type GatesConfig,
   getGatesConfig,
@@ -20,20 +27,26 @@ import {
 export const handler = define.handlers({
   async GET() {
     const config = await getGatesConfig();
-    // Surface today's effective inbound window so the form can show
-    // it (especially valuable in random mode where the actual window
-    // isn't visible from the raw fields). Computed, not stored.
+    const env = loadEnv();
     const todayEt = easternDateString();
+    // Compute today's effective window from the env-driven mode +
+    // explicit start/end. UI displays this as the source of truth.
     const currentEffectiveWindow = effectiveInboundWindow(
-      config.inboundWindowMode,
-      config.inboundWindowStartEt,
-      config.inboundWindowEndEt,
+      env.inboundWindowMode,
+      env.inboundWindowStartEt,
+      env.inboundWindowEndEt,
       todayEt,
     );
     return Response.json({
       ...config,
-      currentEffectiveWindow,
-      currentTodayEt: todayEt,
+      inboundWindow: {
+        mode: env.inboundWindowMode,
+        explicitStartEt: env.inboundWindowStartEt,
+        explicitEndEt: env.inboundWindowEndEt,
+        currentEffectiveWindow,
+        currentTodayEt: todayEt,
+        source: "env",
+      },
     });
   },
   async POST(ctx) {
@@ -51,9 +64,6 @@ export const handler = define.handlers({
           | "tpiMaxPer5Min"
           | "scheduledInjectionSweepEnabled"
           | "scheduledInjectionDedupHours"
-          | "inboundWindowMode"
-          | "inboundWindowStartEt"
-          | "inboundWindowEndEt"
         >
       >
       | null;

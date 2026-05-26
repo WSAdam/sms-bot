@@ -30,6 +30,13 @@ export interface AppEnv {
   // Throttling
   globalDailySmsCap: number;
 
+  // Inbound trigger window gate. Env-driven so the gate decision in
+  // routes/trigger/readymode.ts requires ZERO Firestore reads — see
+  // shared/config/env.ts. Change requires a redeploy.
+  inboundWindowMode: "off" | "explicit" | "random";
+  inboundWindowStartEt: string; // "HH:MM", used only when mode=explicit
+  inboundWindowEndEt: string; // "HH:MM", used only when mode=explicit
+
   // Runtime
   isDeploy: boolean;
 }
@@ -49,4 +56,7 @@ export type EnvKey =
   | "QUICKBASE_FAIL_OPEN"
   | "RM_USER"
   | "RM_PASS"
-  | "GLOBAL_DAILY_SMS_CAP";
+  | "GLOBAL_DAILY_SMS_CAP"
+  | "INBOUND_WINDOW_MODE"
+  | "INBOUND_WINDOW_START_ET"
+  | "INBOUND_WINDOW_END_ET";

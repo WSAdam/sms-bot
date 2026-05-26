@@ -6,7 +6,7 @@
 // Content-Type, falling back to JSON for everything else.
 
 import { define } from "@/utils.ts";
-import { getGatesConfig } from "@shared/services/config/gates-config.ts";
+import { loadEnv } from "@shared/config/env.ts";
 import { processInboundLead } from "@shared/services/readymode/service.ts";
 import { parseTriggerPayload } from "@shared/services/readymode/validate-trigger.ts";
 import {
@@ -71,18 +71,18 @@ export const handler = define.handlers({
       );
     }
 
-    // Inbound time-window gate. ET wall-clock string-compare against
-    // the effective window derived from gatesConfig.inboundWindowMode.
-    // Outside the window: zero Firestore reads, zero TPI calls, zero
-    // Bland API. Inside (or mode=off): behavior unchanged.
-    // Live-editable via /test → Gates Config form; gatesConfig is
-    // 60s-cached so steady-state cost is ~0.
-    const gates = await getGatesConfig();
+    // Inbound time-window gate. Env-driven so the decision requires
+    // ZERO Firestore reads — loadEnv() is module-level cached, so this
+    // is effectively a free in-memory string compare. Mode is set via
+    // the INBOUND_WINDOW_MODE env var; explicit start/end via
+    // INBOUND_WINDOW_START_ET / INBOUND_WINDOW_END_ET. Change requires
+    // a redeploy. See shared/config/env.ts for parsing/validation.
+    const env = loadEnv();
     const nowEt = easternTimeHhMm();
     const effective = effectiveInboundWindow(
-      gates.inboundWindowMode,
-      gates.inboundWindowStartEt,
-      gates.inboundWindowEndEt,
+      env.inboundWindowMode,
+      env.inboundWindowStartEt,
+      env.inboundWindowEndEt,
       easternDateString(),
     );
     if (
@@ -91,13 +91,13 @@ export const handler = define.handlers({
     ) {
       console.log(
         `[trigger] ⏸ outside window ${effective.startEt}-${effective.endEt} ` +
-          `(mode=${gates.inboundWindowMode}) nowEt=${nowEt} phone=${validation.dto.phone}`,
+          `(mode=${env.inboundWindowMode}) nowEt=${nowEt} phone=${validation.dto.phone}`,
       );
       return Response.json(
         {
           status: "skipped",
           reason: "outside-window",
-          mode: gates.inboundWindowMode,
+          mode: env.inboundWindowMode,
           windowStartEt: effective.startEt,
           windowEndEt: effective.endEt,
           nowEt,

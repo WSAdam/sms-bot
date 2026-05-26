@@ -72,15 +72,48 @@ export function loadEnv(): AppEnv {
       GLOBAL_DAILY_SMS_CAP,
     ),
 
+    inboundWindowMode: parseInboundMode(read("INBOUND_WINDOW_MODE")),
+    inboundWindowStartEt: parseHhMmOr(read("INBOUND_WINDOW_START_ET"), "00:00"),
+    inboundWindowEndEt: parseHhMmOr(read("INBOUND_WINDOW_END_ET"), "23:59"),
+
     isDeploy,
   };
 
   console.log(
     `[env] loaded: globalDailySmsCap=${cached.globalDailySmsCap}` +
-      (read("GLOBAL_DAILY_SMS_CAP") ? " (from env)" : " (default)"),
+      (read("GLOBAL_DAILY_SMS_CAP") ? " (from env)" : " (default)") +
+      ` inboundWindowMode=${cached.inboundWindowMode}` +
+      (cached.inboundWindowMode === "explicit"
+        ? ` (${cached.inboundWindowStartEt}-${cached.inboundWindowEndEt})`
+        : ""),
   );
 
   return cached;
+}
+
+function parseInboundMode(
+  v: string | null,
+): "off" | "explicit" | "random" {
+  const s = (v ?? "").trim().toLowerCase();
+  if (s === "random" || s === "explicit") return s;
+  // Anything else (including unset, empty, typo) → "off". Default to
+  // no-gate so a misconfigured env never silently drops traffic.
+  if (s !== "" && s !== "off") {
+    console.warn(
+      `[env] ⚠️ INBOUND_WINDOW_MODE="${v}" is not one of off|explicit|random — falling back to "off"`,
+    );
+  }
+  return "off";
+}
+
+function parseHhMmOr(v: string | null, fallback: string): string {
+  if (v == null) return fallback;
+  const s = v.trim();
+  if (/^[0-2][0-9]:[0-5][0-9]$/.test(s)) return s;
+  console.warn(
+    `[env] ⚠️ "${v}" is not a valid HH:MM 24h string — falling back to ${fallback}`,
+  );
+  return fallback;
 }
 
 function parseIntOr(v: string | null, fallback: number): number {
