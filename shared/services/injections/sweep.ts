@@ -63,11 +63,16 @@ export async function sweepScheduledInjections(
         skipped++;
       } else {
         fired++;
+        console.log(`[sweep] ✅ fired phone=${phone}`);
       }
     } catch (e) {
       status = "error";
       errorMsg = (e as Error).message;
       errors.push({ phone, error: errorMsg });
+      // Log per-phone so the failure is visible in real time. The aggregate
+      // `⏰ sweep: ... errors=N` line only tells you a count; you used to have
+      // to crack open injectionhistory to learn which phone and why.
+      console.error(`[sweep] ❌ phone=${phone} → ${errorMsg}`);
     }
 
     const history: InjectionHistoryEntry = {

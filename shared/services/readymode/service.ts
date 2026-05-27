@@ -484,44 +484,69 @@ export async function injectLead(
   const baseUrl = `${config.baseUrl}/lead-api/${targetId}`;
 
   // Preemptive scrub (replaces the legacy injection-lock; do NOT reintroduce a lock).
+  // Log the outcome so a silent scrub-then-fail-to-inject sequence is visible:
+  // without this, a failed re-add leaves the lead vanished from ReadyMode and we
+  // had no record of which step dropped it.
   try {
-    await scrubLead(lead.phone, domain);
+    const scrubbed = await scrubLead(lead.phone, domain);
+    console.log(
+      `[inject] ${scrubbed ? "✅" : "⚠️"} preemptive scrub ${domain} phone=${lead.phone} → ${scrubbed ? "ok" : "no-op/fail"}`,
+    );
   } catch (e) {
     console.warn(
-      `[inject] preemptive scrub failed (non-fatal): ${(e as Error).message}`,
+      `[inject] ⚠️ preemptive scrub threw ${domain} phone=${lead.phone}: ${(e as Error).message} (non-fatal)`,
     );
   }
 
   const url = buildLeadUrl(baseUrl, lead as unknown as Record<string, unknown>);
   console.log(
-    `[inject] 🚀 ${domain} target=${targetId} → ${url.slice(0, 200)}`,
+    `[inject] 🚀 ${domain} phone=${lead.phone} target=${targetId} → ${url.slice(0, 200)}`,
   );
 
   try {
     const res = await fetch(url, { method: "POST" });
     const text = await res.text();
+    const bodySlice = text.slice(0, 300).replace(/\s+/g, " ");
     let json: unknown = null;
     try {
       json = JSON.parse(text);
     } catch { /* ignore */ }
 
-    let success = false;
-    if (
+    const isSuccess =
       ((json as Record<string, unknown> | null)?.Success === true) ||
       ((json as Record<string, Record<string, unknown>> | null)?.["0"]
         ?.Success === true) ||
       text.includes('"Success":true') ||
-      text.includes('"Success": true')
-    ) {
-      success = true;
-    } else if (
+      text.includes('"Success": true');
+    const isDuplicate = !isSuccess && (
       text.includes("Duplicate") || text.includes("leadId") ||
-      ((json as Record<string, unknown> | null)?.xencall_leadId)
-    ) {
+      !!((json as Record<string, unknown> | null)?.xencall_leadId)
+    );
+
+    let success = false;
+    let outcome = "";
+    if (isSuccess) {
+      success = true;
+      outcome = `ok http=${res.status}`;
+      console.log(
+        `[inject] ✅ ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
+      );
+    } else if (isDuplicate) {
+      console.log(
+        `[inject] 🔁 ${domain} phone=${lead.phone} target=${targetId} → duplicate detected http=${res.status} body="${bodySlice}"`,
+      );
       const retry = await handleDuplicate(lead, domain, text, url);
       success = retry.status === "success";
+      outcome = `${success ? "ok" : "failed"} via duplicate-retry (${retry.message})`;
+      console.log(
+        `[inject] ${success ? "✅" : "❌"} ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
+      );
     } else {
       success = res.ok;
+      outcome = `${success ? "ok" : "failed"} http=${res.status} body="${bodySlice}"`;
+      console.log(
+        `[inject] ${success ? "⚠️" : "❌"} ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
+      );
     }
 
     if (success) {
@@ -544,9 +569,12 @@ export async function injectLead(
 
     return {
       status: "error",
-      message: `Injection Failed: ${text.slice(0, 200)}`,
+      message: `Injection Failed: http=${res.status} ${bodySlice}`,
     };
   } catch (e) {
+    console.error(
+      `[inject] ❌ ${domain} phone=${lead.phone} target=${targetId} → threw: ${(e as Error).message}`,
+    );
     throw new Error(`Injection Failed: ${(e as Error).message}`);
   }
 }
@@ -565,10 +593,17 @@ async function handleDuplicate(
     if (jsonMatch?.[1]) leadId = jsonMatch[1];
   }
   if (!leadId) {
+    console.warn(
+      `[inject] ⚠️ duplicate-handler ${domain} phone=${lead.phone} → could not parse leadId from body="${errorBody.slice(0, 200).replace(/\s+/g, " ")}"`,
+    );
     return { status: "error", message: "Duplicate - ID Parse Failed" };
   }
 
-  if (!(await scrubLead(lead.phone, domain, leadId))) {
+  const scrubbed = await scrubLead(lead.phone, domain, leadId);
+  if (!scrubbed) {
+    console.warn(
+      `[inject] ⚠️ duplicate-handler ${domain} phone=${lead.phone} leadId=${leadId} → scrub returned false`,
+    );
     return { status: "error", message: "Scrub Failed" };
   }
 
@@ -581,13 +616,20 @@ async function handleDuplicate(
     fetch(newUrl, { method: "POST" })
   );
   const retryText = await retryRes.text();
+  const retryBody = retryText.slice(0, 300).replace(/\s+/g, " ");
   if (
     retryText.includes("Success") || retryText.includes("success") ||
     retryText.includes('"Success": true')
   ) {
+    console.log(
+      `[inject] ✅ duplicate-handler ${domain} phone=${lead.phone} leadId=${leadId} → retry ok http=${retryRes.status}`,
+    );
     return { status: "success", message: "Injected after Scrub" };
   }
-  return { status: "error", message: "Retry Failed" };
+  console.warn(
+    `[inject] ❌ duplicate-handler ${domain} phone=${lead.phone} leadId=${leadId} → retry failed http=${retryRes.status} body="${retryBody}"`,
+  );
+  return { status: "error", message: `Retry Failed: http=${retryRes.status} ${retryBody}` };
 }
 
 export async function scrubLead(
@@ -615,6 +657,7 @@ export async function scrubLead(
       })
     );
     const text = await res.text();
+    const bodySlice = text.slice(0, 200).replace(/\s+/g, " ");
     const success = text.includes("Success") || res.ok;
     if (success) {
       await orchestrator.logEvent(phone, {
@@ -622,10 +665,16 @@ export async function scrubLead(
         domain,
         details: "Scrubbed from campaign",
       });
+    } else {
+      console.warn(
+        `[scrub] ⚠️ ${domain} phone=${phone}${leadId ? ` leadId=${leadId}` : ""} → http=${res.status} body="${bodySlice}"`,
+      );
     }
     return success;
   } catch (e) {
-    console.error(`[scrub] ${domain} failed: ${(e as Error).message}`);
+    console.error(
+      `[scrub] ❌ ${domain} phone=${phone}${leadId ? ` leadId=${leadId}` : ""} threw: ${(e as Error).message}`,
+    );
     return false;
   }
 }
