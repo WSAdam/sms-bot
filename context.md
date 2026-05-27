@@ -187,6 +187,10 @@ one Deno Deploy project:
 | `CAL_API_KEY`                    | ✅ for Cal.com endpoints         | Cal.com v2 API key                                     | `cal_live_…` format                                                |
 | `NGROK_KEY`                      | local dev only                   | ngrok auth token                                       | For `deno task tunnel`                                             |
 | `SOURCE_KV_URL`                  | migration script only            | Legacy KV deploy URL                                   | `https://google-sheets-kv.thetechgoose.deno.net`                   |
+| `INBOUND_WINDOW_MODE`            | optional                         | Inbound trigger gate mode                              | `off` \| `none` \| `explicit` \| `random`. Default `none` if unset. See §0.14 |
+| `INBOUND_WINDOW_START_ET`        | optional                         | Window start when mode=explicit                        | `HH:MM` 24h ET, default `00:00`                                    |
+| `INBOUND_WINDOW_END_ET`          | optional                         | Window end when mode=explicit                          | `HH:MM` 24h ET, default `23:59`                                    |
+| `FIRESTORE_LIST_WARN_THRESHOLD`  | optional                         | Tripwire for unbounded `list()` calls                  | Default 500. Logs stack trace if any single query exceeds.         |
 
 **Removed since original plan:** `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`,
 `SMS_COUNT_TOKEN`, `QUICKBASE_REALM` (now hardcoded constant).
@@ -290,16 +294,51 @@ In `shared/config/constants.ts`:
 
 ### 0.6 Scheduled jobs (Deno.cron, Deploy-only)
 
-In `main.ts`, gated on `DENO_DEPLOYMENT_ID`:
+In `main.ts`, gated on `DENO_DEPLOYMENT_ID` (six jobs). Each handler is
+wrapped in `recordCronRun(name, fn)` so the cron-health card at
+`/api/admin/cron-health` surfaces stale crons within hours rather than
+days.
 
-- **`scheduled-injection-sweep`** — every minute (`* * * * *`). Calls
-  `sweepScheduledInjections("cron")`.
-- **`daily-qb-sale-match`** — daily at `0 14 * * *` UTC = **10 AM ET / 9 AM
-  EDT**. Calls `runDailyQbSaleMatch()` from
-  `shared/services/sale-match/cron.ts`.
+- **`scheduled-injection-sweep-v2`** — every minute (`* * * * *`).
+  Reads pending `scheduledinjections` where `eventTime <= now`,
+  fires each through `handleDelayedInjection` (which has the 72h
+  dedup guard), writes `injectionhistory`, deletes the pending doc.
+  Guarded by `gatesConfig.scheduledInjectionSweepEnabled` (default
+  `false`) — a live-editable kill-switch you can flip without a
+  redeploy. Renamed from `scheduled-injection-sweep` on 2026-05-25
+  because Deno Deploy's runtime had gotten stuck on the original
+  name (28k errors over 30 days, handler body never invoked); the
+  old registration is orphaned and decays naturally.
+- **`metrics-kvbreakdown-refresh`** — `0 6 * * *` UTC = 2 AM EDT.
+  Re-counts every Firestore collection and overwrites
+  `metrics/kvBreakdown/totals`. Self-healing floor for the dashboard
+  sidebar.
+- **`nightly-conversation-reseed`** — `0 7 * * *` UTC = 3 AM EDT.
+  Re-pulls every Bland conversation from the previous ET day +
+  chained `scanConversationsForBookings` over that window. Catches
+  webhook gaps and surfaces any booking signal Cal.com missed.
+- **`nightly-report`** — `15 8 * * *` UTC = 4:15 AM EDT / 3:15 AM
+  EST. Sends the daily Postmark email summary. Was every-minute
+  with a `cronConfig.report.timeOfDayEt` field for live-editable
+  send time; refactored 2026-05-26 to a fixed schedule. The
+  `cronConfig.report.timeOfDayEt` field is vestigial (no longer
+  read). `cronConfig.report.enabled` is still respected as a
+  kill-switch, and `cronConfig.report.lastSentEtDate` enforces
+  exactly-once-per-day.
+- **`daily-qb-sale-match`** — `0 9 * * *` UTC = 5 AM EDT / 4 AM
+  EST. Pulls today's Quickbase report (id 678 by default, set in
+  `cronConfig.qbSaleMatch.reportId`) and writes `saleswithin7d`
+  markers for any phone whose `scheduledinjection` fired within
+  the last 7 days AND has a matching QB sale.
+- **`readymode-daily-pull`** — `30 9 * * *` UTC = 5:30 AM EDT.
+  Logs into the ReadyMode portal, pages through yesterday's full
+  call log, writes `calldispositions`, upserts `guestanswered` for
+  non-No-Answer calls. RM enforces single-session-per-user, so
+  this kicks Adam's own RM session if he's logged in at the time.
 
-Edit cron expressions in `main.ts` to change schedules. Both also callable via
-routes for manual firing.
+All six are callable via `/api/cron/trigger*` routes for manual
+firing. Cron-health endpoint at `/api/admin/cron-health` returns
+last-run-status + duration for each.
 
 ### 0.7 Test console (`/test`)
 
@@ -479,6 +518,116 @@ truly safe re-runs. Not built yet.
   alone.
 - **Never push without explicit approval** — commit freely, but ask before
   `git push`. Silence/acknowledgment doesn't count as approval.
+- **Drain before unstick.** When reviving a paused scheduler/sweep that has a
+  known backlog, drain or quarantine the backlog FIRST. The 2026-05-25 incident
+  was caused by reversing this order: the sweep cron was unstuck (rename to
+  `-v2`) before the 19 stale pending docs were cleared, so it tried to fire
+  them all in the first tick. The ReadyMode campaign had to be manually scrubbed
+  to prevent ~19 unwanted dials. Always sequence: drain (or guard) → then
+  unstick. Never the reverse.
+
+### 0.14 Safety + ops changes (May 2026)
+
+Series of incidents in May 2026 drove a wave of defense-in-depth
+work. Summarized here so the patterns are findable; the original
+incident write-up is [incident-2026-05-19.md](incident-2026-05-19.md)
+and the firestore remediation tracker is
+[firestore-safety.md](firestore-safety.md).
+
+**Sweep cron safety stack** (handler: `main.ts:71` →
+`shared/services/orchestrator/queue.ts:handleDelayedInjection`):
+
+- **Kill-switch** — `gatesConfig.scheduledInjectionSweepEnabled`
+  (bool, default `false`). Checked inside the sweep handler before
+  any work. Flip via /test → Gates Config form; gatesConfig is
+  60s-cached so the change is live within a minute. No redeploy.
+- **72h dedup guard** — `handleDelayedInjection` queries
+  `injectionhistory` for the phone before injecting. If any entry
+  within `gatesConfig.scheduledInjectionDedupHours` (default 72) is
+  found, the function returns `{skipped: true, reason}` and the
+  sweep writes `injectionhistory` with `status: "skipped"` +
+  `skipReason`. The scheduledinjection doc is deleted regardless
+  (no value in re-evaluating forever). Single-field `phone` index
+  on injectionhistory; ~50 queries per minute under heavy sweep
+  load is well within budget.
+- **Talk-now cleanup** —
+  [routes/sms-callback/bland-talk-now.ts](routes/sms-callback/bland-talk-now.ts)
+  now deletes the companion `scheduledinjections/{phone}` doc after
+  firing. Closes the race that caused the 2026-05-25 near-miss:
+  talk-now used to write an `injectionhistory` audit entry but
+  leave the pending doc in place, so when the sweep came back from
+  its 22-day outage it tried to re-dial the same phones.
+
+**Inbound trigger window gate** (env-driven, zero Firestore reads):
+
+The `/trigger/readymode` handler has a 4-mode gate at the top of
+the handler that reads from `loadEnv()` (module-cached after first
+call). Outside the active window, returns `200 {status: "skipped",
+reason: "outside-window" | "mode-off"}` in <30ms with no Firestore
+or TPI calls.
+
+| `INBOUND_WINDOW_MODE` | Behavior |
+|---|---|
+| `none` (default) | No gate; every trigger processes normally |
+| `off`            | Master kill-switch; drop every trigger |
+| `explicit`       | Use `INBOUND_WINDOW_START_ET` / `INBOUND_WINDOW_END_ET` |
+| `random`         | Per-day randomized 5h window, start in [09:00, 16:00] ET. Same window all day; reseeds at ET midnight. Deterministic from today's ET date via FNV-1a + MurmurHash3 fmix in [shared/util/time.ts](shared/util/time.ts) `effectiveInboundWindow`. |
+
+Random-mode params (earliest/latest start, length) are hardcoded
+constants — change requires a code change + redeploy. The /test
+→ Gates Config card displays today's effective window read-only.
+
+**TZ normalization at every write site**
+([shared/util/time.ts](shared/util/time.ts) `normalizeAppointmentTime`):
+
+After repeated incidents where TZ-naive eventTimes (e.g.
+`"2026-06-14T07:30:00"` with no Z/offset) fired ~4h early in EDT,
+the contract is now:
+
+- `scheduleInjection` THROWS on any eventTime missing a `Z` or
+  `±HH:MM` marker. Boundary guard, never disabled.
+- All write paths into `scheduledinjections` (cal/schedule,
+  appointment-booked, booking-scan-recovery) pipe through
+  `normalizeAppointmentTime(raw, tz)` first.
+- `getBlandDesiredTime` normalizes Bland's
+  `variables.Desired_Time` at the source using
+  `variables.timezone` (or ET fallback).
+- Defense-in-depth: booking-scan also normalizes every proposed
+  eventTime before returning it.
+
+**booking-scan refactor** (2026-05-26):
+
+[shared/services/conversations/booking-scan.ts](shared/services/conversations/booking-scan.ts):
+
+- Reads from Firestore `conversations` collection (single `where(timestamp >=)`
+  + in-memory group by `(phoneNumber, callId)`), NOT from Bland's
+  API per-conversation. Replaced 1,200 sequential Bland calls per
+  30-day window with one Firestore list.
+- Filters out conversations whose `callId` starts with `appt_` —
+  those are bot-generated confirmations, not real Bland convos.
+  Re-parsing our own output produced wrong-date proposals.
+- Deleted the `nextOccurrenceFromMessages` "time-only" fallback.
+  It re-anchored matches like "9:00 AM" to today's 9 AM regardless
+  of the original message's date. If no confident full date can be
+  extracted, the proposal is now `skippedNoTime` (placeholder
+  injectionhistory only, no dial).
+- Skips proposals whose eventTime is more than 24h in the past
+  (`skippedPast` counter). Stale signals don't generate dials.
+- Selectively calls `getBlandDesiredTime` only for conversations
+  with a detected signal — ~50-100 Bland calls per 30-day window.
+
+**cron-health observability** (`/api/admin/cron-health`):
+
+Each cron handler wraps its body in `recordCronRun(name, fn)`
+which stamps `metrics/cronruns/{name}` with last-run-at +
+status + duration on every tick. The endpoint reads a hardcoded
+list of expected cron names + per-cron expected freshness, and
+the dashboard surfaces any cron whose marker is stale. This is
+what caught the 2026-05-25 sweep regression within hours of the
+marker going stale instead of the 22 days the previous incident
+took. Adding a new cron requires adding it to the
+`CRON_FRESHNESS_HOURS` map in
+[routes/api/admin/cron-health.ts](routes/api/admin/cron-health.ts).
 
 ---
 
