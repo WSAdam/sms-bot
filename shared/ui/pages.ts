@@ -2777,12 +2777,28 @@ async function loadHistory(){
     var data = await res.json();
     if(!res.ok) throw new Error(data.error || "Failed");
 
+    // The injectionhistory doc ID is "phone10__firedAt" (a single
+    // string, not a 2-segment kv path), so e.key[1] is the WHOLE
+    // composite ID and e.key[2] is undefined. Split it here. Falls
+    // back to value.firedAt when the value carries it (defensive —
+    // both should agree).
     var entries = (data.entries || []).map(function(e){
-      return { phone: e.key[1], firedAt: e.key[2], value: e.value };
+      var compositeId = String(e.key[1] || "");
+      var sep = compositeId.indexOf("__");
+      var phone = sep > 0 ? compositeId.slice(0, sep) : compositeId;
+      var firedAt = (e.value && e.value.firedAt)
+        || (sep > 0 ? compositeId.slice(sep + 2) : "");
+      return { phone: phone, firedAt: firedAt, value: e.value };
     });
 
     entries.sort(function(a, b){
-      return new Date(b.firedAt || 0) - new Date(a.firedAt || 0);
+      // Newest firedAt first. Sort by ISO string descending — works
+      // because canonical UTC ISO strings sort chronologically.
+      var aT = a.firedAt || "";
+      var bT = b.firedAt || "";
+      if(aT < bT) return 1;
+      if(aT > bT) return -1;
+      return 0;
     });
 
     loading.style.display = "none";
