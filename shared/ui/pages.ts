@@ -837,7 +837,7 @@ ${sharedThemeCss}
     <div class="modal">
       <div class="modal-header">
         <div>
-          <h2>Appointments Booked Detail</h2>
+          <h2 id="apptTitle">Appointments Booked Detail</h2>
           <div class="small muted" id="apptSubtitle"></div>
         </div>
         <div class="modal-actions">
@@ -1177,6 +1177,15 @@ async function loadAppointments(page){
   apptTbody.innerHTML = "";
 
   const { startDate, endDate, prefixFilter } = getCurrentFiltersForAppointments();
+  // Title disambiguates daily vs lifetime — same modal serves both
+  // entry points, and "Appointments Booked Detail" alone was confusing
+  // when the lifetime card was clicked but the date filters were set.
+  const apptTitleEl = document.getElementById("apptTitle");
+  if(apptTitleEl){
+    apptTitleEl.textContent = apptLifetime
+      ? "Appointments Booked Detail (LIFETIME — date filters ignored)"
+      : "Appointments Booked Detail (filtered by date range above)";
+  }
   apptSubtitle.textContent = "Filters: " +
     (startDate ? ("start " + startDate) : "start none") + ", " +
     (endDate ? ("end " + endDate) : "end none") + ", " +
@@ -4794,7 +4803,7 @@ function renderInboundWindowBlock(iw){
   const win = iw.currentEffectiveWindow;
   let todayLine = "";
   if(mode === "explicit" || mode === "random"){
-    todayLine = '<div class="muted small" style="margin-top:4px">Today\'s effective window ('
+    todayLine = '<div class="muted small" style="margin-top:4px">Effective window today ('
       + escapeHtml(String(iw.currentTodayEt || ""))
       + ' ET): '
       + (win
