@@ -39,9 +39,19 @@ export const handler = define.handlers({
       : null;
 
     // Choose the most-selective filter for the database `where` clause.
-    // Order: phone (highest cardinality / lowest fanout) > sender (2
-    // values) > nodeTag (a few dozen values). Composite indexes in
-    // firestore.indexes.json cover each (filter, timestamp desc) pair.
+    // Order: phone (per-phone, very selective) > timestamp range (when set,
+    // typically narrower than sender's 2 values or nodeTag's few dozen) >
+    // sender > nodeTag. Composite indexes in firestore.indexes.json cover
+    // each (filter, timestamp desc) pair; timestamp alone uses the
+    // auto-indexed single-field index.
+    //
+    // Why prefer timestamp over sender when both are set: the previous
+    // priority used sender as the primary `where`, fetched the latest 500
+    // AI Bot messages globally, then filtered in-memory by date range. If
+    // the date range was older than those 500 (any backlog of recent
+    // sends), the drill returned 0 — even though the stats card showed
+    // a non-zero count for the same range. Flipping the order means the
+    // 500-doc page is anchored to the requested window, not to "now."
     let opts: ListOptions = {
       orderBy: { field: "timestamp", dir: "desc" },
       limit: MAX_ITEMS,
@@ -53,6 +63,13 @@ export const handler = define.handlers({
         where: { field: "phoneNumber", op: "==", value: phoneFilter },
       };
       primaryFilter = "phone";
+    } else if (startIso || endIso) {
+      // Single-field timestamp index. The other-end clamp (and any
+      // sender/nodeTag) is applied in-memory on the bounded result.
+      const tsWhere = startIso
+        ? { field: "timestamp", op: ">=" as const, value: startIso }
+        : { field: "timestamp", op: "<=" as const, value: endIso! };
+      opts = { ...opts, where: tsWhere };
     } else if (senderFilter) {
       opts = {
         ...opts,
@@ -65,13 +82,6 @@ export const handler = define.handlers({
         where: { field: "nodeTag", op: "==", value: nodeTagFilter },
       };
       primaryFilter = "nodeTag";
-    } else if (startIso || endIso) {
-      // No equality filter — use the auto-indexed timestamp range
-      // alone. Single-field index, no composite needed.
-      const tsWhere = startIso
-        ? { field: "timestamp", op: ">=" as const, value: startIso }
-        : { field: "timestamp", op: "<=" as const, value: endIso! };
-      opts = { ...opts, where: tsWhere };
     }
 
     const matches = await getFirestoreClient().list(
