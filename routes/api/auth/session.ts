@@ -17,7 +17,7 @@ import {
 
 export const handler = define.handlers({
   async POST(ctx) {
-    const auth = getAuthConfig();
+    const auth = await getAuthConfig();
     if (!auth.enabled) {
       return Response.json(
         { error: "auth-not-configured" },
@@ -36,7 +36,7 @@ export const handler = define.handlers({
       );
     }
 
-    const verify = await verifyFirebaseIdToken(idToken, auth.firebaseApiKey);
+    const verify = await verifyFirebaseIdToken(idToken, auth.firebaseProjectId);
     if (!verify.ok) {
       console.warn(`[auth] reject: ${verify.reason}`);
       return Response.json(

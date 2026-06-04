@@ -110,8 +110,8 @@ function render(opts: {
 }
 
 export const handler = define.handlers({
-  GET(ctx) {
-    const auth = getAuthConfig();
+  async GET(ctx) {
+    const auth = await getAuthConfig();
     const url = new URL(ctx.req.url);
     const next = url.searchParams.get("next") || "/dashboard";
     const errorMessage = url.searchParams.get("error");

@@ -77,9 +77,6 @@ export function loadEnv(): AppEnv {
     inboundWindowEndEt: parseHhMmOr(read("INBOUND_WINDOW_END_ET"), "23:59"),
 
     authFirebaseApiKey: read("AUTH_FIREBASE_API_KEY"),
-    authFirebaseAuthDomain: read("AUTH_FIREBASE_AUTH_DOMAIN"),
-    authFirebaseProjectId: read("AUTH_FIREBASE_PROJECT_ID"),
-    authSessionSecret: read("AUTH_SESSION_SECRET"),
     authAllowedDomains: parseDomainList(
       read("AUTH_ALLOWED_DOMAINS"),
       ["monsterrg.com"],

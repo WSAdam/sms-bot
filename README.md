@@ -68,25 +68,48 @@ deploy + index-publish workflow.
 ## Auth
 
 Dashboard + all `/api/*` endpoints are gated behind Firebase Auth
-(Google sign-in via the `keystone-fs97` Firebase project). Public
-endpoints — `/trigger/*`, `/sms-callback/*`, `/cal/*`, `/healthz`,
-`/sms-flow/*` — bypass auth so webhooks from ReadyMode / Bland /
-Cal.com still land. The `/login` page handles sign-in; `/logout`
-clears the cookie.
+(Google sign-in via the same Firebase project as Firestore — currently
+`keystone-fs97`). Public endpoints — `/trigger/*`, `/sms-callback/*`,
+`/cal/*`, `/healthz`, `/sms-flow/*` — bypass auth so webhooks from
+ReadyMode / Bland / Cal.com still land. The `/login` page handles
+sign-in; `/logout` clears the cookie.
 
-Required env vars (auth is **disabled and every route is public** if
-any are missing — set all four on Deploy):
+**ID tokens are verified locally** against Google's published JWKs
+(no network round-trip per request after the keys are warm). The
+session secret used to sign cookies is **derived deterministically
+from the service-account private key** — no separate secret to manage.
 
-| Var | Value |
+### Required env vars
+
+Only **one new env var** is needed beyond what the app already uses for
+Firestore:
+
+| Var | Value | Notes |
+|---|---|---|
+| `AUTH_FIREBASE_API_KEY` | Web API key from Firebase Console → Project Settings → Your Apps → Web app | Public identifier (safe to expose). The only thing that can't be derived. |
+
+Auth is **disabled and every route is public** if this is missing —
+same safe-default failure mode as before the feature shipped.
+
+Reused from the existing Firestore setup:
+
+- `FIREBASE_PROJECT_ID` — also drives the Firebase Auth project + auth domain
+- `FIREBASE_SERVICE_ACCOUNT_JSON` (Deploy) or
+  `GOOGLE_APPLICATION_CREDENTIALS` (local) — the private key is used to
+  derive the session HMAC secret
+
+Optional overrides:
+
+| Var | Default |
 |---|---|
-| `AUTH_FIREBASE_API_KEY` | Web API key from the keystone-fs97 Firebase console |
-| `AUTH_FIREBASE_AUTH_DOMAIN` | `keystone-fs97.firebaseapp.com` |
-| `AUTH_FIREBASE_PROJECT_ID` | `keystone-fs97` |
-| `AUTH_SESSION_SECRET` | 32+ char random string (HMAC key for session cookies) |
-| `AUTH_ALLOWED_DOMAINS` | Comma-separated allowlist; default `monsterrg.com` |
-| `AUTH_SESSION_TTL_SECONDS` | Session length; default `604800` (7 days) |
+| `AUTH_ALLOWED_DOMAINS` | `monsterrg.com` (comma-separated allowlist) |
+| `AUTH_SESSION_TTL_SECONDS` | `604800` (7 days) |
 
-Add `https://sms-bot.thetechgoose.deno.net` and
-`http://localhost:8000` as authorized domains in the keystone-fs97
-Firebase Authentication → Settings panel before the sign-in popup
-will work.
+### One-time Firebase Console setup
+
+Before the sign-in popup will work, in the Firebase Console for the
+project named by `FIREBASE_PROJECT_ID`:
+
+1. **Authentication → Sign-in method**: enable Google as a provider
+2. **Authentication → Settings → Authorized domains**: add
+   `sms-bot.thetechgoose.deno.net` and `localhost`

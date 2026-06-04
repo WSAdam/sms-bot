@@ -38,11 +38,12 @@ function wantsHtml(req: Request): boolean {
 }
 
 export async function authGate(req: Request): Promise<Response | null> {
-  const auth = getAuthConfig();
-  // If auth is disabled (env vars missing), let every request through.
-  // This keeps local dev frictionless and is the SAME failure mode as
-  // before this feature shipped, so an env misconfig never accidentally
-  // locks out the dashboard — but production MUST set the env vars.
+  const auth = await getAuthConfig();
+  // If auth is disabled (AUTH_FIREBASE_API_KEY missing), let every
+  // request through. This keeps local dev frictionless and is the SAME
+  // failure mode as before this feature shipped, so an env misconfig
+  // never accidentally locks out the dashboard — but production MUST
+  // set AUTH_FIREBASE_API_KEY.
   if (!auth.enabled) return null;
 
   const url = new URL(req.url);
