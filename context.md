@@ -191,6 +191,9 @@ one Deno Deploy project:
 | `INBOUND_WINDOW_START_ET`        | optional                         | Window start when mode=explicit                        | `HH:MM` 24h ET, default `00:00`                                    |
 | `INBOUND_WINDOW_END_ET`          | optional                         | Window end when mode=explicit                          | `HH:MM` 24h ET, default `23:59`                                    |
 | `FIRESTORE_LIST_WARN_THRESHOLD`  | optional                         | Tripwire for unbounded `list()` calls                  | Default 500. Logs stack trace if any single query exceeds.         |
+| `AUTH_FIREBASE_API_KEY`          | ✅ for the auth gate             | Firebase Web API key from keystone-fs97                | Public (project identifier, not a secret). If unset → auth disabled, every route public. See §0.15 |
+| `AUTH_ALLOWED_DOMAINS`           | optional                         | Comma-separated email-domain allowlist                 | Default `monsterrg.com`. Lowercased.                               |
+| `AUTH_SESSION_TTL_SECONDS`       | optional                         | Session cookie lifetime                                | Default 604800 (7 days).                                           |
 
 **Removed since original plan:** `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`,
 `SMS_COUNT_TOKEN`, `QUICKBASE_REALM` (now hardcoded constant).
@@ -215,13 +218,16 @@ In `shared/config/constants.ts`:
 
 ### 0.5 Endpoint inventory (current — supersedes §5)
 
-**UI pages** (return HTML from `shared/ui/pages.ts`):
+**UI pages** (return HTML from `shared/ui/pages.ts`, all gated by §0.15 auth
+unless listed under "Public bypass"):
 
 - `GET /` — landing (also handles legacy audit `?recordId` GET / POST)
 - `GET /dashboard`, `/search`, `/audit`, `/injections`, `/review`
 - `GET /test` — endpoint test console (8 sections, ~25 cards, sticky phone
   input, override toggle, response preview)
-- `GET /healthz` — `{ok:true, service, time}`
+- `GET /healthz` — `{ok:true, service, time}` (public)
+- `GET /login` — Firebase Web SDK + Google sign-in button (public)
+- `GET|POST /logout` — clears session cookie, 302 → /login (public)
 
 **Trigger** (inbound SMS):
 
@@ -291,6 +297,8 @@ In `shared/config/constants.ts`:
 - `POST /api/guests/activate-from-report` — manual trigger for daily QB cron
 - `POST /api/sms/count` — today's count (no auth — was token-gated, dropped)
 - `GET|POST /api/report/nightly` — Postmark email
+- `POST /api/auth/session` — exchange Firebase ID token for session cookie
+  (public — entry to the auth flow). `DELETE` clears the cookie.
 
 ### 0.6 Scheduled jobs (Deno.cron, Deploy-only)
 
@@ -525,6 +533,13 @@ truly safe re-runs. Not built yet.
   them all in the first tick. The ReadyMode campaign had to be manually scrubbed
   to prevent ~19 unwanted dials. Always sequence: drain (or guard) → then
   unstick. Never the reverse.
+- **End of round: ask to refresh docs.** After any substantial change (a new
+  endpoint, env var, behavior shift, bug fix that affects the operator's
+  mental model, or anything that lands as a code commit), proactively ask
+  before closing out: "want me to update context.md / README to reflect this?"
+  This is for things Adam shouldn't have to remember to ask for. Skips:
+  trivial one-line tweaks, comment-only changes, conversational replies. The
+  full preference is also documented in [CLAUDE.md](CLAUDE.md).
 
 ### 0.14 Safety + ops changes (May 2026)
 
@@ -628,6 +643,96 @@ marker going stale instead of the 22 days the previous incident
 took. Adding a new cron requires adding it to the
 `CRON_FRESHNESS_HOURS` map in
 [routes/api/admin/cron-health.ts](routes/api/admin/cron-health.ts).
+
+### 0.15 Auth (June 2026)
+
+Dashboard + all `/api/*` endpoints are gated behind Firebase Auth
+(Google sign-in via the same Firebase project as Firestore —
+currently `keystone-fs97`). Shipped 2026-06-04 in commits `82ce46d`
++ `658a389`. The /test page used to be wide open; now anyone hitting
+it gets bounced to /login.
+
+**Auth flow:**
+
+1. Unauthenticated request to a protected route → middleware 302s
+   to `/login?next=<original>` (UI requests) or returns 401 JSON
+   (API requests). UI vs API detected via `Accept: text/html`.
+2. `/login` loads the Firebase Web SDK from gstatic, runs
+   `signInWithPopup(Google)`, gets a Firebase ID token.
+3. POSTs the token to `/api/auth/session`.
+4. Server verifies the ID token LOCALLY (no network round-trip per
+   request) against Google's published JWKs from
+   `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com`
+   (cached 5 min). Validates `aud`, `iss`, `exp`, `iat`, `email_verified`.
+5. Enforces email-domain allowlist (`AUTH_ALLOWED_DOMAINS`, default
+   `monsterrg.com`). Non-allowlist accounts get a 403.
+6. Mints a session cookie: `sms_bot_session=<payloadB64>.<sigB64>`,
+   HttpOnly, SameSite=Lax, Secure (HTTPS only). Payload is
+   `{email, exp}` JSON; signature is HMAC-SHA256.
+7. Subsequent requests: middleware verifies the cookie signature +
+   expiry. No external calls.
+
+**Public bypass paths** (in
+[shared/services/auth/middleware.ts](shared/services/auth/middleware.ts)
+`PUBLIC_PREFIXES`):
+
+- `/login`, `/logout`, `/api/auth/*` (the auth flow itself)
+- `/trigger/*` (ReadyMode → us)
+- `/sms-callback/*` (Bland → us)
+- `/cal/*` (Cal.com → us)
+- `/sms-flow/*` (queue triggers from external systems)
+- `/healthz` (uptime checks)
+- `/favicon.ico`
+
+Adding a new webhook endpoint requires adding its prefix to this list
+or it'll get the auth gate by default — which would silently 401 the
+external system.
+
+**Env footprint — one new var:**
+
+- `AUTH_FIREBASE_API_KEY` — the public Firebase Web API key from the
+  keystone-fs97 console (Project Settings → Your apps → Web app).
+  Public identifier, safe in env / not a cryptographic secret.
+
+Everything else is derived:
+
+- `firebaseProjectId` ← existing `FIREBASE_PROJECT_ID`
+- `firebaseAuthDomain` ← `${projectId}.firebaseapp.com`
+- `sessionSecret` ← `HMAC-SHA256(serviceAccount.private_key,
+  "sms-bot/session/v1")`. Deterministic across restarts so cookies
+  survive deploys; never written to disk. Rotate by bumping the
+  "v1" label in
+  [shared/services/auth/config.ts](shared/services/auth/config.ts).
+
+**Failsafe:** if `AUTH_FIREBASE_API_KEY` is missing, auth is
+DISABLED and every route is public. Same behavior as before the
+feature shipped, so a typo'd env var can never lock the team out —
+but also means a missing env var silently un-protects the dashboard.
+Check on each deploy.
+
+**Firebase Console setup** (one-time, per environment):
+
+1. Authentication → Sign-in method → enable **Google** provider.
+2. Authentication → Settings → Authorized domains → add
+   `sms-bot.thetechgoose.deno.net` and `localhost`.
+
+**Critical files:**
+
+- [routes/login.ts](routes/login.ts) — login page (HTML + Firebase
+  Web SDK)
+- [routes/logout.ts](routes/logout.ts) — clears cookie, redirects
+- [routes/api/auth/session.ts](routes/api/auth/session.ts) — token
+  → cookie exchange
+- [shared/services/auth/config.ts](shared/services/auth/config.ts) —
+  config + session-secret derivation
+- [shared/services/auth/firebase.ts](shared/services/auth/firebase.ts) —
+  local JWT verification
+- [shared/services/auth/session.ts](shared/services/auth/session.ts) —
+  cookie sign/verify
+- [shared/services/auth/middleware.ts](shared/services/auth/middleware.ts) —
+  gate logic
+- [routes/_middleware.ts](routes/_middleware.ts) — calls
+  `authGate(req)` before each handler
 
 ---
 
