@@ -1,5 +1,6 @@
 import { define } from "@/utils.ts";
 import { EASTERN_TZ } from "@shared/config/constants.ts";
+import { authGate } from "@shared/services/auth/middleware.ts";
 
 const ALLOW_HEADERS = [
   "Content-Type",
@@ -32,6 +33,20 @@ export const handler = [
       const res = new Response(null, { status: 204 });
       applyCors(res.headers);
       return res;
+    }
+
+    // Auth gate. Runs after the OPTIONS short-circuit (so preflight stays
+    // open) but BEFORE the route handler. Returns a Response when the
+    // request is unauthenticated; null when auth is disabled, the path
+    // is public, or the session is valid.
+    const blocked = await authGate(ctx.req);
+    if (blocked) {
+      applyCors(blocked.headers);
+      const ms = Math.round(performance.now() - start);
+      console.log(
+        `🔐 [${easternTimestamp()}] ${ctx.req.method} ${url.pathname} → ${blocked.status} (${ms}ms, auth)`,
+      );
+      return blocked;
     }
 
     let res: Response;

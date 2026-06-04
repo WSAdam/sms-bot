@@ -43,6 +43,16 @@ export interface AppEnv {
   inboundWindowStartEt: string; // "HH:MM", used only when mode=explicit
   inboundWindowEndEt: string; // "HH:MM", used only when mode=explicit
 
+  // Auth (Firebase Auth via the keystone-fs97 project — see context.md §0.15).
+  // All fields empty / unset → auth disabled (every route public). Production
+  // MUST set all four to lock the dashboard.
+  authFirebaseApiKey: string | null;
+  authFirebaseAuthDomain: string | null;
+  authFirebaseProjectId: string | null;
+  authSessionSecret: string | null;
+  authAllowedDomains: string[]; // lowercased, e.g. ["monsterrg.com"]
+  authSessionTtlSeconds: number; // default 7 days
+
   // Runtime
   isDeploy: boolean;
 }
@@ -65,4 +75,10 @@ export type EnvKey =
   | "GLOBAL_DAILY_SMS_CAP"
   | "INBOUND_WINDOW_MODE"
   | "INBOUND_WINDOW_START_ET"
-  | "INBOUND_WINDOW_END_ET";
+  | "INBOUND_WINDOW_END_ET"
+  | "AUTH_FIREBASE_API_KEY"
+  | "AUTH_FIREBASE_AUTH_DOMAIN"
+  | "AUTH_FIREBASE_PROJECT_ID"
+  | "AUTH_SESSION_SECRET"
+  | "AUTH_ALLOWED_DOMAINS"
+  | "AUTH_SESSION_TTL_SECONDS";

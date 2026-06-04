@@ -64,3 +64,29 @@ deploy + index-publish workflow.
 - `/test` — endpoint testing console + live config (Gates Config
   card)
 - `/api/admin/cron-health` — last-run markers for every cron job
+
+## Auth
+
+Dashboard + all `/api/*` endpoints are gated behind Firebase Auth
+(Google sign-in via the `keystone-fs97` Firebase project). Public
+endpoints — `/trigger/*`, `/sms-callback/*`, `/cal/*`, `/healthz`,
+`/sms-flow/*` — bypass auth so webhooks from ReadyMode / Bland /
+Cal.com still land. The `/login` page handles sign-in; `/logout`
+clears the cookie.
+
+Required env vars (auth is **disabled and every route is public** if
+any are missing — set all four on Deploy):
+
+| Var | Value |
+|---|---|
+| `AUTH_FIREBASE_API_KEY` | Web API key from the keystone-fs97 Firebase console |
+| `AUTH_FIREBASE_AUTH_DOMAIN` | `keystone-fs97.firebaseapp.com` |
+| `AUTH_FIREBASE_PROJECT_ID` | `keystone-fs97` |
+| `AUTH_SESSION_SECRET` | 32+ char random string (HMAC key for session cookies) |
+| `AUTH_ALLOWED_DOMAINS` | Comma-separated allowlist; default `monsterrg.com` |
+| `AUTH_SESSION_TTL_SECONDS` | Session length; default `604800` (7 days) |
+
+Add `https://sms-bot.thetechgoose.deno.net` and
+`http://localhost:8000` as authorized domains in the keystone-fs97
+Firebase Authentication → Settings panel before the sign-in popup
+will work.

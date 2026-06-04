@@ -76,6 +76,19 @@ export function loadEnv(): AppEnv {
     inboundWindowStartEt: parseHhMmOr(read("INBOUND_WINDOW_START_ET"), "00:00"),
     inboundWindowEndEt: parseHhMmOr(read("INBOUND_WINDOW_END_ET"), "23:59"),
 
+    authFirebaseApiKey: read("AUTH_FIREBASE_API_KEY"),
+    authFirebaseAuthDomain: read("AUTH_FIREBASE_AUTH_DOMAIN"),
+    authFirebaseProjectId: read("AUTH_FIREBASE_PROJECT_ID"),
+    authSessionSecret: read("AUTH_SESSION_SECRET"),
+    authAllowedDomains: parseDomainList(
+      read("AUTH_ALLOWED_DOMAINS"),
+      ["monsterrg.com"],
+    ),
+    authSessionTtlSeconds: parseIntOr(
+      read("AUTH_SESSION_TTL_SECONDS"),
+      7 * 24 * 3600,
+    ),
+
     isDeploy,
   };
 
@@ -123,6 +136,12 @@ function parseIntOr(v: string | null, fallback: number): number {
   if (v == null) return fallback;
   const n = parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function parseDomainList(v: string | null, fallback: string[]): string[] {
+  if (v == null) return fallback;
+  const parts = v.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return parts.length > 0 ? parts : fallback;
 }
 
 export function resetEnvForTests(): void {
