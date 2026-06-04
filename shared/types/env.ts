@@ -51,6 +51,11 @@ export interface AppEnv {
   authAllowedDomains: string[]; // lowercased, e.g. ["monsterrg.com"]
   authSessionTtlSeconds: number; // default 7 days
 
+  // Canary monitoring. Shared bearer secret the external Canary monitor
+  // sends on every poll of the /canary/* endpoints. If unset, those
+  // endpoints reject every request (fail closed). See routes/canary/*.
+  canarySecret: string | null;
+
   // Runtime
   isDeploy: boolean;
 }
@@ -76,4 +81,5 @@ export type EnvKey =
   | "INBOUND_WINDOW_END_ET"
   | "AUTH_FIREBASE_API_KEY"
   | "AUTH_ALLOWED_DOMAINS"
-  | "AUTH_SESSION_TTL_SECONDS";
+  | "AUTH_SESSION_TTL_SECONDS"
+  | "CANARY_SECRET";

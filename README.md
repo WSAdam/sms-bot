@@ -113,3 +113,26 @@ project named by `FIREBASE_PROJECT_ID`:
 1. **Authentication → Sign-in method**: enable Google as a provider
 2. **Authentication → Settings → Authorized domains**: add
    `sms-bot.thetechgoose.deno.net` and `localhost`
+
+## Canary monitoring
+
+Two bearer-authenticated endpoints let the external **Canary** monitor poll
+this service. Both bypass the Firebase session gate (they're machine-to-machine)
+and authenticate with a shared secret instead.
+
+| Endpoint | Returns | Canary watches |
+|---|---|---|
+| `GET\|POST /canary/conversations` | today's outbound-send count (ET) — `conversationsStartedToday` | `gte <floor>` (liveness: are we still texting?) |
+| `GET\|POST /canary/errors` | yesterday's terminal errors (ET) — `totalErrors` + an `errors[]` detail array | `lte 0` (any persisted hard-break error pages us) |
+
+Both require `Authorization: Bearer <CANARY_SECRET>` and return `401` otherwise.
+On a real reading they always return `200` — the watched value, not the status
+code, signals a problem.
+
+### Required env var
+
+| Var | Value | Notes |
+|---|---|---|
+| `CANARY_SECRET` | any hard-to-guess shared secret | Must match the value given to Canary. If unset, the `/canary/*` endpoints reject every request (fail closed). |
+
+Set it in `env/local` for dev and in Deno Deploy settings for prod.

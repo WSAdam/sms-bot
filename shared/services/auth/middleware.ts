@@ -20,6 +20,7 @@ const PUBLIC_PREFIXES = [
   "/sms-callback/", // Bland → us
   "/cal/", // Cal.com → us
   "/sms-flow/", // queue triggers from external systems
+  "/canary/", // Canary monitor → us (self-auth via bearer, see auth/bearer.ts)
   "/healthz",
 ];
 

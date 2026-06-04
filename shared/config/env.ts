@@ -86,6 +86,8 @@ export function loadEnv(): AppEnv {
       7 * 24 * 3600,
     ),
 
+    canarySecret: read("CANARY_SECRET"),
+
     isDeploy,
   };
 
