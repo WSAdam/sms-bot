@@ -194,6 +194,7 @@ one Deno Deploy project:
 | `AUTH_FIREBASE_API_KEY`          | ✅ for the auth gate             | Firebase Web API key from keystone-fs97                | Public (project identifier, not a secret). If unset → auth disabled, every route public. See §0.15 |
 | `AUTH_ALLOWED_DOMAINS`           | optional                         | Comma-separated email-domain allowlist                 | Default `monsterrg.com`. Lowercased.                               |
 | `AUTH_SESSION_TTL_SECONDS`       | optional                         | Session cookie lifetime                                | Default 604800 (7 days).                                           |
+| `CANARY_SECRET`                  | ✅ for /canary monitoring        | Shared bearer secret the external Canary monitor sends | If unset, `/canary/*` reject every request (fail closed). See §0.16 |
 
 **Removed since original plan:** `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`,
 `SMS_COUNT_TOKEN`, `QUICKBASE_REALM` (now hardcoded constant).
@@ -299,6 +300,15 @@ unless listed under "Public bypass"):
 - `GET|POST /api/report/nightly` — Postmark email
 - `POST /api/auth/session` — exchange Firebase ID token for session cookie
   (public — entry to the auth flow). `DELETE` clears the cookie.
+
+**Canary monitoring** (external monitor polls these — public bypass, bearer-authed; see §0.16):
+
+- `GET|POST /canary/conversations` — today's outbound-send count (ET):
+  `{conversationsStartedToday, textsSentToday}` read from the `globalsmscount`
+  counter. Liveness; Canary alerts if it drops below a floor.
+- `GET|POST /canary/errors` — yesterday's terminal failures (ET):
+  `{totalErrors, errors[]}` from `injectionhistory` status="error" +
+  `cronruns` lastStatus="error".
 
 ### 0.6 Scheduled jobs (Deno.cron, Deploy-only)
 
@@ -681,6 +691,7 @@ it gets bounced to /login.
 - `/sms-callback/*` (Bland → us)
 - `/cal/*` (Cal.com → us)
 - `/sms-flow/*` (queue triggers from external systems)
+- `/canary/*` (Canary monitor → us; bearer-authed, see §0.16)
 - `/healthz` (uptime checks)
 - `/favicon.ico`
 
@@ -733,6 +744,39 @@ Check on each deploy.
   gate logic
 - [routes/_middleware.ts](routes/_middleware.ts) — calls
   `authGate(req)` before each handler
+
+### 0.16 Canary monitoring (June 2026)
+
+Two bearer-authenticated endpoints the external **Canary** monitor
+(`canary.thetechgoose.deno.net`) polls on a schedule. Both are in
+`PUBLIC_PREFIXES` (bypass the §0.15 session gate) and instead require
+`Authorization: Bearer <CANARY_SECRET>` — a constant-time compare in
+[shared/services/auth/bearer.ts](shared/services/auth/bearer.ts); missing or
+wrong → 401. Always 200 on a real reading so the *value*, not the status code,
+signals a problem; a non-2xx/timeout is Canary's down-detection.
+
+- **`GET|POST /canary/conversations`** — liveness. Returns
+  `conversationsStartedToday` = `textsSentToday` = today's
+  `globalsmscount/byDate/{ET-date}.count` (one bump per outbound send, so it
+  equals conversations opened today). No scan. Canary watches it `gte` a daily
+  floor → pages if sending stalls.
+  [routes/canary/conversations.ts](routes/canary/conversations.ts)
+- **`GET|POST /canary/errors`** — yesterday's hard-break errors (terminal
+  failures not solved by a retry), for a bug-fixing workflow. Returns
+  `totalErrors` + an `errors[]` detail array, gathered by
+  [shared/services/canary/errors.ts](shared/services/canary/errors.ts) from
+  `injectionhistory` status="error" (the sweep only records "error" after
+  `injectLead`'s retry is exhausted) + `metrics/cronruns` lastStatus="error".
+  Window via `yesterdayEasternRange()`. Canary watches `totalErrors` `lte 0`.
+  [routes/canary/errors.ts](routes/canary/errors.ts)
+
+**Coverage gap:** inbound Bland-send failures (`processInboundLead` catch) and
+ad-hoc direct injects are console-only, not persisted — they don't appear in
+`/canary/errors`. Closing it means persisting those terminal failures at the
+catch sites (deferred — a hot-path change).
+
+**Env:** `CANARY_SECRET` (fail-closed if unset). The monitor sends it as the
+bearer header; the same value is set in Deno Deploy settings.
 
 ---
 
