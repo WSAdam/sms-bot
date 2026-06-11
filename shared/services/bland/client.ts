@@ -7,6 +7,7 @@ import {
   normalizeAppointmentTime,
   parseBlandDesiredTimeMs,
 } from "@shared/util/time.ts";
+import { withTiming } from "@shared/util/timing.ts";
 
 interface BlandHeaders {
   [key: string]: string;
@@ -31,9 +32,9 @@ function authHeader(): BlandHeaders {
 //      initializes state without sending — /v1/sms/send is the endpoint
 //      that actually fires the first message.)
 export interface SendSmsParams {
-  user_number: string;     // E.164 destination
-  agent_number: string;    // E.164 sender (must be a number on your Bland account)
-  agent_message?: string;  // raw message text — omit when using a pathway
+  user_number: string; // E.164 destination
+  agent_number: string; // E.164 sender (must be a number on your Bland account)
+  agent_message?: string; // raw message text — omit when using a pathway
   pathway_id?: string;
   pathway_version?: string;
   new_conversation?: boolean;
@@ -44,11 +45,15 @@ export async function sendSms(
   params: SendSmsParams,
 ): Promise<{ status: number; ok: boolean; json: unknown }> {
   const url = BLAND_API_BASE.replace(/\/conversations$/, "/send");
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { ...authHeader(), "content-type": "application/json" },
-    body: JSON.stringify(params),
-  });
+  const res = await withTiming(
+    `bland.sendSms ${url}`,
+    () =>
+      fetch(url, {
+        method: "POST",
+        headers: { ...authHeader(), "content-type": "application/json" },
+        body: JSON.stringify(params),
+      }),
+  );
   const status = res.status;
   const text = await res.text();
   let json: unknown = null;
@@ -130,9 +135,13 @@ export async function getBlandDesiredTime(
 export async function getConversation(
   conversationId: string,
 ): Promise<{ status: number; ok: boolean; json: BlandConvoResponse }> {
-  const res = await fetch(`${BLAND_API_BASE}/${conversationId}`, {
-    headers: authHeader(),
-  });
+  const res = await withTiming(
+    `bland.getConversation ${conversationId}`,
+    () =>
+      fetch(`${BLAND_API_BASE}/${conversationId}`, {
+        headers: authHeader(),
+      }),
+  );
   const json = await res.json();
   return { status: res.status, ok: res.ok, json };
 }
@@ -168,7 +177,9 @@ const BLAND_CURSOR_MAX_PAGES = 200; // safety cap → 20k convos
 export async function listConversationsByDateRange(
   fromIso: string,
   toIso?: string,
-): Promise<{ from: string; to: string | null; conversations: BlandListItem[] }> {
+): Promise<
+  { from: string; to: string | null; conversations: BlandListItem[] }
+> {
   const conversations = await cursorPaginate([
     { field: "created_at", operator: "gte", value: fromIso },
     ...(toIso ? [{ field: "created_at", operator: "lte", value: toIso }] : []),
@@ -222,7 +233,10 @@ async function cursorPaginate(
     url.searchParams.set("sortBy", "created_at");
     url.searchParams.set("sortDir", "desc");
     url.searchParams.set("filters", JSON.stringify(filters));
-    const res = await fetch(url.toString(), { headers: authHeader() });
+    const res = await withTiming(
+      `bland.listConversations page=${i + 1}`,
+      () => fetch(url.toString(), { headers: authHeader() }),
+    );
     const json = await res.json();
     if (!res.ok) {
       throw new Error(

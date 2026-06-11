@@ -9,6 +9,7 @@
 // collection paths have an odd number.
 
 import { getAdminFirestore, getDb } from "@shared/firestore/client.ts";
+import { withTiming } from "@shared/util/timing.ts";
 
 export type DocPath = string;
 
@@ -87,129 +88,147 @@ const LIST_RESULT_WARN_THRESHOLD = Number(
 );
 
 class FirebaseAdminClient implements FirestoreClient {
-  async get(path: DocPath): Promise<Record<string, unknown> | null> {
-    const db = await getDb();
-    const snap = await db.doc(path).get();
-    return snap.exists ? (snap.data() as Record<string, unknown>) : null;
-  }
-
-  async set(path: DocPath, data: Record<string, unknown>): Promise<void> {
-    const db = await getDb();
-    await db.doc(path).set(data, { merge: false });
-  }
-
-  async delete(path: DocPath): Promise<void> {
-    auditCriticalDelete(path);
-    const db = await getDb();
-    await db.doc(path).delete();
-  }
-
-  async list(
-    parentPath: string,
-    opts: ListOptions = {},
-  ): Promise<ListResult[]> {
-    const db = await getDb();
-    // deno-lint-ignore no-explicit-any
-    let q: any = db.collection(parentPath);
-
-    if (opts.where) {
-      q = q.where(opts.where.field, opts.where.op, opts.where.value);
-    }
-    if (opts.orderBy) {
-      q = q.orderBy(opts.orderBy.field, opts.orderBy.dir);
-    }
-    if (opts.startAfter) {
-      q = q.startAfter(opts.startAfter);
-    }
-    if (typeof opts.limit === "number") {
-      q = q.limit(opts.limit);
-    }
-
-    const snap = await q.get();
-    if (snap.size > LIST_RESULT_WARN_THRESHOLD) {
-      auditLargeListResult(parentPath, snap.size, opts);
-    }
-    // deno-lint-ignore no-explicit-any
-    return snap.docs.map((d: any) => ({
-      id: d.id,
-      data: d.data() as Record<string, unknown>,
-    }));
-  }
-
-  async batch(ops: BatchOp[]): Promise<void> {
-    if (ops.length === 0) return;
-    for (const op of ops) {
-      if (op.type === "delete") auditCriticalDelete(op.path);
-    }
-    const db = await getDb();
-    for (let i = 0; i < ops.length; i += MAX_BATCH) {
-      const chunk = ops.slice(i, i + MAX_BATCH);
-      const batch = db.batch();
-      for (const op of chunk) {
-        const ref = db.doc(op.path);
-        if (op.type === "set") batch.set(ref, op.data);
-        else batch.delete(ref);
-      }
-      await batch.commit();
-    }
-  }
-
-  async atomicCreate(
-    path: DocPath,
-    data: Record<string, unknown>,
-  ): Promise<AtomicCreateResult> {
-    const db = await getDb();
-    const ref = db.doc(path);
-    // deno-lint-ignore no-explicit-any
-    return await db.runTransaction(async (tx: any) => {
-      const snap = await tx.get(ref);
-      if (snap.exists) {
-        return {
-          created: false,
-          existing: snap.data() as Record<string, unknown>,
-        };
-      }
-      tx.create(ref, data);
-      return { created: true, existing: null };
+  get(path: DocPath): Promise<Record<string, unknown> | null> {
+    return withTiming(`firestore.get ${path}`, async () => {
+      const db = await getDb();
+      const snap = await db.doc(path).get();
+      return snap.exists ? (snap.data() as Record<string, unknown>) : null;
     });
   }
 
-  async incrementField(
+  set(path: DocPath, data: Record<string, unknown>): Promise<void> {
+    return withTiming(`firestore.set ${path}`, async () => {
+      const db = await getDb();
+      await db.doc(path).set(data, { merge: false });
+    });
+  }
+
+  delete(path: DocPath): Promise<void> {
+    return withTiming(`firestore.delete ${path}`, async () => {
+      auditCriticalDelete(path);
+      const db = await getDb();
+      await db.doc(path).delete();
+    });
+  }
+
+  list(
+    parentPath: string,
+    opts: ListOptions = {},
+  ): Promise<ListResult[]> {
+    return withTiming(`firestore.list ${parentPath}`, async () => {
+      const db = await getDb();
+      // deno-lint-ignore no-explicit-any
+      let q: any = db.collection(parentPath);
+
+      if (opts.where) {
+        q = q.where(opts.where.field, opts.where.op, opts.where.value);
+      }
+      if (opts.orderBy) {
+        q = q.orderBy(opts.orderBy.field, opts.orderBy.dir);
+      }
+      if (opts.startAfter) {
+        q = q.startAfter(opts.startAfter);
+      }
+      if (typeof opts.limit === "number") {
+        q = q.limit(opts.limit);
+      }
+
+      const snap = await q.get();
+      if (snap.size > LIST_RESULT_WARN_THRESHOLD) {
+        auditLargeListResult(parentPath, snap.size, opts);
+      }
+      // deno-lint-ignore no-explicit-any
+      return snap.docs.map((d: any) => ({
+        id: d.id,
+        data: d.data() as Record<string, unknown>,
+      }));
+    });
+  }
+
+  batch(ops: BatchOp[]): Promise<void> {
+    return withTiming(`firestore.batch (${ops.length} ops)`, async () => {
+      if (ops.length === 0) return;
+      for (const op of ops) {
+        if (op.type === "delete") auditCriticalDelete(op.path);
+      }
+      const db = await getDb();
+      for (let i = 0; i < ops.length; i += MAX_BATCH) {
+        const chunk = ops.slice(i, i + MAX_BATCH);
+        const batch = db.batch();
+        for (const op of chunk) {
+          const ref = db.doc(op.path);
+          if (op.type === "set") batch.set(ref, op.data);
+          else batch.delete(ref);
+        }
+        await batch.commit();
+      }
+    });
+  }
+
+  atomicCreate(
+    path: DocPath,
+    data: Record<string, unknown>,
+  ): Promise<AtomicCreateResult> {
+    return withTiming(`firestore.atomicCreate ${path}`, async () => {
+      const db = await getDb();
+      const ref = db.doc(path);
+      // deno-lint-ignore no-explicit-any
+      return await db.runTransaction(async (tx: any) => {
+        const snap = await tx.get(ref);
+        if (snap.exists) {
+          return {
+            created: false,
+            existing: snap.data() as Record<string, unknown>,
+          };
+        }
+        tx.create(ref, data);
+        return { created: true, existing: null };
+      });
+    });
+  }
+
+  incrementField(
     path: DocPath,
     fields: Record<string, number>,
   ): Promise<void> {
-    const db = await getDb();
-    const adminFs = await getAdminFirestore();
-    const update: Record<string, unknown> = {};
-    for (const [k, n] of Object.entries(fields)) {
-      update[k] = adminFs.FieldValue.increment(n);
-    }
-    await db.doc(path).set(update, { merge: true });
+    return withTiming(`firestore.incrementField ${path}`, async () => {
+      const db = await getDb();
+      const adminFs = await getAdminFirestore();
+      const update: Record<string, unknown> = {};
+      for (const [k, n] of Object.entries(fields)) {
+        update[k] = adminFs.FieldValue.increment(n);
+      }
+      await db.doc(path).set(update, { merge: true });
+    });
   }
 
-  async setMerge(
+  setMerge(
     path: DocPath,
     data: Record<string, unknown>,
   ): Promise<void> {
-    const db = await getDb();
-    await db.doc(path).set(data, { merge: true });
+    return withTiming(`firestore.setMerge ${path}`, async () => {
+      const db = await getDb();
+      await db.doc(path).set(data, { merge: true });
+    });
   }
 
-  async transactionalUpdate(
+  transactionalUpdate(
     path: DocPath,
     fn: (existing: Record<string, unknown> | null) => Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const db = await getDb();
-    const ref = db.doc(path);
-    // deno-lint-ignore no-explicit-any
-    return await db.runTransaction(async (tx: any) => {
-      const snap = await tx.get(ref);
-      const existing = snap.exists
-        ? (snap.data() as Record<string, unknown>)
-        : null;
-      const next = fn(existing);
-      tx.set(ref, next);
-      return next;
+    return withTiming(`firestore.transactionalUpdate ${path}`, async () => {
+      const db = await getDb();
+      const ref = db.doc(path);
+      // deno-lint-ignore no-explicit-any
+      return await db.runTransaction(async (tx: any) => {
+        const snap = await tx.get(ref);
+        const existing = snap.exists
+          ? (snap.data() as Record<string, unknown>)
+          : null;
+        const next = fn(existing);
+        tx.set(ref, next);
+        return next;
+      });
     });
   }
 }

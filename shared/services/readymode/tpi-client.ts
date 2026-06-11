@@ -33,6 +33,7 @@ import { getRmCreds } from "@shared/services/readymode/auth.ts";
 import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import type { FirestoreClient } from "@shared/firestore/wrapper.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
+import { withTiming } from "@shared/util/timing.ts";
 
 const TPI_MAX_WAIT_MS = Number(Deno.env.get("RM_TPI_MAX_WAIT_MS") ?? 5000);
 const TPI_CIRCUIT_THRESHOLD = Number(
@@ -210,12 +211,19 @@ async function httpGetJson(
   { ok: true; json: Record<string, unknown> } | { ok: false; reason: string }
 > {
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { "Authorization": authHeader, "Accept": "application/json" },
-      signal: AbortSignal.timeout(TPI_HTTP_TIMEOUT_MS),
-      redirect: "follow",
-    });
+    const res = await withTiming(
+      `tpi ${new URL(url).pathname}`,
+      () =>
+        fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": authHeader,
+            "Accept": "application/json",
+          },
+          signal: AbortSignal.timeout(TPI_HTTP_TIMEOUT_MS),
+          redirect: "follow",
+        }),
+    );
     if (!res.ok) {
       // Drain body so the connection releases — don't care about content.
       await res.text().catch(() => "");

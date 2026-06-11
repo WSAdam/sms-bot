@@ -10,6 +10,7 @@ import {
   QUICKBASE_REALM_HOST,
 } from "@shared/config/constants.ts";
 import { loadEnv } from "@shared/config/env.ts";
+import { withTiming } from "@shared/util/timing.ts";
 
 const QB_TIMEOUT_MS = 30_000;
 const QB_RETRY_DELAYS = [2000, 5000, 10000];
@@ -53,12 +54,16 @@ export async function queryRecords(
 
   let res: Response;
   try {
-    res = await fetch(`${QUICKBASE_API_BASE}/records/query`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    res = await withTiming(
+      `qb.queryRecords table=${opts.tableId}`,
+      () =>
+        fetch(`${QUICKBASE_API_BASE}/records/query`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        }),
+    );
   } catch (e) {
     clearTimeout(timeoutId);
     const msg = String((e as Error)?.message ?? e);
@@ -67,13 +72,17 @@ export async function queryRecords(
     if (attempt < QB_RETRY_DELAYS.length) {
       const delay = QB_RETRY_DELAYS[attempt];
       console.warn(
-        `[qb] queryRecords attempt ${attempt + 1} ${label} — retry in ${delay}ms (table=${opts.tableId})`,
+        `[qb] queryRecords attempt ${
+          attempt + 1
+        } ${label} — retry in ${delay}ms (table=${opts.tableId})`,
       );
       await new Promise((r) => setTimeout(r, delay));
       return queryRecords(opts, attempt + 1);
     }
     throw new Error(
-      `Quickbase query failed after ${attempt + 1} attempts: ${label} (table=${opts.tableId})`,
+      `Quickbase query failed after ${
+        attempt + 1
+      } attempts: ${label} (table=${opts.tableId})`,
     );
   } finally {
     clearTimeout(timeoutId);
@@ -85,7 +94,9 @@ export async function queryRecords(
     if (isRetryable && attempt < QB_RETRY_DELAYS.length) {
       const delay = QB_RETRY_DELAYS[attempt];
       console.warn(
-        `[qb] queryRecords attempt ${attempt + 1} got ${res.status} — retry in ${delay}ms (table=${opts.tableId})`,
+        `[qb] queryRecords attempt ${
+          attempt + 1
+        } got ${res.status} — retry in ${delay}ms (table=${opts.tableId})`,
       );
       await new Promise((r) => setTimeout(r, delay));
       return queryRecords(opts, attempt + 1);
@@ -125,19 +136,25 @@ export async function upsertRecords(
 
   let res: Response;
   try {
-    res = await fetch(`${QUICKBASE_API_BASE}/records`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    res = await withTiming(
+      `qb.upsertRecords table=${opts.tableId}`,
+      () =>
+        fetch(`${QUICKBASE_API_BASE}/records`, {
+          method: "POST",
+          headers: headers(),
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        }),
+    );
   } catch (e) {
     clearTimeout(timeoutId);
     const msg = String((e as Error)?.message ?? e);
     if (attempt < QB_RETRY_DELAYS.length) {
       const delay = QB_RETRY_DELAYS[attempt];
       console.warn(
-        `[qb] upsertRecords attempt ${attempt + 1} ${msg} — retry in ${delay}ms`,
+        `[qb] upsertRecords attempt ${
+          attempt + 1
+        } ${msg} — retry in ${delay}ms`,
       );
       await new Promise((r) => setTimeout(r, delay));
       return upsertRecords(opts, attempt + 1);
@@ -153,12 +170,16 @@ export async function upsertRecords(
     if (isRetryable && attempt < QB_RETRY_DELAYS.length) {
       const delay = QB_RETRY_DELAYS[attempt];
       console.warn(
-        `[qb] upsertRecords attempt ${attempt + 1} got ${res.status} — retry in ${delay}ms`,
+        `[qb] upsertRecords attempt ${
+          attempt + 1
+        } got ${res.status} — retry in ${delay}ms`,
       );
       await new Promise((r) => setTimeout(r, delay));
       return upsertRecords(opts, attempt + 1);
     }
-    throw new Error(`Quickbase upsert failed: ${res.status} ${text.slice(0, 200)}`);
+    throw new Error(
+      `Quickbase upsert failed: ${res.status} ${text.slice(0, 200)}`,
+    );
   }
 
   return await res.json();
