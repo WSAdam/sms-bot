@@ -42,9 +42,7 @@ export const handler = define.handlers({
       }
     }
 
-    const detailsSuffix = body.bookingUid
-      ? " and Cal.com Booking"
-      : "";
+    const detailsSuffix = body.bookingUid ? " and Cal.com Booking" : "";
     await orchestrator.logEvent(phone10, {
       action: "SCRUB",
       domain: DialerDomain.ODR,

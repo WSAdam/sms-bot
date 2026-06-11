@@ -32,5 +32,7 @@ export async function getContext(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<SmsFlowContext | null> {
   const phone = normalizePhone(rawPhone) ?? rawPhone;
-  return await client.get(smsFlowContextDocPath(phone)) as SmsFlowContext | null;
+  return await client.get(smsFlowContextDocPath(phone)) as
+    | SmsFlowContext
+    | null;
 }

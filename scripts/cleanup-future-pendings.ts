@@ -44,7 +44,9 @@ console.log(
 );
 console.log("");
 
-const allPending = await db.list(scheduledInjectionsCollection, { limit: 1000 });
+const allPending = await db.list(scheduledInjectionsCollection, {
+  limit: 1000,
+});
 
 interface Target {
   phone10: string;
@@ -72,7 +74,8 @@ for (const e of allPending) {
   } else if (daysOut > FAR_FUTURE_DAYS) {
     reason = `far-future (${daysOut}d out) — likely bad input`;
   } else {
-    reason = `clean (${daysOut}d out) — rebuild via scan-bookings for consistency`;
+    reason =
+      `clean (${daysOut}d out) — rebuild via scan-bookings for consistency`;
   }
 
   targets.push({ phone10, eventTime, daysOut, reason });

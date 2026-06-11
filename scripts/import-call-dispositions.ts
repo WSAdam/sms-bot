@@ -27,7 +27,9 @@ const csvPath = args[0];
 const DRY_RUN = flags.has("--dry-run");
 
 if (!csvPath) {
-  console.error("Usage: deno task import-call-dispositions -- <path-to-csv> [--dry-run]");
+  console.error(
+    "Usage: deno task import-call-dispositions -- <path-to-csv> [--dry-run]",
+  );
   Deno.exit(1);
 }
 
@@ -165,7 +167,9 @@ async function main() {
     await batch.commit();
     const n = Math.floor(i / BATCH_SIZE) + 1;
     console.log(
-      `✅ Batch ${n}: wrote ${chunk.length} (total ${i + chunk.length}/${entries.length})`,
+      `✅ Batch ${n}: wrote ${chunk.length} (total ${
+        i + chunk.length
+      }/${entries.length})`,
     );
   }
   console.log("");

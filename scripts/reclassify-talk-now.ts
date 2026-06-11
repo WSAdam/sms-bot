@@ -109,7 +109,9 @@ function hasTalkNowFlow(convo: Convo[]): { found: boolean; evidence: string } {
       if (GUEST_AFFIRMATIVE.some((re) => re.test(r.msg))) {
         return {
           found: true,
-          evidence: `bot: "${m.msg.slice(0, 80)}" → guest: "${r.msg.slice(0, 60)}"`,
+          evidence: `bot: "${m.msg.slice(0, 80)}" → guest: "${
+            r.msg.slice(0, 60)
+          }"`,
         };
       }
     }
@@ -155,9 +157,13 @@ for (const c of candidates) {
 }
 
 console.log(`\n📊 to reclassify as talk-now: ${toFlip.length}`);
-console.log(`   no talk-now evidence (leave as placeholder): ${noEvidence.length}`);
+console.log(
+  `   no talk-now evidence (leave as placeholder): ${noEvidence.length}`,
+);
 for (const c of noEvidence) {
-  console.log(`   - ${c.phone}  ${c.firedBy}  convo: empty or no talk-now match`);
+  console.log(
+    `   - ${c.phone}  ${c.firedBy}  convo: empty or no talk-now match`,
+  );
 }
 
 if (toFlip.length === 0) {
@@ -177,7 +183,8 @@ for (const c of toFlip) {
     firedBy: "talk-now",
     eventTimePlaceholder: false,
     reclassifiedAt: new Date().toISOString(),
-    reclassifiedReason: "Bland conversation shows explicit talk-now flow (bot prompt + guest affirmative); the synthetic backfill record is hiding a real talk-now event.",
+    reclassifiedReason:
+      "Bland conversation shows explicit talk-now flow (bot prompt + guest affirmative); the synthetic backfill record is hiding a real talk-now event.",
   });
   // Also clear the placeholder flag on the matching guestactivated doc.
   const gaRef = db.doc(`${GA}/${c.phone}`);

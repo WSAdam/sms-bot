@@ -7,7 +7,10 @@
 // middleware reads it without another network hop.
 
 import { define } from "@/utils.ts";
-import { getAuthConfig, isDomainAllowed } from "@shared/services/auth/config.ts";
+import {
+  getAuthConfig,
+  isDomainAllowed,
+} from "@shared/services/auth/config.ts";
 import { verifyFirebaseIdToken } from "@shared/services/auth/firebase.ts";
 import {
   buildClearCookie,
@@ -58,8 +61,9 @@ export const handler = define.handlers({
       );
       return Response.json(
         {
-          error:
-            `Sign-in restricted to ${auth.allowedDomains.join(", ")} accounts`,
+          error: `Sign-in restricted to ${
+            auth.allowedDomains.join(", ")
+          } accounts`,
         },
         { status: 403 },
       );

@@ -53,7 +53,10 @@ export async function reserve(
   const phone10 = normalizePhone(rawPhone);
   if (!phone10) return;
   try {
-    await client.set(rateLimitDocPath(phone10), { limited: true, at: Date.now() });
+    await client.set(rateLimitDocPath(phone10), {
+      limited: true,
+      at: Date.now(),
+    });
   } catch (e) {
     console.error("[rate-limiter] reserve failed:", e);
   }

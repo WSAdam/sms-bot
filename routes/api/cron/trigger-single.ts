@@ -7,7 +7,9 @@ export const handler = define.handlers({
     const url = new URL(ctx.req.url);
     const raw = url.searchParams.get("phone");
     const phone = normalizePhone(raw);
-    if (!phone) return Response.json({ error: "Missing/invalid phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ error: "Missing/invalid phone" }, { status: 400 });
+    }
     const r = await fireSingle(phone, "manual");
     return Response.json({ phone, ...r });
   },

@@ -62,18 +62,26 @@ export const handler = define.handlers({
       );
     }
     if (!callId) {
-      return Response.json({ error: "Missing callId parameter" }, { status: 400 });
+      return Response.json({ error: "Missing callId parameter" }, {
+        status: 400,
+      });
     }
 
     const body = await ctx.req.json().catch(() => null) as IncomingBody | null;
     if (!body) {
-      return Response.json({ error: "Invalid or missing JSON body" }, { status: 400 });
+      return Response.json({ error: "Invalid or missing JSON body" }, {
+        status: 400,
+      });
     }
     if (typeof body.sender !== "string" || body.sender.length === 0) {
-      return Response.json({ error: "Missing 'sender' in body" }, { status: 400 });
+      return Response.json({ error: "Missing 'sender' in body" }, {
+        status: 400,
+      });
     }
     if (typeof body.message !== "string" || body.message.length === 0) {
-      return Response.json({ error: "Missing 'message' in body" }, { status: 400 });
+      return Response.json({ error: "Missing 'message' in body" }, {
+        status: 400,
+      });
     }
 
     const senderUpper = body.sender.toUpperCase();
@@ -100,7 +108,9 @@ export const handler = define.handlers({
 
     let dncResults: Record<string, string> | undefined;
     if (body.doNotText === true) {
-      console.log(`[conv-webhook] 🛑 doNotText=true → marking DNC for ${phone10}`);
+      console.log(
+        `[conv-webhook] 🛑 doNotText=true → marking DNC for ${phone10}`,
+      );
       try {
         await markDnc(phone10, body.nodeTag ?? "Stop");
       } catch (e) {
@@ -112,7 +122,9 @@ export const handler = define.handlers({
         dncResults = await dncGlobal(phone10);
       } catch (e) {
         console.warn(
-          `[conv-webhook] dncGlobal failed (non-fatal): ${(e as Error).message}`,
+          `[conv-webhook] dncGlobal failed (non-fatal): ${
+            (e as Error).message
+          }`,
         );
       }
     }

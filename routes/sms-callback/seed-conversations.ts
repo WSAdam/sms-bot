@@ -15,9 +15,16 @@ export const handler = define.handlers({
       | { conversationIds?: string[] }
       | null;
     const ids = body?.conversationIds ?? [];
-    if (!ids.length) return Response.json({ error: "conversationIds required" }, { status: 400 });
+    if (!ids.length) {
+      return Response.json({ error: "conversationIds required" }, {
+        status: 400,
+      });
+    }
 
-    const results: Record<string, { status: string; stored?: number; skipped?: number; error?: string }> = {};
+    const results: Record<
+      string,
+      { status: string; stored?: number; skipped?: number; error?: string }
+    > = {};
 
     for (const conversationId of ids) {
       try {
@@ -25,13 +32,18 @@ export const handler = define.handlers({
         if (!r.ok || !r.json.data) {
           results[conversationId] = {
             status: "error",
-            error: `Bland ${r.status}: ${JSON.stringify(r.json.errors ?? r.json)}`.slice(0, 200),
+            error: `Bland ${r.status}: ${
+              JSON.stringify(r.json.errors ?? r.json)
+            }`.slice(0, 200),
           };
           continue;
         }
         const phone = r.json.data.user_number ?? "";
         if (!phone) {
-          results[conversationId] = { status: "error", error: "no user_number" };
+          results[conversationId] = {
+            status: "error",
+            error: "no user_number",
+          };
           continue;
         }
         const phone10 = phone.replace(/\D/g, "").slice(-10);
@@ -47,18 +59,32 @@ export const handler = define.handlers({
             skipped++;
             continue;
           }
-          const sender: "Guest" | "AI Bot" = m.sender === "USER" ? "Guest" : "AI Bot";
+          const sender: "Guest" | "AI Bot" = m.sender === "USER"
+            ? "Guest"
+            : "AI Bot";
           await storeMessage(phone10, conversationId, sender, m.message);
           stored++;
         }
         results[conversationId] = { status: "success", stored, skipped };
       } catch (e) {
-        results[conversationId] = { status: "error", error: (e as Error).message };
+        results[conversationId] = {
+          status: "error",
+          error: (e as Error).message,
+        };
       }
     }
 
-    const succeeded = Object.values(results).filter((r) => r.status === "success").length;
-    const failed = Object.values(results).filter((r) => r.status === "error").length;
-    return Response.json({ status: "done", total: ids.length, succeeded, failed, results });
+    const succeeded = Object.values(results).filter((r) =>
+      r.status === "success"
+    ).length;
+    const failed =
+      Object.values(results).filter((r) => r.status === "error").length;
+    return Response.json({
+      status: "done",
+      total: ids.length,
+      succeeded,
+      failed,
+      results,
+    });
   },
 });

@@ -21,7 +21,12 @@ export interface QuickbaseField {
 export interface QuickbaseReportResponse {
   data: Array<Record<string, { value: unknown }>>;
   fields?: QuickbaseField[];
-  metadata?: { numFields?: number; numRecords?: number; totalRecords?: number; skip?: number };
+  metadata?: {
+    numFields?: number;
+    numRecords?: number;
+    totalRecords?: number;
+    skip?: number;
+  };
 }
 
 export interface ReservationLookup {
@@ -38,7 +43,10 @@ export interface ReservationLookup {
 }
 
 export interface QuickbaseClient {
-  getReport(tableID: string, reportID: string): Promise<QuickbaseReportResponse>;
+  getReport(
+    tableID: string,
+    reportID: string,
+  ): Promise<QuickbaseReportResponse>;
   findReservationByResID(resId: number): Promise<ReservationLookup | null>;
   markDNC(phone: string): Promise<{ success: boolean }>;
   isDNC(phone: string): Promise<boolean>;

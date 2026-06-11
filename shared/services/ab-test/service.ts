@@ -17,9 +17,14 @@ export async function getAndToggleVariant(
 ): Promise<Variant> {
   try {
     const existing = await client.get(TOGGLE_PATH);
-    const current = (existing?.value === 1 || existing?.value === "1") ? "B" : "A";
+    const current = (existing?.value === 1 || existing?.value === "1")
+      ? "B"
+      : "A";
     const next = current === "A" ? 1 : 0;
-    await client.set(TOGGLE_PATH, { value: next, updatedAt: new Date().toISOString() });
+    await client.set(TOGGLE_PATH, {
+      value: next,
+      updatedAt: new Date().toISOString(),
+    });
     return current;
   } catch (e) {
     console.error("[ab-test] toggle failed, defaulting to A:", e);

@@ -32,26 +32,35 @@ db.settings({ preferRest: true });
 
 async function loadAll(path: string) {
   const snap = await db.collection(path).get();
-  return snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }));
+  return snap.docs.map((d) => ({
+    id: d.id,
+    data: d.data() as Record<string, unknown>,
+  }));
 }
 
 console.log("🔍 Loading all relevant collections...");
-const [activated, within, conversations, history, audit, leadPointer] = await Promise.all([
-  loadAll("sms-bot/guestactivated/byPhone"),
-  loadAll("sms-bot/saleswithin7d/byPhone"),
-  loadAll("sms-bot/conversations/messages"),
-  loadAll("sms-bot/injectionhistory/byPhone"),
-  loadAll("sms-bot/audit/byRecordId"),
-  loadAll("sms-bot/leadpointer/byPhone"),
-]);
+const [activated, within, conversations, history, audit, leadPointer] =
+  await Promise.all([
+    loadAll("sms-bot/guestactivated/byPhone"),
+    loadAll("sms-bot/saleswithin7d/byPhone"),
+    loadAll("sms-bot/conversations/messages"),
+    loadAll("sms-bot/injectionhistory/byPhone"),
+    loadAll("sms-bot/audit/byRecordId"),
+    loadAll("sms-bot/leadpointer/byPhone"),
+  ]);
 
-console.log(`   activated=${activated.length} within7d=${within.length} conversations=${conversations.length} injectionhistory=${history.length} audit=${audit.length} leadpointer=${leadPointer.length}`);
+console.log(
+  `   activated=${activated.length} within7d=${within.length} conversations=${conversations.length} injectionhistory=${history.length} audit=${audit.length} leadpointer=${leadPointer.length}`,
+);
 
 const activatedSet = new Set<string>(activated.map((a) => a.id));
 
 // Phones with at least one "appointment scheduled" nodeTag in conversations.
 // These guests confirmed an appointment with our bot — strong signal of sale.
-const apptPhones = new Map<string, { msg: string; ts: string; callId: string }>();
+const apptPhones = new Map<
+  string,
+  { msg: string; ts: string; callId: string }
+>();
 for (const c of conversations) {
   const d = c.data;
   const tag = String(d.nodeTag ?? "").toLowerCase();
@@ -79,7 +88,9 @@ for (const h of history) {
 }
 
 console.log("");
-console.log(`📅 ${apptPhones.size} phones have an "appointment scheduled" in conversations`);
+console.log(
+  `📅 ${apptPhones.size} phones have an "appointment scheduled" in conversations`,
+);
 console.log(`📤 ${injectedPhones.size} phones have injection history`);
 console.log(`✅ ${activatedSet.size} phones currently in guestactivated`);
 
@@ -109,14 +120,25 @@ for (const [phone, info] of apptPhones) {
 lostCandidates.sort((a, b) => b.apptTs.localeCompare(a.apptTs));
 
 console.log("");
-console.log(`🎯 ${lostCandidates.length} phones BOOKED an appointment via the bot but are NOT in guestactivated`);
+console.log(
+  `🎯 ${lostCandidates.length} phones BOOKED an appointment via the bot but are NOT in guestactivated`,
+);
 console.log("");
 console.log("Sorted by most recent appointment (likely lost sales at top):");
 console.log("");
 for (const c of lostCandidates) {
   const inj = c.hasInjection ? "📤" : "  ";
-  const apptTime = c.apptTs ? new Date(c.apptTs).toLocaleString("en-US", { dateStyle: "short", timeStyle: "short" }) : "?";
-  console.log(`${inj} ${c.phone}  appt-msg-at=${apptTime}  callId=${c.callId.slice(0, 8)}…`);
+  const apptTime = c.apptTs
+    ? new Date(c.apptTs).toLocaleString("en-US", {
+      dateStyle: "short",
+      timeStyle: "short",
+    })
+    : "?";
+  console.log(
+    `${inj} ${c.phone}  appt-msg-at=${apptTime}  callId=${
+      c.callId.slice(0, 8)
+    }…`,
+  );
   console.log(`     msg: ${c.apptMsg.slice(0, 120)}`);
 }
 
@@ -124,7 +146,9 @@ console.log("");
 console.log("📤 = has injection history (we sent them to the dialer)");
 console.log("");
 console.log("To restore any of these as a manual claim:");
-console.log("  curl -X POST https://sms-bot.thetechgoose.deno.net/api/sales/record \\");
+console.log(
+  "  curl -X POST https://sms-bot.thetechgoose.deno.net/api/sales/record \\",
+);
 console.log("    -H 'content-type: application/json' \\");
 console.log('    -d \'{"phone":"PHONE10","saleAt":"2026-05-04T12:00:00Z"}\'');
 

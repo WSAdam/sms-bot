@@ -54,7 +54,9 @@ export const handler = define.handlers({
       const headers: Record<string, string> = {};
       for (const [k, v] of ctx.req.headers.entries()) headers[k] = v;
       console.warn(
-        `[trigger] ❌ rejected — field=${validation.error.field} reason="${validation.error.reason}" value=${JSON.stringify(validation.error.value)}\n` +
+        `[trigger] ❌ rejected — field=${validation.error.field} reason="${validation.error.reason}" value=${
+          JSON.stringify(validation.error.value)
+        }\n` +
           `  url       = ${ctx.req.url}\n` +
           `  query     = ${JSON.stringify(queryObj)}\n` +
           `  rawBody   = ${rawBody.length > 0 ? rawBody : "(empty)"}\n` +
@@ -64,7 +66,8 @@ export const handler = define.handlers({
       return Response.json(
         {
           status: "error",
-          message: `Invalid payload: ${validation.error.field} — ${validation.error.reason}`,
+          message:
+            `Invalid payload: ${validation.error.field} — ${validation.error.reason}`,
           field: validation.error.field,
         },
         { status: 400 },

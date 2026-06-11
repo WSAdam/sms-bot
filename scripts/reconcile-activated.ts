@@ -88,19 +88,27 @@ async function main() {
   console.log(`🩹 Missing guestactivated docs: ${missing.length}`);
   for (const m of missing) {
     console.log(
-      `   - ${m.phone10}  saleAt=${m.data.saleAt ?? "?"}  reason=${m.data.matchReason ?? "?"}  office="${m.data.office ?? ""}"  activator="${m.data.activator ?? ""}"`,
+      `   - ${m.phone10}  saleAt=${m.data.saleAt ?? "?"}  reason=${
+        m.data.matchReason ?? "?"
+      }  office="${m.data.office ?? ""}"  activator="${
+        m.data.activator ?? ""
+      }"`,
     );
   }
 
   if (missing.length === 0) {
     console.log("");
-    console.log("✅ Nothing to do — every within7d marker has a matching activated doc.");
+    console.log(
+      "✅ Nothing to do — every within7d marker has a matching activated doc.",
+    );
     Deno.exit(0);
   }
 
   if (DRY_RUN) {
     console.log("");
-    console.log(`🧪 DRY RUN — would write ${missing.length} guestactivated docs`);
+    console.log(
+      `🧪 DRY RUN — would write ${missing.length} guestactivated docs`,
+    );
     Deno.exit(0);
   }
 

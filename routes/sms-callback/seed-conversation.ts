@@ -13,7 +13,9 @@ export const handler = define.handlers({
       | { conversationId?: string }
       | null;
     if (!body?.conversationId) {
-      return Response.json({ error: "conversationId required" }, { status: 400 });
+      return Response.json({ error: "conversationId required" }, {
+        status: 400,
+      });
     }
     const conversationId = body.conversationId;
 
@@ -21,16 +23,24 @@ export const handler = define.handlers({
     try {
       r = await bland.getConversation(conversationId);
     } catch (e) {
-      return Response.json({ error: `Bland fetch failed: ${(e as Error).message}` }, { status: 502 });
+      return Response.json({
+        error: `Bland fetch failed: ${(e as Error).message}`,
+      }, { status: 502 });
     }
     if (!r.ok || !r.json.data) {
       return Response.json(
-        { error: `Bland ${r.status}: ${JSON.stringify(r.json.errors ?? r.json)}` },
+        {
+          error: `Bland ${r.status}: ${
+            JSON.stringify(r.json.errors ?? r.json)
+          }`,
+        },
         { status: 502 },
       );
     }
     const phone = r.json.data.user_number ?? "";
-    if (!phone) return Response.json({ error: "No user_number" }, { status: 502 });
+    if (!phone) {
+      return Response.json({ error: "No user_number" }, { status: 502 });
+    }
     const phone10 = phone.replace(/\D/g, "").slice(-10);
     const messages = r.json.data.messages ?? [];
 
@@ -58,7 +68,9 @@ export const handler = define.handlers({
         skipped++;
         continue;
       }
-      const sender: "Guest" | "AI Bot" = m.sender === "USER" ? "Guest" : "AI Bot";
+      const sender: "Guest" | "AI Bot" = m.sender === "USER"
+        ? "Guest"
+        : "AI Bot";
       try {
         await storeMessage(phone10, conversationId, sender, m.message);
         stored++;

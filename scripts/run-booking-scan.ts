@@ -54,7 +54,12 @@ console.log(`   from   = ${fromIso}`);
 console.log(`   to     = ${toIso ?? "(now)"}`);
 console.log("");
 
-const summary = await scanConversationsForBookings(fromIso, toIso, apply, force);
+const summary = await scanConversationsForBookings(
+  fromIso,
+  toIso,
+  apply,
+  force,
+);
 
 console.log("");
 console.log("=== Proposals ===");

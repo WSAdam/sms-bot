@@ -155,7 +155,9 @@ async function commitDeletes(ids: string[]): Promise<void> {
     await batch.commit();
     const n = Math.floor(i / BATCH_SIZE) + 1;
     console.log(
-      `🗑️  Batch ${n}: deleted ${chunk.length} (total ${i + chunk.length}/${ids.length})`,
+      `🗑️  Batch ${n}: deleted ${chunk.length} (total ${
+        i + chunk.length
+      }/${ids.length})`,
     );
   }
 }

@@ -35,7 +35,7 @@ if (!PHONE || PHONE.length !== 10) {
 }
 if (!SALE_AT) {
   console.error(
-    "❌ SALE_AT is required. Pass the QB \"Date Activated\" value, e.g. " +
+    '❌ SALE_AT is required. Pass the QB "Date Activated" value, e.g. ' +
       "SALE_AT=2026-05-06T12:00:00Z (noon UTC matches QB's convention).",
   );
   Deno.exit(1);
@@ -91,7 +91,11 @@ const activated = {
 };
 
 console.log(`🩹 Restoring sale for ${PHONE}`);
-console.log(`   saleAt=${SALE_AT} activator="${ACTIVATOR ?? ""}" office="${OFFICE ?? ""}"`);
+console.log(
+  `   saleAt=${SALE_AT} activator="${ACTIVATOR ?? ""}" office="${
+    OFFICE ?? ""
+  }"`,
+);
 
 const batch = db.batch();
 batch.set(db.doc(`sms-bot/saleswithin7d/byPhone/${PHONE}`), marker);

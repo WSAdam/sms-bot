@@ -61,7 +61,11 @@ export async function handleDelayedInjection(
     try {
       await scrubLead(phone, pointer.originalSource.domain);
     } catch (e) {
-      console.warn(`[queue] scrub original source failed (non-fatal): ${(e as Error).message}`);
+      console.warn(
+        `[queue] scrub original source failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
     }
   }
 

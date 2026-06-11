@@ -236,20 +236,30 @@ if (!APPLY) {
   for (const p of toDelete.slice(0, 10)) console.log(`   - ${p}`);
   console.log("sample updates (up to 5):");
   for (const u of toUpdate.slice(0, 5)) {
-    console.log(`   ~ ${u.phone} → ${u.data.answeredAt} ${u.data.lastDisposition}`);
+    console.log(
+      `   ~ ${u.phone} → ${u.data.answeredAt} ${u.data.lastDisposition}`,
+    );
   }
   console.log("sample creates (up to 5):");
   for (const c of toCreate.slice(0, 5)) {
-    console.log(`   + ${c.phone} → ${c.data.answeredAt} ${c.data.lastDisposition}`);
+    console.log(
+      `   + ${c.phone} → ${c.data.answeredAt} ${c.data.lastDisposition}`,
+    );
   }
   Deno.exit(0);
 }
 
 console.log("🚧 applying…");
 const writer = db.bulkWriter();
-for (const phone of toDelete) writer.delete(db.doc(`${GUESTANSWERED}/${phone}`));
-for (const u of toUpdate) writer.set(db.doc(`${GUESTANSWERED}/${u.phone}`), u.data);
-for (const c of toCreate) writer.set(db.doc(`${GUESTANSWERED}/${c.phone}`), c.data);
+for (const phone of toDelete) {
+  writer.delete(db.doc(`${GUESTANSWERED}/${phone}`));
+}
+for (const u of toUpdate) {
+  writer.set(db.doc(`${GUESTANSWERED}/${u.phone}`), u.data);
+}
+for (const c of toCreate) {
+  writer.set(db.doc(`${GUESTANSWERED}/${c.phone}`), c.data);
+}
 await writer.close();
 console.log("");
 console.log("✅ done");

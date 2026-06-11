@@ -17,10 +17,7 @@ import {
   getCampaignConfig,
 } from "@shared/services/readymode/campaigns.ts";
 import { denormalize } from "@shared/services/readymode/mapping.ts";
-import {
-  injectLead,
-  scrubLead,
-} from "@shared/services/readymode/service.ts";
+import { injectLead, scrubLead } from "@shared/services/readymode/service.ts";
 import { getContext } from "@shared/services/sms-flow-context/service.ts";
 import {
   type DialerDomain,
@@ -36,20 +33,30 @@ export const handler = define.handlers({
       | { phone?: string; phoneNumber?: string }
       | null;
     const phoneInput = body?.phoneNumber ?? body?.phone;
-    if (!phoneInput) return Response.json({ error: "Phone required" }, { status: 400 });
+    if (!phoneInput) {
+      return Response.json({ error: "Phone required" }, { status: 400 });
+    }
     const phone = normalizePhone(phoneInput);
-    if (!phone) return Response.json({ error: "Invalid phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ error: "Invalid phone" }, { status: 400 });
+    }
 
     const context = (await getContext(phone)) ?? {};
     if ((context as { domain?: string }).domain) {
       try {
-        await scrubLead(phone, (context as { domain: string }).domain as DialerDomain);
+        await scrubLead(
+          phone,
+          (context as { domain: string }).domain as DialerDomain,
+        );
       } catch (e) {
-        console.warn(`[talk-now] scrub failed (optional): ${(e as Error).message}`);
+        console.warn(
+          `[talk-now] scrub failed (optional): ${(e as Error).message}`,
+        );
       }
     }
 
-    const target = getCampaignConfig("ODR - Appointments") ?? CAMPAIGN_MASTER_MAP["ODR - Appointments"];
+    const target = getCampaignConfig("ODR - Appointments") ??
+      CAMPAIGN_MASTER_MAP["ODR - Appointments"];
     if (!target) {
       return Response.json(
         { error: "Target Campaign Config Missing" },
@@ -94,7 +101,9 @@ export const handler = define.handlers({
         },
       );
     } catch (e) {
-      console.warn(`[talk-now] ih write failed (non-fatal): ${(e as Error).message}`);
+      console.warn(
+        `[talk-now] ih write failed (non-fatal): ${(e as Error).message}`,
+      );
     }
 
     // Clean up the companion scheduledinjection doc so the sweep doesn't
@@ -107,7 +116,9 @@ export const handler = define.handlers({
       await getFirestoreClient().delete(scheduledInjectionDocPath(phone));
     } catch (e) {
       console.warn(
-        `[talk-now] scheduledinjection delete failed (non-fatal): ${(e as Error).message}`,
+        `[talk-now] scheduledinjection delete failed (non-fatal): ${
+          (e as Error).message
+        }`,
       );
     }
 

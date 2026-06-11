@@ -20,7 +20,9 @@ import { loadEnv } from "@shared/config/env.ts";
 const dynamicImport: (specifier: string) => Promise<any> = new Function(
   "specifier",
   "return import(specifier)",
-) as (specifier: string) => Promise<unknown> as (specifier: string) => Promise<unknown>;
+) as (specifier: string) => Promise<unknown> as (
+  specifier: string,
+) => Promise<unknown>;
 
 // deno-lint-ignore no-explicit-any
 let client: any = null;

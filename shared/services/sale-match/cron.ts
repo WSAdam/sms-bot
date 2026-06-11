@@ -43,7 +43,10 @@ export async function runDailyQbSaleMatch(
     report = await getQuickbaseClient().getReport(useTableId, useReportId);
   } catch (e) {
     console.error(`[sale-match] ❌ QB fetch failed: ${(e as Error).message}`);
-    return { ok: false, reason: `Quickbase fetch failed: ${(e as Error).message}` };
+    return {
+      ok: false,
+      reason: `Quickbase fetch failed: ${(e as Error).message}`,
+    };
   }
   const rawCount = report.data?.length ?? 0;
   console.log(
@@ -68,7 +71,11 @@ export async function runDailyQbSaleMatch(
     officeFieldId,
   } = normalizeBookingRowsDetailed(report);
   console.log(
-    `[sale-match] using phoneFieldId=${phoneFieldId} dateFieldId=${dateFieldId ?? "(none)"} activatorFieldId=${activatorFieldId ?? "(none)"} officeFieldId=${officeFieldId ?? "(none)"} → ${rows.length} usable phones (dropped ${rawCount - rows.length})`,
+    `[sale-match] using phoneFieldId=${phoneFieldId} dateFieldId=${
+      dateFieldId ?? "(none)"
+    } activatorFieldId=${activatorFieldId ?? "(none)"} officeFieldId=${
+      officeFieldId ?? "(none)"
+    } → ${rows.length} usable phones (dropped ${rawCount - rows.length})`,
   );
   if (rows.length > 0) {
     const sample = rows.slice(0, 3).map((r) =>

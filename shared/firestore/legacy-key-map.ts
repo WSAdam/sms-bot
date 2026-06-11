@@ -53,11 +53,15 @@ export function legacyKeyToDocPath(key: LegacyKey): LegacyDocPath | null {
       return null;
 
     case "auditstage":
-      if (rest.length === 2) return { path: auditStageDocPath(rest[0], rest[1]) };
+      if (rest.length === 2) {
+        return { path: auditStageDocPath(rest[0], rest[1]) };
+      }
       return null;
 
     case "scheduledinjection":
-      if (rest.length === 1) return { path: scheduledInjectionDocPath(rest[0]) };
+      if (rest.length === 1) {
+        return { path: scheduledInjectionDocPath(rest[0]) };
+      }
       return null;
 
     case "smsflowcontext":
@@ -78,12 +82,18 @@ export function legacyKeyToDocPath(key: LegacyKey): LegacyDocPath | null {
       return null;
 
     case "salesoutsidewindow":
-      if (rest.length === 1) return { path: salesOutsideWindowDocPath(rest[0]) };
+      if (rest.length === 1) {
+        return { path: salesOutsideWindowDocPath(rest[0]) };
+      }
       return null;
 
     case "injectionhistory":
       if (rest.length === 2) {
-        return { path: injectionHistoryDocPath(injectionHistoryDocId(rest[0], rest[1])) };
+        return {
+          path: injectionHistoryDocPath(
+            injectionHistoryDocId(rest[0], rest[1]),
+          ),
+        };
       }
       return null;
 
@@ -95,7 +105,11 @@ export function legacyKeyToDocPath(key: LegacyKey): LegacyDocPath | null {
     case "lead_history":
     case "orchestratorevents":
       if (rest.length === 2) {
-        return { path: orchestratorEventDocPath(orchestratorEventDocId(rest[0], rest[1])) };
+        return {
+          path: orchestratorEventDocPath(
+            orchestratorEventDocId(rest[0], rest[1]),
+          ),
+        };
       }
       return null;
 
@@ -133,7 +147,11 @@ export function legacyKeyToDocPath(key: LegacyKey): LegacyDocPath | null {
     case "conversations":
       // ["conversations", phone, callId, timestamp] → deterministic doc id
       if (rest.length === 3) {
-        return { path: conversationDocPath(conversationDocId(rest[0], rest[1], rest[2])) };
+        return {
+          path: conversationDocPath(
+            conversationDocId(rest[0], rest[1], rest[2]),
+          ),
+        };
       }
       return null;
 
@@ -146,7 +164,9 @@ export function legacyKeyToDocPath(key: LegacyKey): LegacyDocPath | null {
   }
 }
 
-export function legacyKeyToCollectionPath(prefix: LegacyKey): LegacyCollectionPath | null {
+export function legacyKeyToCollectionPath(
+  prefix: LegacyKey,
+): LegacyCollectionPath | null {
   if (!Array.isArray(prefix) || prefix.length === 0) return null;
   const head = String(prefix[0]);
   const rest = prefix.slice(1).map(String);

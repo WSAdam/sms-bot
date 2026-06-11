@@ -24,7 +24,8 @@ const phoneFilter = args
 const FIREBASE_PROJECT_ID = Deno.env.get("FIREBASE_PROJECT_ID")!;
 const inlineJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
 const credPath = Deno.env.get("GOOGLE_APPLICATION_CREDENTIALS");
-const BLAND_KEY = Deno.env.get("BLAND_API_KEY") ?? Deno.env.get("NU_BLAND_API_KEY");
+const BLAND_KEY = Deno.env.get("BLAND_API_KEY") ??
+  Deno.env.get("NU_BLAND_API_KEY");
 
 if (!BLAND_KEY) {
   console.error("❌ Missing BLAND_API_KEY");
@@ -44,7 +45,8 @@ db.settings({ preferRest: true });
 
 const BLAND_BASE = "https://api.bland.ai/v1/sms/conversations";
 // UUID format = real Bland conversation. appt_* = calendar-booking pseudo-id.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface BlandMsg {
   sender: string;
@@ -59,7 +61,9 @@ interface BlandResp {
   errors?: unknown;
 }
 
-async function fetchBlandConversation(callId: string): Promise<BlandResp | null> {
+async function fetchBlandConversation(
+  callId: string,
+): Promise<BlandResp | null> {
   try {
     const res = await fetch(`${BLAND_BASE}/${callId}`, {
       headers: { authorization: BLAND_KEY! },
@@ -76,7 +80,9 @@ async function fetchBlandConversation(callId: string): Promise<BlandResp | null>
   }
 }
 
-async function listCallIdsForPhone(phone10: string): Promise<Map<string, number>> {
+async function listCallIdsForPhone(
+  phone10: string,
+): Promise<Map<string, number>> {
   const all = await db.collection("sms-bot/conversations/messages").get();
   const callCounts = new Map<string, number>();
   for (const d of all.docs) {
@@ -89,7 +95,9 @@ async function listCallIdsForPhone(phone10: string): Promise<Map<string, number>
   return callCounts;
 }
 
-async function listAllConversations(): Promise<Map<string, Map<string, number>>> {
+async function listAllConversations(): Promise<
+  Map<string, Map<string, number>>
+> {
   // Returns phone10 → (callId → currentMessageCount). One Firestore read.
   const all = await db.collection("sms-bot/conversations/messages").get();
   const byPhone = new Map<string, Map<string, number>>();
@@ -107,7 +115,10 @@ async function listAllConversations(): Promise<Map<string, Map<string, number>>>
   return byPhone;
 }
 
-async function deleteByCallId(phone10: string, callId: string): Promise<number> {
+async function deleteByCallId(
+  phone10: string,
+  callId: string,
+): Promise<number> {
   const all = await db.collection("sms-bot/conversations/messages").get();
   const matching = all.docs.filter((d) => {
     if (!d.id.startsWith(`${phone10}__`)) return false;
@@ -155,7 +166,12 @@ console.log("🔍 Loading guestanswered + conversations from Firestore...");
 const answered = await db.collection("sms-bot/guestanswered/byPhone").get();
 const allByPhone = await listAllConversations();
 console.log(`   answered phones: ${answered.size}`);
-console.log(`   conversations:   ${[...allByPhone.values()].reduce((s, m) => s + [...m.values()].reduce((a, b) => a + b, 0), 0)} docs across ${allByPhone.size} phones`);
+console.log(
+  `   conversations:   ${
+    [...allByPhone.values()].reduce((s, m) =>
+      s + [...m.values()].reduce((a, b) => a + b, 0), 0)
+  } docs across ${allByPhone.size} phones`,
+);
 console.log("");
 
 const phones = answered.docs.map((d) => d.id).filter((p) =>
@@ -178,11 +194,15 @@ for (const phone10 of phones) {
   callsSkippedAppt += apptCalls.length;
 
   if (blandCalls.length === 0) {
-    console.log(`[${phonesProcessed}/${phones.length}] ${phone10}  no Bland call IDs (${apptCalls.length} appt-only)`);
+    console.log(
+      `[${phonesProcessed}/${phones.length}] ${phone10}  no Bland call IDs (${apptCalls.length} appt-only)`,
+    );
     continue;
   }
 
-  console.log(`[${phonesProcessed}/${phones.length}] ${phone10}  ${blandCalls.length} Bland call(s)`);
+  console.log(
+    `[${phonesProcessed}/${phones.length}] ${phone10}  ${blandCalls.length} Bland call(s)`,
+  );
   for (const callId of blandCalls) {
     callsAttempted++;
     const currentCount = callCounts.get(callId) ?? 0;
@@ -197,18 +217,32 @@ for (const phone10 of phones) {
     );
     if (blandMsgs.length <= currentCount) {
       callsSkippedFewer++;
-      console.log(`  ⏭ ${callId.slice(0, 12)}…  Bland=${blandMsgs.length}  current=${currentCount}  (no improvement, skipping)`);
+      console.log(
+        `  ⏭ ${
+          callId.slice(0, 12)
+        }…  Bland=${blandMsgs.length}  current=${currentCount}  (no improvement, skipping)`,
+      );
       continue;
     }
     if (DRY_RUN) {
-      console.log(`  🧪 ${callId.slice(0, 12)}…  Bland=${blandMsgs.length}  current=${currentCount}  → would replace (+${blandMsgs.length - currentCount})`);
+      console.log(
+        `  🧪 ${
+          callId.slice(0, 12)
+        }…  Bland=${blandMsgs.length}  current=${currentCount}  → would replace (+${
+          blandMsgs.length - currentCount
+        })`,
+      );
       continue;
     }
     const deleted = await deleteByCallId(phone10, callId);
     const wrote = await writeMessages(phone10, callId, blandMsgs);
     callsSeeded++;
     messagesAdded += wrote - deleted;
-    console.log(`  ✅ ${callId.slice(0, 12)}…  deleted=${deleted}  wrote=${wrote}  delta=+${wrote - deleted}`);
+    console.log(
+      `  ✅ ${
+        callId.slice(0, 12)
+      }…  deleted=${deleted}  wrote=${wrote}  delta=+${wrote - deleted}`,
+    );
     // Tiny throttle so we don't slam Bland's API.
     await new Promise((r) => setTimeout(r, 150));
   }

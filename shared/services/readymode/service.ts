@@ -490,17 +490,25 @@ export async function injectLead(
   try {
     const scrubbed = await scrubLead(lead.phone, domain);
     console.log(
-      `[inject] ${scrubbed ? "✅" : "⚠️"} preemptive scrub ${domain} phone=${lead.phone} → ${scrubbed ? "ok" : "no-op/fail"}`,
+      `[inject] ${
+        scrubbed ? "✅" : "⚠️"
+      } preemptive scrub ${domain} phone=${lead.phone} → ${
+        scrubbed ? "ok" : "no-op/fail"
+      }`,
     );
   } catch (e) {
     console.warn(
-      `[inject] ⚠️ preemptive scrub threw ${domain} phone=${lead.phone}: ${(e as Error).message} (non-fatal)`,
+      `[inject] ⚠️ preemptive scrub threw ${domain} phone=${lead.phone}: ${
+        (e as Error).message
+      } (non-fatal)`,
     );
   }
 
   const url = buildLeadUrl(baseUrl, lead as unknown as Record<string, unknown>);
   console.log(
-    `[inject] 🚀 ${domain} phone=${lead.phone} target=${targetId} → ${url.slice(0, 200)}`,
+    `[inject] 🚀 ${domain} phone=${lead.phone} target=${targetId} → ${
+      url.slice(0, 200)
+    }`,
   );
 
   try {
@@ -537,15 +545,23 @@ export async function injectLead(
       );
       const retry = await handleDuplicate(lead, domain, text, url);
       success = retry.status === "success";
-      outcome = `${success ? "ok" : "failed"} via duplicate-retry (${retry.message})`;
+      outcome = `${
+        success ? "ok" : "failed"
+      } via duplicate-retry (${retry.message})`;
       console.log(
-        `[inject] ${success ? "✅" : "❌"} ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
+        `[inject] ${
+          success ? "✅" : "❌"
+        } ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
       );
     } else {
       success = res.ok;
-      outcome = `${success ? "ok" : "failed"} http=${res.status} body="${bodySlice}"`;
+      outcome = `${
+        success ? "ok" : "failed"
+      } http=${res.status} body="${bodySlice}"`;
       console.log(
-        `[inject] ${success ? "⚠️" : "❌"} ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
+        `[inject] ${
+          success ? "⚠️" : "❌"
+        } ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
       );
     }
 
@@ -573,7 +589,9 @@ export async function injectLead(
     };
   } catch (e) {
     console.error(
-      `[inject] ❌ ${domain} phone=${lead.phone} target=${targetId} → threw: ${(e as Error).message}`,
+      `[inject] ❌ ${domain} phone=${lead.phone} target=${targetId} → threw: ${
+        (e as Error).message
+      }`,
     );
     throw new Error(`Injection Failed: ${(e as Error).message}`);
   }
@@ -594,7 +612,9 @@ async function handleDuplicate(
   }
   if (!leadId) {
     console.warn(
-      `[inject] ⚠️ duplicate-handler ${domain} phone=${lead.phone} → could not parse leadId from body="${errorBody.slice(0, 200).replace(/\s+/g, " ")}"`,
+      `[inject] ⚠️ duplicate-handler ${domain} phone=${lead.phone} → could not parse leadId from body="${
+        errorBody.slice(0, 200).replace(/\s+/g, " ")
+      }"`,
     );
     return { status: "error", message: "Duplicate - ID Parse Failed" };
   }
@@ -629,7 +649,10 @@ async function handleDuplicate(
   console.warn(
     `[inject] ❌ duplicate-handler ${domain} phone=${lead.phone} leadId=${leadId} → retry failed http=${retryRes.status} body="${retryBody}"`,
   );
-  return { status: "error", message: `Retry Failed: http=${retryRes.status} ${retryBody}` };
+  return {
+    status: "error",
+    message: `Retry Failed: http=${retryRes.status} ${retryBody}`,
+  };
 }
 
 export async function scrubLead(
@@ -667,13 +690,17 @@ export async function scrubLead(
       });
     } else {
       console.warn(
-        `[scrub] ⚠️ ${domain} phone=${phone}${leadId ? ` leadId=${leadId}` : ""} → http=${res.status} body="${bodySlice}"`,
+        `[scrub] ⚠️ ${domain} phone=${phone}${
+          leadId ? ` leadId=${leadId}` : ""
+        } → http=${res.status} body="${bodySlice}"`,
       );
     }
     return success;
   } catch (e) {
     console.error(
-      `[scrub] ❌ ${domain} phone=${phone}${leadId ? ` leadId=${leadId}` : ""} threw: ${(e as Error).message}`,
+      `[scrub] ❌ ${domain} phone=${phone}${
+        leadId ? ` leadId=${leadId}` : ""
+      } threw: ${(e as Error).message}`,
     );
     return false;
   }

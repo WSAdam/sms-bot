@@ -1,0 +1,9 @@
+#!/bin/sh
+# Block commits containing unformatted Deno code. Respects deno.json's
+# exclude (skips _fresh + _source-omnisource).
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+if ! deno fmt --check >/dev/null 2>&1; then
+  echo "❌ deno fmt check failed — run: deno fmt"
+  exit 1
+fi

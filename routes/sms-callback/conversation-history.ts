@@ -7,10 +7,16 @@ import { normalizePhone } from "@shared/util/phone.ts";
 
 export const handler = define.handlers({
   async DELETE(ctx) {
-    const body = await ctx.req.json().catch(() => null) as { phone?: string } | null;
-    if (!body?.phone) return Response.json({ error: "Missing phone" }, { status: 400 });
+    const body = await ctx.req.json().catch(() => null) as
+      | { phone?: string }
+      | null;
+    if (!body?.phone) {
+      return Response.json({ error: "Missing phone" }, { status: 400 });
+    }
     const phone = normalizePhone(body.phone);
-    if (!phone) return Response.json({ error: "Invalid phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ error: "Invalid phone" }, { status: 400 });
+    }
     const deleted = await deleteConversations(phone);
     return Response.json({ status: "success", phone, deleted });
   },

@@ -30,7 +30,9 @@ interface QbVerbose {
 const raw = await Deno.readTextFile("/tmp/qb-verbose.json");
 const qb = JSON.parse(raw) as QbVerbose;
 const skipped = qb.skippedNoInjectionList ?? [];
-console.log(`📋 QB says ${skipped.length} phones are sales but cron found no injection record for them`);
+console.log(
+  `📋 QB says ${skipped.length} phones are sales but cron found no injection record for them`,
+);
 
 const qbPhones = new Set(skipped.map((s) => s.phone10));
 
@@ -40,7 +42,9 @@ const [history, conversations, activated] = await Promise.all([
   db.collection("sms-bot/conversations/messages").get(),
   db.collection("sms-bot/guestactivated/byPhone").get(),
 ]);
-console.log(`   injectionhistory=${history.size} conversations=${conversations.size} activated=${activated.size}`);
+console.log(
+  `   injectionhistory=${history.size} conversations=${conversations.size} activated=${activated.size}`,
+);
 
 const injectedPhones = new Map<string, number>();
 for (const h of history.docs) {
@@ -85,10 +89,19 @@ for (const s of skipped) {
   const isAct = activatedSet.has(phone);
   // Only surface phones that have ANY of: injection, appointment, conversation
   if (!hasInj && !hasAppt && convoCount === 0) continue;
-  hits.push({ phone, hasInjection: hasInj, injectionCount: injCount, hasAppt, convoCount, isActivated: isAct });
+  hits.push({
+    phone,
+    hasInjection: hasInj,
+    injectionCount: injCount,
+    hasAppt,
+    convoCount,
+    isActivated: isAct,
+  });
 }
 
-console.log(`🎯 ${hits.length} QB-sold phones have evidence on our side (injection/appt/convo) but cron skipped them`);
+console.log(
+  `🎯 ${hits.length} QB-sold phones have evidence on our side (injection/appt/convo) but cron skipped them`,
+);
 console.log("");
 
 for (const h of hits) {
@@ -102,6 +115,8 @@ for (const h of hits) {
 }
 
 console.log("");
-console.log("Phones marked NOT-activated with strong evidence are the lost sales.");
+console.log(
+  "Phones marked NOT-activated with strong evidence are the lost sales.",
+);
 
 Deno.exit(0);

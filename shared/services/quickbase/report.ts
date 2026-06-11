@@ -39,9 +39,13 @@ export async function realGetReport(
       }
       const text = await res.text();
       if (res.status >= 400 && res.status < 500) {
-        throw new Error(`Quickbase getReport ${res.status}: ${text.slice(0, 200)}`);
+        throw new Error(
+          `Quickbase getReport ${res.status}: ${text.slice(0, 200)}`,
+        );
       }
-      lastErr = new Error(`Quickbase getReport ${res.status}: ${text.slice(0, 200)}`);
+      lastErr = new Error(
+        `Quickbase getReport ${res.status}: ${text.slice(0, 200)}`,
+      );
     } catch (e) {
       lastErr = e;
     }

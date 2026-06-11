@@ -170,31 +170,31 @@ one Deno Deploy project:
 
 ### 0.3 Env vars (current canonical list)
 
-| Var                              | Required                         | Purpose                                                | Notes                                                              |
-| -------------------------------- | -------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------ |
-| `FIREBASE_PROJECT_ID`            | ✅                               | GCP project ID                                         | `keystone-fs97`                                                    |
-| `FIREBASE_SERVICE_ACCOUNT_JSON`  | ✅ on Deploy                     | Raw JSON of service account                            | Paste the whole `{...}` blob                                       |
-| `GOOGLE_APPLICATION_CREDENTIALS` | ✅ local                         | Path to service-account JSON file                      | e.g. `./data/service-account.dev.json` (gitignored)                |
-| `BLAND_API_KEY`                  | ✅                               | Bland.ai API key                                       | Header: `authorization: <key>` (no Bearer prefix)                  |
-| `NU_BLAND_API_KEY`               | optional                         | Bland fallback key                                     |                                                                    |
-| `BLAND_SMS_PATHWAY_ID`           | optional                         | Pathway override                                       | Default: `d6bd66a2-13b4-4365-a994-842c705e22b1`                    |
-| `BLAND_PATHWAY_VERSION`          | optional                         | Pathway version                                        | Default: `production`                                              |
-| `POSTMARK_SERVER`                | required for /api/report/nightly | Postmark server token                                  |                                                                    |
-| `QUICKBASE_REPORT_TOKEN`         | required for daily cron          | `test` body field for `getReports` Cloud Function      |                                                                    |
-| `QUICKBASE_USER_TOKEN`           | required for direct QB ops       | User token from QB My Preferences → Manage user tokens | Raw token only, NOT a base64 headers blob                          |
-| `QUICKBASE_FAIL_OPEN`            | optional                         | `true` (default) = QB outage soft-fails                | Flip to `false` once you trust QB wiring                           |
-| `RM_USER`, `RM_PASS`             | ✅                               | ReadyMode TPI Basic-auth creds                         | Same creds work for all 5 domains (no per-domain overrides needed) |
-| `CAL_API_KEY`                    | ✅ for Cal.com endpoints         | Cal.com v2 API key                                     | `cal_live_…` format                                                |
-| `NGROK_KEY`                      | local dev only                   | ngrok auth token                                       | For `deno task tunnel`                                             |
-| `SOURCE_KV_URL`                  | migration script only            | Legacy KV deploy URL                                   | `https://google-sheets-kv.thetechgoose.deno.net`                   |
-| `INBOUND_WINDOW_MODE`            | optional                         | Inbound trigger gate mode                              | `off` \| `none` \| `explicit` \| `random`. Default `none` if unset. See §0.14 |
-| `INBOUND_WINDOW_START_ET`        | optional                         | Window start when mode=explicit                        | `HH:MM` 24h ET, default `00:00`                                    |
-| `INBOUND_WINDOW_END_ET`          | optional                         | Window end when mode=explicit                          | `HH:MM` 24h ET, default `23:59`                                    |
-| `FIRESTORE_LIST_WARN_THRESHOLD`  | optional                         | Tripwire for unbounded `list()` calls                  | Default 500. Logs stack trace if any single query exceeds.         |
+| Var                              | Required                         | Purpose                                                | Notes                                                                                              |
+| -------------------------------- | -------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `FIREBASE_PROJECT_ID`            | ✅                               | GCP project ID                                         | `keystone-fs97`                                                                                    |
+| `FIREBASE_SERVICE_ACCOUNT_JSON`  | ✅ on Deploy                     | Raw JSON of service account                            | Paste the whole `{...}` blob                                                                       |
+| `GOOGLE_APPLICATION_CREDENTIALS` | ✅ local                         | Path to service-account JSON file                      | e.g. `./data/service-account.dev.json` (gitignored)                                                |
+| `BLAND_API_KEY`                  | ✅                               | Bland.ai API key                                       | Header: `authorization: <key>` (no Bearer prefix)                                                  |
+| `NU_BLAND_API_KEY`               | optional                         | Bland fallback key                                     |                                                                                                    |
+| `BLAND_SMS_PATHWAY_ID`           | optional                         | Pathway override                                       | Default: `d6bd66a2-13b4-4365-a994-842c705e22b1`                                                    |
+| `BLAND_PATHWAY_VERSION`          | optional                         | Pathway version                                        | Default: `production`                                                                              |
+| `POSTMARK_SERVER`                | required for /api/report/nightly | Postmark server token                                  |                                                                                                    |
+| `QUICKBASE_REPORT_TOKEN`         | required for daily cron          | `test` body field for `getReports` Cloud Function      |                                                                                                    |
+| `QUICKBASE_USER_TOKEN`           | required for direct QB ops       | User token from QB My Preferences → Manage user tokens | Raw token only, NOT a base64 headers blob                                                          |
+| `QUICKBASE_FAIL_OPEN`            | optional                         | `true` (default) = QB outage soft-fails                | Flip to `false` once you trust QB wiring                                                           |
+| `RM_USER`, `RM_PASS`             | ✅                               | ReadyMode TPI Basic-auth creds                         | Same creds work for all 5 domains (no per-domain overrides needed)                                 |
+| `CAL_API_KEY`                    | ✅ for Cal.com endpoints         | Cal.com v2 API key                                     | `cal_live_…` format                                                                                |
+| `NGROK_KEY`                      | local dev only                   | ngrok auth token                                       | For `deno task tunnel`                                                                             |
+| `SOURCE_KV_URL`                  | migration script only            | Legacy KV deploy URL                                   | `https://google-sheets-kv.thetechgoose.deno.net`                                                   |
+| `INBOUND_WINDOW_MODE`            | optional                         | Inbound trigger gate mode                              | `off` \| `none` \| `explicit` \| `random`. Default `none` if unset. See §0.14                      |
+| `INBOUND_WINDOW_START_ET`        | optional                         | Window start when mode=explicit                        | `HH:MM` 24h ET, default `00:00`                                                                    |
+| `INBOUND_WINDOW_END_ET`          | optional                         | Window end when mode=explicit                          | `HH:MM` 24h ET, default `23:59`                                                                    |
+| `FIRESTORE_LIST_WARN_THRESHOLD`  | optional                         | Tripwire for unbounded `list()` calls                  | Default 500. Logs stack trace if any single query exceeds.                                         |
 | `AUTH_FIREBASE_API_KEY`          | ✅ for the auth gate             | Firebase Web API key from keystone-fs97                | Public (project identifier, not a secret). If unset → auth disabled, every route public. See §0.15 |
-| `AUTH_ALLOWED_DOMAINS`           | optional                         | Comma-separated email-domain allowlist                 | Default `monsterrg.com`. Lowercased.                               |
-| `AUTH_SESSION_TTL_SECONDS`       | optional                         | Session cookie lifetime                                | Default 604800 (7 days).                                           |
-| `CANARY_SECRET`                  | ✅ for /canary monitoring        | Shared bearer secret the external Canary monitor sends | If unset, `/canary/*` reject every request (fail closed). See §0.16 |
+| `AUTH_ALLOWED_DOMAINS`           | optional                         | Comma-separated email-domain allowlist                 | Default `monsterrg.com`. Lowercased.                                                               |
+| `AUTH_SESSION_TTL_SECONDS`       | optional                         | Session cookie lifetime                                | Default 604800 (7 days).                                                                           |
+| `CANARY_SECRET`                  | ✅ for /canary monitoring        | Shared bearer secret the external Canary monitor sends | If unset, `/canary/*` reject every request (fail closed). See §0.16                                |
 
 **Removed since original plan:** `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`,
 `SMS_COUNT_TOKEN`, `QUICKBASE_REALM` (now hardcoded constant).
@@ -301,62 +301,59 @@ unless listed under "Public bypass"):
 - `POST /api/auth/session` — exchange Firebase ID token for session cookie
   (public — entry to the auth flow). `DELETE` clears the cookie.
 
-**Canary monitoring** (external monitor polls these — public bypass, bearer-authed; see §0.16):
+**Canary monitoring** (external monitor polls these — public bypass,
+bearer-authed; see §0.16):
 
 - `GET|POST /canary/conversations` — today's outbound-send count (ET):
   `{conversationsStartedToday, textsSentToday}` read from the `globalsmscount`
   counter. Liveness; Canary alerts if it drops below a floor.
 - `GET|POST /canary/errors` — yesterday's terminal failures (ET):
-  `{totalErrors, errors[]}` from `injectionhistory` status="error" +
-  `cronruns` lastStatus="error".
+  `{totalErrors, errors[]}` from `injectionhistory` status="error" + `cronruns`
+  lastStatus="error".
 
 ### 0.6 Scheduled jobs (Deno.cron, Deploy-only)
 
-In `main.ts`, gated on `DENO_DEPLOYMENT_ID` (six jobs). Each handler is
-wrapped in `recordCronRun(name, fn)` so the cron-health card at
-`/api/admin/cron-health` surfaces stale crons within hours rather than
-days.
+In `main.ts`, gated on `DENO_DEPLOYMENT_ID` (six jobs). Each handler is wrapped
+in `recordCronRun(name, fn)` so the cron-health card at `/api/admin/cron-health`
+surfaces stale crons within hours rather than days.
 
-- **`scheduled-injection-sweep-v2`** — every minute (`* * * * *`).
-  Reads pending `scheduledinjections` where `eventTime <= now`,
-  fires each through `handleDelayedInjection` (which has the 72h
-  dedup guard), writes `injectionhistory`, deletes the pending doc.
-  Guarded by `gatesConfig.scheduledInjectionSweepEnabled` (default
-  `false`) — a live-editable kill-switch you can flip without a
-  redeploy. Renamed from `scheduled-injection-sweep` on 2026-05-25
-  because Deno Deploy's runtime had gotten stuck on the original
-  name (28k errors over 30 days, handler body never invoked); the
-  old registration is orphaned and decays naturally.
-- **`metrics-kvbreakdown-refresh`** — `0 6 * * *` UTC = 2 AM EDT.
-  Re-counts every Firestore collection and overwrites
-  `metrics/kvBreakdown/totals`. Self-healing floor for the dashboard
-  sidebar.
-- **`nightly-conversation-reseed`** — `0 7 * * *` UTC = 3 AM EDT.
-  Re-pulls every Bland conversation from the previous ET day +
-  chained `scanConversationsForBookings` over that window. Catches
-  webhook gaps and surfaces any booking signal Cal.com missed.
-- **`nightly-report`** — `15 8 * * *` UTC = 4:15 AM EDT / 3:15 AM
-  EST. Sends the daily Postmark email summary. Was every-minute
-  with a `cronConfig.report.timeOfDayEt` field for live-editable
-  send time; refactored 2026-05-26 to a fixed schedule. The
-  `cronConfig.report.timeOfDayEt` field is vestigial (no longer
-  read). `cronConfig.report.enabled` is still respected as a
-  kill-switch, and `cronConfig.report.lastSentEtDate` enforces
+- **`scheduled-injection-sweep-v2`** — every minute (`* * * * *`). Reads pending
+  `scheduledinjections` where `eventTime <= now`, fires each through
+  `handleDelayedInjection` (which has the 72h dedup guard), writes
+  `injectionhistory`, deletes the pending doc. Guarded by
+  `gatesConfig.scheduledInjectionSweepEnabled` (default `false`) — a
+  live-editable kill-switch you can flip without a redeploy. Renamed from
+  `scheduled-injection-sweep` on 2026-05-25 because Deno Deploy's runtime had
+  gotten stuck on the original name (28k errors over 30 days, handler body never
+  invoked); the old registration is orphaned and decays naturally.
+- **`metrics-kvbreakdown-refresh`** — `0 6 * * *` UTC = 2 AM EDT. Re-counts
+  every Firestore collection and overwrites `metrics/kvBreakdown/totals`.
+  Self-healing floor for the dashboard sidebar.
+- **`nightly-conversation-reseed`** — `0 7 * * *` UTC = 3 AM EDT. Re-pulls every
+  Bland conversation from the previous ET day + chained
+  `scanConversationsForBookings` over that window. Catches webhook gaps and
+  surfaces any booking signal Cal.com missed.
+- **`nightly-report`** — `15 8 * * *` UTC = 4:15 AM EDT / 3:15 AM EST. Sends the
+  daily Postmark email summary. Was every-minute with a
+  `cronConfig.report.timeOfDayEt` field for live-editable send time; refactored
+  2026-05-26 to a fixed schedule. The `cronConfig.report.timeOfDayEt` field is
+  vestigial (no longer read). `cronConfig.report.enabled` is still respected as
+  a kill-switch, and `cronConfig.report.lastSentEtDate` enforces
   exactly-once-per-day.
-- **`daily-qb-sale-match`** — `0 9 * * *` UTC = 5 AM EDT / 4 AM
-  EST. Pulls today's Quickbase report (id 678 by default, set in
-  `cronConfig.qbSaleMatch.reportId`) and writes `saleswithin7d`
-  markers for any phone whose `scheduledinjection` fired within
-  the last 7 days AND has a matching QB sale.
-- **`readymode-daily-pull`** — `30 9 * * *` UTC = 5:30 AM EDT.
-  Logs into the ReadyMode portal, pages through yesterday's full
-  call log, writes `calldispositions`, upserts `guestanswered` for
-  non-No-Answer calls. RM enforces single-session-per-user, so
-  this kicks Adam's own RM session if he's logged in at the time.
+- **`daily-qb-sale-match`** — `0 9 * * *` UTC = 5 AM EDT / 4 AM EST. Pulls
+  today's Quickbase report (id 678 by default, set in
+  `cronConfig.qbSaleMatch.reportId`) and writes `saleswithin7d` markers for any
+  phone whose `scheduledinjection` fired within the last 7 days AND has a
+  matching QB sale.
+- **`readymode-daily-pull`** — `30 9 * * *` UTC = 5:30 AM EDT. Logs into the
+  ReadyMode portal, pages through yesterday's full call log, writes
+  `calldispositions`, upserts `guestanswered` for non-No-Answer calls. RM
+  enforces single-session-per-user, so this kicks Adam's own RM session if he's
+  logged in at the time.
 
-All six are callable via `/api/cron/trigger*` routes for manual
-firing. Cron-health endpoint at `/api/admin/cron-health` returns
-last-run-status + duration for each.
+All six are callable via `/api/cron/trigger*` routes for manual firing.
+Cron-health endpoint at `/api/admin/cron-health` returns last-run-status +
+duration for each.
 
 ### 0.7 Test console (`/test`)
 
@@ -539,148 +536,141 @@ truly safe re-runs. Not built yet.
 - **Drain before unstick.** When reviving a paused scheduler/sweep that has a
   known backlog, drain or quarantine the backlog FIRST. The 2026-05-25 incident
   was caused by reversing this order: the sweep cron was unstuck (rename to
-  `-v2`) before the 19 stale pending docs were cleared, so it tried to fire
-  them all in the first tick. The ReadyMode campaign had to be manually scrubbed
-  to prevent ~19 unwanted dials. Always sequence: drain (or guard) → then
-  unstick. Never the reverse.
+  `-v2`) before the 19 stale pending docs were cleared, so it tried to fire them
+  all in the first tick. The ReadyMode campaign had to be manually scrubbed to
+  prevent ~19 unwanted dials. Always sequence: drain (or guard) → then unstick.
+  Never the reverse.
 - **End of round: ask to refresh docs.** After any substantial change (a new
-  endpoint, env var, behavior shift, bug fix that affects the operator's
-  mental model, or anything that lands as a code commit), proactively ask
-  before closing out: "want me to update context.md / README to reflect this?"
-  This is for things Adam shouldn't have to remember to ask for. Skips:
-  trivial one-line tweaks, comment-only changes, conversational replies. The
-  full preference is also documented in [CLAUDE.md](CLAUDE.md).
+  endpoint, env var, behavior shift, bug fix that affects the operator's mental
+  model, or anything that lands as a code commit), proactively ask before
+  closing out: "want me to update context.md / README to reflect this?" This is
+  for things Adam shouldn't have to remember to ask for. Skips: trivial one-line
+  tweaks, comment-only changes, conversational replies. The full preference is
+  also documented in [CLAUDE.md](CLAUDE.md).
 
 ### 0.14 Safety + ops changes (May 2026)
 
-Series of incidents in May 2026 drove a wave of defense-in-depth
-work. Summarized here so the patterns are findable; the original
-incident write-up is [incident-2026-05-19.md](incident-2026-05-19.md)
-and the firestore remediation tracker is
-[firestore-safety.md](firestore-safety.md).
+Series of incidents in May 2026 drove a wave of defense-in-depth work.
+Summarized here so the patterns are findable; the original incident write-up is
+[incident-2026-05-19.md](incident-2026-05-19.md) and the firestore remediation
+tracker is [firestore-safety.md](firestore-safety.md).
 
 **Sweep cron safety stack** (handler: `main.ts:71` →
 `shared/services/orchestrator/queue.ts:handleDelayedInjection`):
 
-- **Kill-switch** — `gatesConfig.scheduledInjectionSweepEnabled`
-  (bool, default `false`). Checked inside the sweep handler before
-  any work. Flip via /test → Gates Config form; gatesConfig is
-  60s-cached so the change is live within a minute. No redeploy.
-- **72h dedup guard** — `handleDelayedInjection` queries
-  `injectionhistory` for the phone before injecting. If any entry
-  within `gatesConfig.scheduledInjectionDedupHours` (default 72) is
-  found, the function returns `{skipped: true, reason}` and the
-  sweep writes `injectionhistory` with `status: "skipped"` +
-  `skipReason`. The scheduledinjection doc is deleted regardless
-  (no value in re-evaluating forever). Single-field `phone` index
-  on injectionhistory; ~50 queries per minute under heavy sweep
-  load is well within budget.
+- **Kill-switch** — `gatesConfig.scheduledInjectionSweepEnabled` (bool, default
+  `false`). Checked inside the sweep handler before any work. Flip via /test →
+  Gates Config form; gatesConfig is 60s-cached so the change is live within a
+  minute. No redeploy.
+- **72h dedup guard** — `handleDelayedInjection` queries `injectionhistory` for
+  the phone before injecting. If any entry within
+  `gatesConfig.scheduledInjectionDedupHours` (default 72) is found, the function
+  returns `{skipped: true, reason}` and the sweep writes `injectionhistory` with
+  `status: "skipped"` + `skipReason`. The scheduledinjection doc is deleted
+  regardless (no value in re-evaluating forever). Single-field `phone` index on
+  injectionhistory; ~50 queries per minute under heavy sweep load is well within
+  budget.
 - **Talk-now cleanup** —
   [routes/sms-callback/bland-talk-now.ts](routes/sms-callback/bland-talk-now.ts)
-  now deletes the companion `scheduledinjections/{phone}` doc after
-  firing. Closes the race that caused the 2026-05-25 near-miss:
-  talk-now used to write an `injectionhistory` audit entry but
-  leave the pending doc in place, so when the sweep came back from
-  its 22-day outage it tried to re-dial the same phones.
+  now deletes the companion `scheduledinjections/{phone}` doc after firing.
+  Closes the race that caused the 2026-05-25 near-miss: talk-now used to write
+  an `injectionhistory` audit entry but leave the pending doc in place, so when
+  the sweep came back from its 22-day outage it tried to re-dial the same
+  phones.
 
 **Inbound trigger window gate** (env-driven, zero Firestore reads):
 
-The `/trigger/readymode` handler has a 4-mode gate at the top of
-the handler that reads from `loadEnv()` (module-cached after first
-call). Outside the active window, returns `200 {status: "skipped",
-reason: "outside-window" | "mode-off"}` in <30ms with no Firestore
-or TPI calls.
+The `/trigger/readymode` handler has a 4-mode gate at the top of the handler
+that reads from `loadEnv()` (module-cached after first call). Outside the active
+window, returns `200 {status: "skipped",
+reason: "outside-window" | "mode-off"}`
+in <30ms with no Firestore or TPI calls.
 
-| `INBOUND_WINDOW_MODE` | Behavior |
-|---|---|
-| `none` (default) | No gate; every trigger processes normally |
-| `off`            | Master kill-switch; drop every trigger |
-| `explicit`       | Use `INBOUND_WINDOW_START_ET` / `INBOUND_WINDOW_END_ET` |
-| `random`         | Per-day randomized 5h window, start in [09:00, 16:00] ET. Same window all day; reseeds at ET midnight. Deterministic from today's ET date via FNV-1a + MurmurHash3 fmix in [shared/util/time.ts](shared/util/time.ts) `effectiveInboundWindow`. |
+| `INBOUND_WINDOW_MODE` | Behavior                                                                                                                                                                                                                                        |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none` (default)      | No gate; every trigger processes normally                                                                                                                                                                                                       |
+| `off`                 | Master kill-switch; drop every trigger                                                                                                                                                                                                          |
+| `explicit`            | Use `INBOUND_WINDOW_START_ET` / `INBOUND_WINDOW_END_ET`                                                                                                                                                                                         |
+| `random`              | Per-day randomized 5h window, start in [09:00, 16:00] ET. Same window all day; reseeds at ET midnight. Deterministic from today's ET date via FNV-1a + MurmurHash3 fmix in [shared/util/time.ts](shared/util/time.ts) `effectiveInboundWindow`. |
 
-Random-mode params (earliest/latest start, length) are hardcoded
-constants — change requires a code change + redeploy. The /test
-→ Gates Config card displays today's effective window read-only.
+Random-mode params (earliest/latest start, length) are hardcoded constants —
+change requires a code change + redeploy. The /test → Gates Config card displays
+today's effective window read-only.
 
 **TZ normalization at every write site**
 ([shared/util/time.ts](shared/util/time.ts) `normalizeAppointmentTime`):
 
-After repeated incidents where TZ-naive eventTimes (e.g.
-`"2026-06-14T07:30:00"` with no Z/offset) fired ~4h early in EDT,
-the contract is now:
+After repeated incidents where TZ-naive eventTimes (e.g. `"2026-06-14T07:30:00"`
+with no Z/offset) fired ~4h early in EDT, the contract is now:
 
-- `scheduleInjection` THROWS on any eventTime missing a `Z` or
-  `±HH:MM` marker. Boundary guard, never disabled.
-- All write paths into `scheduledinjections` (cal/schedule,
-  appointment-booked, booking-scan-recovery) pipe through
-  `normalizeAppointmentTime(raw, tz)` first.
-- `getBlandDesiredTime` normalizes Bland's
-  `variables.Desired_Time` at the source using
-  `variables.timezone` (or ET fallback).
-- Defense-in-depth: booking-scan also normalizes every proposed
-  eventTime before returning it.
+- `scheduleInjection` THROWS on any eventTime missing a `Z` or `±HH:MM` marker.
+  Boundary guard, never disabled.
+- All write paths into `scheduledinjections` (cal/schedule, appointment-booked,
+  booking-scan-recovery) pipe through `normalizeAppointmentTime(raw, tz)` first.
+- `getBlandDesiredTime` normalizes Bland's `variables.Desired_Time` at the
+  source using `variables.timezone` (or ET fallback).
+- Defense-in-depth: booking-scan also normalizes every proposed eventTime before
+  returning it.
 
 **booking-scan refactor** (2026-05-26):
 
 [shared/services/conversations/booking-scan.ts](shared/services/conversations/booking-scan.ts):
 
 - Reads from Firestore `conversations` collection (single `where(timestamp >=)`
-  + in-memory group by `(phoneNumber, callId)`), NOT from Bland's
-  API per-conversation. Replaced 1,200 sequential Bland calls per
-  30-day window with one Firestore list.
-- Filters out conversations whose `callId` starts with `appt_` —
-  those are bot-generated confirmations, not real Bland convos.
-  Re-parsing our own output produced wrong-date proposals.
-- Deleted the `nextOccurrenceFromMessages` "time-only" fallback.
-  It re-anchored matches like "9:00 AM" to today's 9 AM regardless
-  of the original message's date. If no confident full date can be
-  extracted, the proposal is now `skippedNoTime` (placeholder
-  injectionhistory only, no dial).
-- Skips proposals whose eventTime is more than 24h in the past
-  (`skippedPast` counter). Stale signals don't generate dials.
-- Selectively calls `getBlandDesiredTime` only for conversations
-  with a detected signal — ~50-100 Bland calls per 30-day window.
+  - in-memory group by `(phoneNumber, callId)`), NOT from Bland's API
+    per-conversation. Replaced 1,200 sequential Bland calls per 30-day window
+    with one Firestore list.
+- Filters out conversations whose `callId` starts with `appt_` — those are
+  bot-generated confirmations, not real Bland convos. Re-parsing our own output
+  produced wrong-date proposals.
+- Deleted the `nextOccurrenceFromMessages` "time-only" fallback. It re-anchored
+  matches like "9:00 AM" to today's 9 AM regardless of the original message's
+  date. If no confident full date can be extracted, the proposal is now
+  `skippedNoTime` (placeholder injectionhistory only, no dial).
+- Skips proposals whose eventTime is more than 24h in the past (`skippedPast`
+  counter). Stale signals don't generate dials.
+- Selectively calls `getBlandDesiredTime` only for conversations with a detected
+  signal — ~50-100 Bland calls per 30-day window.
 
 **cron-health observability** (`/api/admin/cron-health`):
 
-Each cron handler wraps its body in `recordCronRun(name, fn)`
-which stamps `metrics/cronruns/{name}` with last-run-at +
-status + duration on every tick. The endpoint reads a hardcoded
-list of expected cron names + per-cron expected freshness, and
-the dashboard surfaces any cron whose marker is stale. This is
-what caught the 2026-05-25 sweep regression within hours of the
-marker going stale instead of the 22 days the previous incident
-took. Adding a new cron requires adding it to the
-`CRON_FRESHNESS_HOURS` map in
+Each cron handler wraps its body in `recordCronRun(name, fn)` which stamps
+`metrics/cronruns/{name}` with last-run-at + status + duration on every tick.
+The endpoint reads a hardcoded list of expected cron names + per-cron expected
+freshness, and the dashboard surfaces any cron whose marker is stale. This is
+what caught the 2026-05-25 sweep regression within hours of the marker going
+stale instead of the 22 days the previous incident took. Adding a new cron
+requires adding it to the `CRON_FRESHNESS_HOURS` map in
 [routes/api/admin/cron-health.ts](routes/api/admin/cron-health.ts).
 
 ### 0.15 Auth (June 2026)
 
-Dashboard + all `/api/*` endpoints are gated behind Firebase Auth
-(Google sign-in via the same Firebase project as Firestore —
-currently `keystone-fs97`). Shipped 2026-06-04 in commits `82ce46d`
-+ `658a389`. The /test page used to be wide open; now anyone hitting
-it gets bounced to /login.
+Dashboard + all `/api/*` endpoints are gated behind Firebase Auth (Google
+sign-in via the same Firebase project as Firestore — currently `keystone-fs97`).
+Shipped 2026-06-04 in commits `82ce46d`
+
+- `658a389`. The /test page used to be wide open; now anyone hitting it gets
+  bounced to /login.
 
 **Auth flow:**
 
-1. Unauthenticated request to a protected route → middleware 302s
-   to `/login?next=<original>` (UI requests) or returns 401 JSON
-   (API requests). UI vs API detected via `Accept: text/html`.
+1. Unauthenticated request to a protected route → middleware 302s to
+   `/login?next=<original>` (UI requests) or returns 401 JSON (API requests). UI
+   vs API detected via `Accept: text/html`.
 2. `/login` loads the Firebase Web SDK from gstatic, runs
    `signInWithPopup(Google)`, gets a Firebase ID token.
 3. POSTs the token to `/api/auth/session`.
-4. Server verifies the ID token LOCALLY (no network round-trip per
-   request) against Google's published JWKs from
+4. Server verifies the ID token LOCALLY (no network round-trip per request)
+   against Google's published JWKs from
    `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com`
    (cached 5 min). Validates `aud`, `iss`, `exp`, `iat`, `email_verified`.
 5. Enforces email-domain allowlist (`AUTH_ALLOWED_DOMAINS`, default
    `monsterrg.com`). Non-allowlist accounts get a 403.
-6. Mints a session cookie: `sms_bot_session=<payloadB64>.<sigB64>`,
-   HttpOnly, SameSite=Lax, Secure (HTTPS only). Payload is
-   `{email, exp}` JSON; signature is HMAC-SHA256.
-7. Subsequent requests: middleware verifies the cookie signature +
-   expiry. No external calls.
+6. Mints a session cookie: `sms_bot_session=<payloadB64>.<sigB64>`, HttpOnly,
+   SameSite=Lax, Secure (HTTPS only). Payload is `{email, exp}` JSON; signature
+   is HMAC-SHA256.
+7. Subsequent requests: middleware verifies the cookie signature + expiry. No
+   external calls.
 
 **Public bypass paths** (in
 [shared/services/auth/middleware.ts](shared/services/auth/middleware.ts)
@@ -695,31 +685,30 @@ it gets bounced to /login.
 - `/healthz` (uptime checks)
 - `/favicon.ico`
 
-Adding a new webhook endpoint requires adding its prefix to this list
-or it'll get the auth gate by default — which would silently 401 the
-external system.
+Adding a new webhook endpoint requires adding its prefix to this list or it'll
+get the auth gate by default — which would silently 401 the external system.
 
 **Env footprint — one new var:**
 
 - `AUTH_FIREBASE_API_KEY` — the public Firebase Web API key from the
-  keystone-fs97 console (Project Settings → Your apps → Web app).
-  Public identifier, safe in env / not a cryptographic secret.
+  keystone-fs97 console (Project Settings → Your apps → Web app). Public
+  identifier, safe in env / not a cryptographic secret.
 
 Everything else is derived:
 
 - `firebaseProjectId` ← existing `FIREBASE_PROJECT_ID`
 - `firebaseAuthDomain` ← `${projectId}.firebaseapp.com`
-- `sessionSecret` ← `HMAC-SHA256(serviceAccount.private_key,
-  "sms-bot/session/v1")`. Deterministic across restarts so cookies
-  survive deploys; never written to disk. Rotate by bumping the
-  "v1" label in
+- `sessionSecret` ←
+  `HMAC-SHA256(serviceAccount.private_key,
+  "sms-bot/session/v1")`.
+  Deterministic across restarts so cookies survive deploys; never written to
+  disk. Rotate by bumping the "v1" label in
   [shared/services/auth/config.ts](shared/services/auth/config.ts).
 
-**Failsafe:** if `AUTH_FIREBASE_API_KEY` is missing, auth is
-DISABLED and every route is public. Same behavior as before the
-feature shipped, so a typo'd env var can never lock the team out —
-but also means a missing env var silently un-protects the dashboard.
-Check on each deploy.
+**Failsafe:** if `AUTH_FIREBASE_API_KEY` is missing, auth is DISABLED and every
+route is public. Same behavior as before the feature shipped, so a typo'd env
+var can never lock the team out — but also means a missing env var silently
+un-protects the dashboard. Check on each deploy.
 
 **Firebase Console setup** (one-time, per environment):
 
@@ -729,21 +718,20 @@ Check on each deploy.
 
 **Critical files:**
 
-- [routes/login.ts](routes/login.ts) — login page (HTML + Firebase
-  Web SDK)
+- [routes/login.ts](routes/login.ts) — login page (HTML + Firebase Web SDK)
 - [routes/logout.ts](routes/logout.ts) — clears cookie, redirects
-- [routes/api/auth/session.ts](routes/api/auth/session.ts) — token
-  → cookie exchange
-- [shared/services/auth/config.ts](shared/services/auth/config.ts) —
-  config + session-secret derivation
-- [shared/services/auth/firebase.ts](shared/services/auth/firebase.ts) —
-  local JWT verification
-- [shared/services/auth/session.ts](shared/services/auth/session.ts) —
-  cookie sign/verify
+- [routes/api/auth/session.ts](routes/api/auth/session.ts) — token → cookie
+  exchange
+- [shared/services/auth/config.ts](shared/services/auth/config.ts) — config +
+  session-secret derivation
+- [shared/services/auth/firebase.ts](shared/services/auth/firebase.ts) — local
+  JWT verification
+- [shared/services/auth/session.ts](shared/services/auth/session.ts) — cookie
+  sign/verify
 - [shared/services/auth/middleware.ts](shared/services/auth/middleware.ts) —
   gate logic
-- [routes/_middleware.ts](routes/_middleware.ts) — calls
-  `authGate(req)` before each handler
+- [routes/_middleware.ts](routes/_middleware.ts) — calls `authGate(req)` before
+  each handler
 
 ### 0.16 Canary monitoring (June 2026)
 
@@ -752,7 +740,7 @@ Two bearer-authenticated endpoints the external **Canary** monitor
 `PUBLIC_PREFIXES` (bypass the §0.15 session gate) and instead require
 `Authorization: Bearer <CANARY_SECRET>` — a constant-time compare in
 [shared/services/auth/bearer.ts](shared/services/auth/bearer.ts); missing or
-wrong → 401. Always 200 on a real reading so the *value*, not the status code,
+wrong → 401. Always 200 on a real reading so the _value_, not the status code,
 signals a problem; a non-2xx/timeout is Canary's down-detection.
 
 - **`GET|POST /canary/conversations`** — liveness. Returns

@@ -1,8 +1,5 @@
 import { assertEquals } from "@std/assert";
-import {
-  denormalize,
-  normalize,
-} from "@shared/services/readymode/mapping.ts";
+import { denormalize, normalize } from "@shared/services/readymode/mapping.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
 
 Deno.test("normalize handles friendly URL params from ACT triggers", () => {

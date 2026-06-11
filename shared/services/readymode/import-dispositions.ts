@@ -14,10 +14,7 @@ import {
   injectionHistoryCollection,
   scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
-import {
-  type BatchOp,
-  getFirestoreClient,
-} from "@shared/firestore/wrapper.ts";
+import { type BatchOp, getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import type { DialerCallRow } from "@shared/services/readymode/portal-client.ts";
 
 // "Did this call connect with a human?" — substring match catches the
@@ -145,9 +142,7 @@ export async function importDailyDispositions(
     }
     const newAt = earliestAnsweredInBatch.get(phone10)!;
     const cur = existing[i];
-    const curAt = typeof cur?.answeredAt === "string"
-      ? cur.answeredAt
-      : null;
+    const curAt = typeof cur?.answeredAt === "string" ? cur.answeredAt : null;
     if (curAt && curAt <= newAt) {
       summary.answeredAlreadyEarlier++;
       continue;

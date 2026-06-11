@@ -7,7 +7,10 @@ import { processInboundLead } from "@shared/services/readymode/service.ts";
 
 export const handler = define.handlers({
   async POST(ctx) {
-    const body = await ctx.req.json().catch(() => ({})) as Record<string, unknown>;
+    const body = await ctx.req.json().catch(() => ({})) as Record<
+      string,
+      unknown
+    >;
     const override = body.override === undefined ? true : !!body.override;
     const r = await processInboundLead({ ...body, override });
     return Response.json(r);

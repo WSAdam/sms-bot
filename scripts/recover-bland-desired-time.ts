@@ -63,7 +63,7 @@ const SANITY_PAST_TOLERANCE_MS = 4 * 60 * 60 * 1000; // 4h
 // This is approximate — DST boundaries can be off by 1h on the day of
 // transition. Sanity gate (±4h past, +180d future) absorbs that drift.
 const TZ_OFFSET_HOURS: Record<string, number> = {
-  "America/New_York": -4,    // EDT half the year, EST the other half
+  "America/New_York": -4, // EDT half the year, EST the other half
   "America/Chicago": -5,
   "America/Denver": -6,
   "America/Phoenix": -7,
@@ -107,7 +107,8 @@ interface Hit {
 
 console.log(`🔁 recover-bland-desired-time  APPLY=${APPLY}\n`);
 
-const ih = await db.collection(IH).where("eventTimePlaceholder", "==", true).get();
+const ih = await db.collection(IH).where("eventTimePlaceholder", "==", true)
+  .get();
 console.log(`📋 placeholder ih docs: ${ih.size}`);
 
 const hits: Hit[] = [];
@@ -175,7 +176,9 @@ console.log(`   ❌ search/fetch errors:                 ${rejected.length}`);
 console.log();
 for (const h of hits) {
   const days = ((h.desiredMs - h.nowMs) / 86_400_000).toFixed(1);
-  console.log(`  ✅ ${h.phone}  oldFiredBy=${h.oldFiredBy}  Desired_Time=${h.desiredTime}  (+${days}d from convo)`);
+  console.log(
+    `  ✅ ${h.phone}  oldFiredBy=${h.oldFiredBy}  Desired_Time=${h.desiredTime}  (+${days}d from convo)`,
+  );
 }
 if (noDesired.length) {
   console.log("\n  no usable variable:");
@@ -205,9 +208,11 @@ for (const h of hits) {
     eventTimePlaceholder: false,
     firedBy: "bland-variable-recovery",
     recoveredFromCallId: h.callId,
-    recoveredEventTimeSource: `bland.variables.Desired_Time (was ${h.oldFiredBy})`,
+    recoveredEventTimeSource:
+      `bland.variables.Desired_Time (was ${h.oldFiredBy})`,
     reclassifiedAt: updatedAt,
-    reclassifiedReason: "Pulled the canonical Desired_Time from Bland's request variables — the bot had already parsed the appointment time, we just hadn't read it.",
+    reclassifiedReason:
+      "Pulled the canonical Desired_Time from Bland's request variables — the bot had already parsed the appointment time, we just hadn't read it.",
   });
   // Update the matching guestactivated doc too: clear placeholder + use
   // the real Bland-confirmed eventTime so the dashboard shows the right

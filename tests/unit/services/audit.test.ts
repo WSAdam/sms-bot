@@ -65,6 +65,9 @@ Deno.test("checkAuditMarker reflects stage + legacy state", async () => {
   const live = await checkAuditMarker({ recordId: "rec5", stage: "live" });
   assertEquals(live.exists, true);
 
-  const landing = await checkAuditMarker({ recordId: "rec5", stage: "landing" });
+  const landing = await checkAuditMarker({
+    recordId: "rec5",
+    stage: "landing",
+  });
   assertEquals(landing.exists, false);
 });

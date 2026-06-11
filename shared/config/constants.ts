@@ -23,7 +23,7 @@ export const QUICKBASE_API_BASE = "https://api.quickbase.com/v1";
 // Reservations table + field IDs.
 export const QB_RESERVATIONS_TABLE = "bmhvhc72c";
 export const QB_RES_FIELD = {
-  ReservationId: 3,    // record id
+  ReservationId: 3, // record id
   EmailAddress: 78,
   GuestFullName: 79,
   Phone: 82,
@@ -70,8 +70,8 @@ export const SALE_MATCH_WINDOW_DAYS = 8;
 export const EXCLUDED_REPORTING_PHONES = new Set<string>([
   "8432222986", // Adam's test phone
   "6098583137", // Edwin — Bland pathway fucked up the messageSent variable
-                // for this conversation, polluting today's stats with stale
-                // opener text. Excluded until the pathway template is fixed.
+  // for this conversation, polluting today's stats with stale
+  // opener text. Excluded until the pathway template is fixed.
 ]);
 export function isExcludedFromReporting(phone10: string): boolean {
   return EXCLUDED_REPORTING_PHONES.has(phone10);

@@ -15,9 +15,7 @@ export const handler = define.handlers({
     const doc = await getFirestoreClient().get(readymodeCampaignsDocPath());
     return Response.json({
       campaigns: (doc?.campaigns ?? {}) as Record<string, string>,
-      updatedAt: typeof doc?.updatedAt === "string"
-        ? doc.updatedAt
-        : null,
+      updatedAt: typeof doc?.updatedAt === "string" ? doc.updatedAt : null,
     });
   },
 });

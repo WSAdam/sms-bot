@@ -6,7 +6,9 @@ export const handler = define.handlers({
     const { phone } = ctx.params as { phone: string };
     const pointer = await orchestrator.getPointer(phone);
     if (!pointer) {
-      return Response.json({ error: `No pointer found for ${phone}` }, { status: 404 });
+      return Response.json({ error: `No pointer found for ${phone}` }, {
+        status: 404,
+      });
     }
     return Response.json(pointer);
   },

@@ -8,7 +8,9 @@ export const handler = define.handlers({
       | { key?: unknown; value?: unknown }
       | null;
     if (!body || !Array.isArray(body.key)) {
-      return Response.json({ error: "Body must be {key: [...], value: ...}" }, { status: 400 });
+      return Response.json({ error: "Body must be {key: [...], value: ...}" }, {
+        status: 400,
+      });
     }
     const mapped = legacyKeyToDocPath(body.key as Array<string | number>);
     if (!mapped) {

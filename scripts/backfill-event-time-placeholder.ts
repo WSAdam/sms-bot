@@ -93,7 +93,9 @@ for (const d of ga.docs) {
   if (placeholderEt !== eventTime) continue;
   gaUpdates++;
   if (APPLY) gaBatch.update(d.ref, { eventTimePlaceholder: true });
-  console.log(`   ${phone}  activatedAt=${data.activatedAt}  eventTime=${eventTime}`);
+  console.log(
+    `   ${phone}  activatedAt=${data.activatedAt}  eventTime=${eventTime}`,
+  );
 }
 console.log(`\n   guestactivated docs to flag: ${gaUpdates}`);
 
@@ -105,5 +107,7 @@ if (!APPLY) {
 console.log("\n🚧 applying…");
 if (ihUpdates > 0) await ihBatch.commit();
 if (gaUpdates > 0) await gaBatch.commit();
-console.log(`\n✅ done. injectionhistory: ${ihUpdates} updated, guestactivated: ${gaUpdates} updated`);
+console.log(
+  `\n✅ done. injectionhistory: ${ihUpdates} updated, guestactivated: ${gaUpdates} updated`,
+);
 Deno.exit(0);

@@ -8,10 +8,7 @@
 // dashboards that count legacy keys, we ALSO mirror writes into the landing
 // stage when appropriate.
 
-import {
-  auditDocPath,
-  auditStageDocPath,
-} from "@shared/firestore/paths.ts";
+import { auditDocPath, auditStageDocPath } from "@shared/firestore/paths.ts";
 import {
   type FirestoreClient,
   getFirestoreClient,
@@ -41,7 +38,9 @@ export interface SaveOpts {
   client?: FirestoreClient;
 }
 
-export async function saveAuditMarker(opts: SaveOpts): Promise<AuditSaveResult> {
+export async function saveAuditMarker(
+  opts: SaveOpts,
+): Promise<AuditSaveResult> {
   const client = opts.client ?? getFirestoreClient();
   const recordId = String(opts.recordId);
   const stage = sanitizeStage(opts.stage) ?? null;
@@ -56,7 +55,9 @@ export async function saveAuditMarker(opts: SaveOpts): Promise<AuditSaveResult> 
     meta: opts.meta,
   };
 
-  const targetPath = stage ? auditStageDocPath(stage, recordId) : auditDocPath(recordId);
+  const targetPath = stage
+    ? auditStageDocPath(stage, recordId)
+    : auditDocPath(recordId);
 
   if (override) {
     await client.set(targetPath, value as unknown as Record<string, unknown>);
@@ -85,7 +86,11 @@ export async function saveAuditMarker(opts: SaveOpts): Promise<AuditSaveResult> 
   }
 
   if (claimMode) {
-    const r = await claim(targetPath, value as unknown as Record<string, unknown>, client);
+    const r = await claim(
+      targetPath,
+      value as unknown as Record<string, unknown>,
+      client,
+    );
     if (r.created && (!stage || stage === "landing")) {
       await client.set(
         auditStageDocPath("landing", recordId),
@@ -144,7 +149,9 @@ export async function checkAuditMarker(opts: {
   const client = opts.client ?? getFirestoreClient();
   const recordId = String(opts.recordId);
   const stage = sanitizeStage(opts.stage) ?? null;
-  const path = stage ? auditStageDocPath(stage, recordId) : auditDocPath(recordId);
+  const path = stage
+    ? auditStageDocPath(stage, recordId)
+    : auditDocPath(recordId);
   const value = await client.get(path);
   const exists = value != null;
   const ts = value && typeof value === "object"

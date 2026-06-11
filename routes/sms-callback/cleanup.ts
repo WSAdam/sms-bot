@@ -17,10 +17,16 @@ import { normalizePhone } from "@shared/util/phone.ts";
 
 export const handler = define.handlers({
   async DELETE(ctx) {
-    const body = await ctx.req.json().catch(() => null) as { phone?: string } | null;
-    if (!body?.phone) return Response.json({ error: "Missing phone" }, { status: 400 });
+    const body = await ctx.req.json().catch(() => null) as
+      | { phone?: string }
+      | null;
+    if (!body?.phone) {
+      return Response.json({ error: "Missing phone" }, { status: 400 });
+    }
     const phone = normalizePhone(body.phone);
-    if (!phone) return Response.json({ error: "Invalid phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ error: "Invalid phone" }, { status: 400 });
+    }
 
     const db = getFirestoreClient();
 
@@ -33,12 +39,14 @@ export const handler = define.handlers({
     const categories: Record<string, number> = {};
     let total = 0;
 
-    for (const [name, path] of [
-      ["smsflowcontext", smsFlowContextDocPath(phone)],
-      ["leadpointer", leadPointerDocPath(phone)],
-      ["ratelimit", rateLimitDocPath(phone)],
-      ["scheduledinjection", scheduledInjectionDocPath(phone)],
-    ] as const) {
+    for (
+      const [name, path] of [
+        ["smsflowcontext", smsFlowContextDocPath(phone)],
+        ["leadpointer", leadPointerDocPath(phone)],
+        ["ratelimit", rateLimitDocPath(phone)],
+        ["scheduledinjection", scheduledInjectionDocPath(phone)],
+      ] as const
+    ) {
       try {
         await db.delete(path);
         categories[name] = 1;
@@ -53,9 +61,12 @@ export const handler = define.handlers({
     total += convoCount;
 
     // Lead history is a phone-prefixed subset of the orchestrator events collection.
-    const allEvents = await db.list(`${ROOT_COLLECTION}/orchestratorevents/byPhone`, {
-      limit: 500,
-    });
+    const allEvents = await db.list(
+      `${ROOT_COLLECTION}/orchestratorevents/byPhone`,
+      {
+        limit: 500,
+      },
+    );
     const events = allEvents.filter((e) => e.id.startsWith(`${phone}__`));
     await db.batch(
       events.map((e) => ({
@@ -66,6 +77,11 @@ export const handler = define.handlers({
     categories.lead_history = events.length;
     total += events.length;
 
-    return Response.json({ status: "success", phone, deleted: total, categories });
+    return Response.json({
+      status: "success",
+      phone,
+      deleted: total,
+      categories,
+    });
   },
 });

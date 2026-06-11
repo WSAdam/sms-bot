@@ -89,7 +89,9 @@ if (missing.length === 0) {
   Deno.exit(0);
 }
 if (!APPLY) {
-  console.log(`(DRY RUN — pass --apply to actually write ${missing.length} injectionhistory docs)`);
+  console.log(
+    `(DRY RUN — pass --apply to actually write ${missing.length} injectionhistory docs)`,
+  );
   Deno.exit(0);
 }
 

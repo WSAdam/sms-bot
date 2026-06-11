@@ -10,10 +10,7 @@ import {
   getCampaignConfig,
 } from "@shared/services/readymode/campaigns.ts";
 import { denormalize } from "@shared/services/readymode/mapping.ts";
-import {
-  injectLead,
-  scrubLead,
-} from "@shared/services/readymode/service.ts";
+import { injectLead, scrubLead } from "@shared/services/readymode/service.ts";
 import { getContext } from "@shared/services/sms-flow-context/service.ts";
 import {
   DialerDomain,
@@ -25,7 +22,10 @@ import { normalizePhone } from "@shared/util/phone.ts";
 export const handler = define.handlers({
   async POST(ctx) {
     const url = new URL(ctx.req.url);
-    const body = await ctx.req.json().catch(() => ({})) as Record<string, unknown>;
+    const body = await ctx.req.json().catch(() => ({})) as Record<
+      string,
+      unknown
+    >;
 
     const phoneInput = body.phone ?? body.phoneNumber ??
       url.searchParams.get("phone") ?? url.searchParams.get("phoneNumber");
@@ -38,7 +38,9 @@ export const handler = define.handlers({
       return Response.json({ error: "Missing phone number" }, { status: 400 });
     }
     const phone = normalizePhone(phoneInput);
-    if (!phone) return Response.json({ error: "Invalid phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ error: "Invalid phone" }, { status: 400 });
+    }
 
     const dispoLower = String(disposition).toLowerCase();
     if (dispoLower === "sale" || dispoLower === "booked") {
@@ -70,7 +72,10 @@ export const handler = define.handlers({
         ...(context as Record<string, unknown>),
         notes: `Returned from ODR - Dispo: ${disposition}`,
       } as unknown as StandardLead;
-      const dialerPayload = denormalize(source.domain as DialerDomain, standardLead);
+      const dialerPayload = denormalize(
+        source.domain as DialerDomain,
+        standardLead,
+      );
       try {
         await injectLead(
           dialerPayload as ReadymodeLeadDto,
@@ -79,7 +84,10 @@ export const handler = define.handlers({
         );
       } catch (e) {
         return Response.json(
-          { status: "error", message: `Inject failed: ${(e as Error).message}` },
+          {
+            status: "error",
+            message: `Inject failed: ${(e as Error).message}`,
+          },
           { status: 502 },
         );
       }
@@ -91,7 +99,10 @@ export const handler = define.handlers({
           timestamp: Date.now(),
         },
       });
-      return Response.json({ status: "success", message: "Returned to Source" });
+      return Response.json({
+        status: "success",
+        message: "Returned to Source",
+      });
     }
 
     // Standard recycle
@@ -102,13 +113,18 @@ export const handler = define.handlers({
       } catch (e) {
         console.error(`[dispo] MONSTER scrub failed: ${(e as Error).message}`);
       }
-      return Response.json({ status: "success", message: "Scrubbed (Unknown Campaign)" });
+      return Response.json({
+        status: "success",
+        message: "Scrubbed (Unknown Campaign)",
+      });
     }
 
     try {
       await scrubLead(phone, sourceConfig.domain, sourceConfig.id);
     } catch (e) {
-      console.warn(`[dispo] source scrub failed (non-fatal): ${(e as Error).message}`);
+      console.warn(
+        `[dispo] source scrub failed (non-fatal): ${(e as Error).message}`,
+      );
     }
 
     if (sourceConfig.recycleTarget) {
@@ -132,6 +148,9 @@ export const handler = define.handlers({
       }
     }
 
-    return Response.json({ status: "success", message: "Scrubbed (No recycle target)" });
+    return Response.json({
+      status: "success",
+      message: "Scrubbed (No recycle target)",
+    });
   },
 });

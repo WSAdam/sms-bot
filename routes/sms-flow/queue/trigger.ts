@@ -13,14 +13,27 @@ export const handler = define.handlers({
       | { type?: string; phone?: string }
       | null;
     if (body?.type !== "INJECT_APPT" || !body?.phone) {
-      return Response.json({ success: false, error: "Invalid message format" }, { status: 400 });
+      return Response.json(
+        { success: false, error: "Invalid message format" },
+        { status: 400 },
+      );
     }
     const phone = normalizePhone(body.phone);
-    if (!phone) return Response.json({ success: false, error: "Invalid phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ success: false, error: "Invalid phone" }, {
+        status: 400,
+      });
+    }
 
     handleDelayedInjection(phone).catch((e) => {
-      console.error(`[queue/trigger] async handler error: ${(e as Error).message}`);
+      console.error(
+        `[queue/trigger] async handler error: ${(e as Error).message}`,
+      );
     });
-    return Response.json({ success: true, phone, message: "Processing started" });
+    return Response.json({
+      success: true,
+      phone,
+      message: "Processing started",
+    });
   },
 });

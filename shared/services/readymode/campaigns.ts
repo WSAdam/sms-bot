@@ -1,6 +1,5 @@
 import { type CampaignConfig, DialerDomain } from "@shared/types/readymode.ts";
 
-
 export const CAMPAIGN_MASTER_MAP: Record<string, CampaignConfig> = {
   // ===========================================================================
   // ODR (Appointments / Inbound / Forms)

@@ -60,8 +60,11 @@ function parseArgs(rawArgs: string[]): Args {
   const out: Args = { dryRun: false, limit: 10000 };
   for (const a of rawArgs) {
     if (a === "--dry-run") out.dryRun = true;
-    else if (a.startsWith("--prefix=")) out.prefix = a.slice("--prefix=".length);
-    else if (a.startsWith("--limit=")) out.limit = parseInt(a.slice("--limit=".length), 10);
+    else if (a.startsWith("--prefix=")) {
+      out.prefix = a.slice("--prefix=".length);
+    } else if (a.startsWith("--limit=")) {
+      out.limit = parseInt(a.slice("--limit=".length), 10);
+    }
   }
   return out;
 }
@@ -113,15 +116,22 @@ function joinKeyParts(...parts: unknown[]): string {
   return parts.map((p) => sanitizeDocId(String(p ?? ""))).join("__");
 }
 
-async function fetchKvPrefix(prefix: string, limit: number): Promise<KvEntry[]> {
-  console.log(`🔍 [${prefix}] Fetching from ${SOURCE_KV_URL}/api/kv/list (limit=${limit})...`);
+async function fetchKvPrefix(
+  prefix: string,
+  limit: number,
+): Promise<KvEntry[]> {
+  console.log(
+    `🔍 [${prefix}] Fetching from ${SOURCE_KV_URL}/api/kv/list (limit=${limit})...`,
+  );
   const res = await fetch(`${SOURCE_KV_URL}/api/kv/list`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prefix: [prefix], limit }),
   });
   if (!res.ok) {
-    throw new Error(`KV list failed for "${prefix}": HTTP ${res.status} ${await res.text()}`);
+    throw new Error(
+      `KV list failed for "${prefix}": HTTP ${res.status} ${await res.text()}`,
+    );
   }
   const data = await res.json();
   const entries: KvEntry[] = data.entries ?? [];
@@ -138,7 +148,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "conversations": {
       const [phone10, callId, timestamp] = rest;
       return {
-        path: `${ROOT_COLLECTION}/conversations/messages/${joinKeyParts(phone10, callId, timestamp)}`,
+        path: `${ROOT_COLLECTION}/conversations/messages/${
+          joinKeyParts(phone10, callId, timestamp)
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -146,7 +158,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "scheduledinjection": {
       const [phone10] = rest;
       return {
-        path: `${ROOT_COLLECTION}/scheduledinjections/byPhone/${sanitizeDocId(String(phone10))}`,
+        path: `${ROOT_COLLECTION}/scheduledinjections/byPhone/${
+          sanitizeDocId(String(phone10))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -154,7 +168,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "smsflowcontext": {
       const [phone10] = rest;
       return {
-        path: `${ROOT_COLLECTION}/smsflowcontext/byPhone/${sanitizeDocId(String(phone10))}`,
+        path: `${ROOT_COLLECTION}/smsflowcontext/byPhone/${
+          sanitizeDocId(String(phone10))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -162,7 +178,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "guestactivated": {
       const [phone10] = rest;
       return {
-        path: `${ROOT_COLLECTION}/guestactivated/byPhone/${sanitizeDocId(String(phone10))}`,
+        path: `${ROOT_COLLECTION}/guestactivated/byPhone/${
+          sanitizeDocId(String(phone10))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -170,7 +188,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "guestanswered": {
       const [phone10] = rest;
       return {
-        path: `${ROOT_COLLECTION}/guestanswered/byPhone/${sanitizeDocId(String(phone10))}`,
+        path: `${ROOT_COLLECTION}/guestanswered/byPhone/${
+          sanitizeDocId(String(phone10))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -178,7 +198,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "audit": {
       const [recordId] = rest;
       return {
-        path: `${ROOT_COLLECTION}/audit/byRecordId/${sanitizeDocId(String(recordId))}`,
+        path: `${ROOT_COLLECTION}/audit/byRecordId/${
+          sanitizeDocId(String(recordId))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -192,7 +214,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "audit_stage": {
       const [stage, recordId] = rest;
       return {
-        path: `${ROOT_COLLECTION}/auditstage/${sanitizeDocId(String(stage))}/${sanitizeDocId(String(recordId))}`,
+        path: `${ROOT_COLLECTION}/auditstage/${sanitizeDocId(String(stage))}/${
+          sanitizeDocId(String(recordId))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -200,7 +224,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "saleswithin7d": {
       const [phone10] = rest;
       return {
-        path: `${ROOT_COLLECTION}/saleswithin7d/byPhone/${sanitizeDocId(String(phone10))}`,
+        path: `${ROOT_COLLECTION}/saleswithin7d/byPhone/${
+          sanitizeDocId(String(phone10))
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -208,7 +234,9 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "injectionhistory": {
       const [phone10, firedAt] = rest;
       return {
-        path: `${ROOT_COLLECTION}/injectionhistory/byPhone/${joinKeyParts(phone10, firedAt)}`,
+        path: `${ROOT_COLLECTION}/injectionhistory/byPhone/${
+          joinKeyParts(phone10, firedAt)
+        }`,
         data,
         sourceKey: entry.key,
       };
@@ -216,13 +244,19 @@ function transformEntry(entry: KvEntry): FirestoreWrite | null {
     case "config": {
       const [name] = rest;
       return {
-        path: `${ROOT_COLLECTION}/config/settings/${sanitizeDocId(String(name ?? "default"))}`,
+        path: `${ROOT_COLLECTION}/config/settings/${
+          sanitizeDocId(String(name ?? "default"))
+        }`,
         data,
         sourceKey: entry.key,
       };
     }
     default:
-      console.warn(`⚠️ Unknown prefix "${prefix}" — skipping (key=${JSON.stringify(entry.key)})`);
+      console.warn(
+        `⚠️ Unknown prefix "${prefix}" — skipping (key=${
+          JSON.stringify(entry.key)
+        })`,
+      );
       return null;
   }
 }
@@ -245,7 +279,9 @@ async function migratePrefix(prefix: string, limit: number, dryRun: boolean) {
     if (writes.length > 0) {
       console.log(`   Sample path: ${writes[0].path}`);
       const preview = JSON.stringify(writes[0].data).slice(0, 200);
-      console.log(`   Sample data: ${preview}${preview.length >= 200 ? "..." : ""}`);
+      console.log(
+        `   Sample data: ${preview}${preview.length >= 200 ? "..." : ""}`,
+      );
     }
     return { written: 0, skipped: writes.length };
   }
@@ -262,7 +298,9 @@ async function migratePrefix(prefix: string, limit: number, dryRun: boolean) {
       await batch.commit();
       written += chunk.length;
       const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-      console.log(`✅ [${prefix}] Batch ${batchNum} committed (${chunk.length} docs, total ${written}/${writes.length})`);
+      console.log(
+        `✅ [${prefix}] Batch ${batchNum} committed (${chunk.length} docs, total ${written}/${writes.length})`,
+      );
     } catch (err) {
       console.error(`❌ [${prefix}] Batch commit failed at offset ${i}:`, err);
       throw err;
@@ -297,7 +335,11 @@ async function main() {
 
   console.log(`🎉 Migration complete:`);
   for (const [p, t] of Object.entries(totals)) {
-    console.log(`   ${p.padEnd(20)} ${String(t.written).padStart(6)} written  ${String(t.skipped).padStart(6)} skipped`);
+    console.log(
+      `   ${p.padEnd(20)} ${String(t.written).padStart(6)} written  ${
+        String(t.skipped).padStart(6)
+      } skipped`,
+    );
   }
   Deno.exit(0);
 }

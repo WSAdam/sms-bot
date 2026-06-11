@@ -21,9 +21,25 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 Deno.test("storeMessage dedupes identical (callId, sender, message) writes", async () => {
   const mock = new FirestoreMock();
 
-  await storeMessage("8432222986", "call-1", "Guest", "sure", "Greeting", undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    "Greeting",
+    undefined,
+    mock,
+  );
   await tick();
-  await storeMessage("8432222986", "call-1", "Guest", "sure", "Option", undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    "Option",
+    undefined,
+    mock,
+  );
 
   assertEquals(countMessages(mock), 1);
 });
@@ -31,9 +47,25 @@ Deno.test("storeMessage dedupes identical (callId, sender, message) writes", asy
 Deno.test("storeMessage does not dedupe across different senders", async () => {
   const mock = new FirestoreMock();
 
-  await storeMessage("8432222986", "call-1", "Guest", "sure", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    undefined,
+    undefined,
+    mock,
+  );
   await tick();
-  await storeMessage("8432222986", "call-1", "AI Bot", "sure", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "AI Bot",
+    "sure",
+    undefined,
+    undefined,
+    mock,
+  );
 
   assertEquals(countMessages(mock), 2);
 });
@@ -41,9 +73,25 @@ Deno.test("storeMessage does not dedupe across different senders", async () => {
 Deno.test("storeMessage does not dedupe across different messages", async () => {
   const mock = new FirestoreMock();
 
-  await storeMessage("8432222986", "call-1", "Guest", "sure", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    undefined,
+    undefined,
+    mock,
+  );
   await tick();
-  await storeMessage("8432222986", "call-1", "Guest", "yeah", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "yeah",
+    undefined,
+    undefined,
+    mock,
+  );
 
   assertEquals(countMessages(mock), 2);
 });
@@ -51,9 +99,25 @@ Deno.test("storeMessage does not dedupe across different messages", async () => 
 Deno.test("storeMessage does not dedupe across different callIds", async () => {
   const mock = new FirestoreMock();
 
-  await storeMessage("8432222986", "call-1", "Guest", "sure", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    undefined,
+    undefined,
+    mock,
+  );
   await tick();
-  await storeMessage("8432222986", "call-2", "Guest", "sure", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-2",
+    "Guest",
+    "sure",
+    undefined,
+    undefined,
+    mock,
+  );
 
   assertEquals(countMessages(mock), 2);
 });
@@ -61,11 +125,35 @@ Deno.test("storeMessage does not dedupe across different callIds", async () => {
 Deno.test("getAllConversations returns only the requested phone's messages", async () => {
   const mock = new FirestoreMock();
 
-  await storeMessage("8432222986", "call-1", "Guest", "mine-1", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "mine-1",
+    undefined,
+    undefined,
+    mock,
+  );
   await tick();
-  await storeMessage("8432222986", "call-2", "AI Bot", "mine-2", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-2",
+    "AI Bot",
+    "mine-2",
+    undefined,
+    undefined,
+    mock,
+  );
   await tick();
-  await storeMessage("9999999999", "call-3", "Guest", "other-phone", undefined, undefined, mock);
+  await storeMessage(
+    "9999999999",
+    "call-3",
+    "Guest",
+    "other-phone",
+    undefined,
+    undefined,
+    mock,
+  );
 
   const got = await getAllConversations("8432222986", mock);
 
@@ -87,7 +175,15 @@ Deno.test("getAllConversations does NOT do a full-collection scan", async () => 
     return origList(parentPath, opts);
   };
 
-  await storeMessage("8432222986", "call-1", "Guest", "hi", undefined, undefined, mock);
+  await storeMessage(
+    "8432222986",
+    "call-1",
+    "Guest",
+    "hi",
+    undefined,
+    undefined,
+    mock,
+  );
   await tick();
   await getAllConversations("8432222986", mock);
 
@@ -98,11 +194,23 @@ Deno.test("storeMessage dedupe returns the original message (with original nodeT
   const mock = new FirestoreMock();
 
   const first = await storeMessage(
-    "8432222986", "call-1", "Guest", "sure", "Greeting", undefined, mock,
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    "Greeting",
+    undefined,
+    mock,
   );
   await tick();
   const second = await storeMessage(
-    "8432222986", "call-1", "Guest", "sure", "Option", undefined, mock,
+    "8432222986",
+    "call-1",
+    "Guest",
+    "sure",
+    "Option",
+    undefined,
+    mock,
   );
 
   assertEquals(second.timestamp, first.timestamp);

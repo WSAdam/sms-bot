@@ -5,10 +5,7 @@ import { define } from "@/utils.ts";
 import * as orchestrator from "@shared/services/orchestrator/service.ts";
 import { getCampaignConfig } from "@shared/services/readymode/campaigns.ts";
 import { denormalize } from "@shared/services/readymode/mapping.ts";
-import {
-  injectLead,
-  scrubLead,
-} from "@shared/services/readymode/service.ts";
+import { injectLead, scrubLead } from "@shared/services/readymode/service.ts";
 import { getContext } from "@shared/services/sms-flow-context/service.ts";
 import {
   DialerDomain,
@@ -28,19 +25,25 @@ async function handle(ctx: { req: Request }) {
   }
   phoneInput = phoneInput ?? url.searchParams.get("phone") ??
     url.searchParams.get("phoneNumber");
-  if (!phoneInput) return Response.json({ error: "Missing phone number" }, { status: 400 });
+  if (!phoneInput) {
+    return Response.json({ error: "Missing phone number" }, { status: 400 });
+  }
   const phone = normalizePhone(phoneInput);
   if (!phone) return Response.json({ error: "Invalid phone" }, { status: 400 });
 
   const pointer = await orchestrator.getPointer(phone);
   if (!pointer?.originalSource) {
-    return Response.json({ error: "No original source found for this lead" }, { status: 404 });
+    return Response.json({ error: "No original source found for this lead" }, {
+      status: 404,
+    });
   }
 
   try {
     await scrubLead(phone, DialerDomain.ODR);
   } catch (e) {
-    console.warn(`[return] ODR scrub failed (non-fatal): ${(e as Error).message}`);
+    console.warn(
+      `[return] ODR scrub failed (non-fatal): ${(e as Error).message}`,
+    );
   }
 
   const context = (await getContext(phone)) ?? {};
@@ -53,7 +56,10 @@ async function handle(ctx: { req: Request }) {
     ...(context as Record<string, unknown>),
     notes: "Returned from ODR",
   } as unknown as StandardLead;
-  const dialerPayload = denormalize(source.domain as DialerDomain, standardLead);
+  const dialerPayload = denormalize(
+    source.domain as DialerDomain,
+    standardLead,
+  );
 
   const injectResult = await injectLead(
     dialerPayload as ReadymodeLeadDto,

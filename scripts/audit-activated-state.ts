@@ -18,7 +18,9 @@ const app = initializeApp({
 const db = getFirestore(app);
 db.settings({ preferRest: true });
 
-async function loadIds(path: string): Promise<{ id: string; data: Record<string, unknown> }[]> {
+async function loadIds(
+  path: string,
+): Promise<{ id: string; data: Record<string, unknown> }[]> {
   const snap = await db.collection(path).get();
   return snap.docs.map((d) => ({ id: d.id, data: d.data() }));
 }
@@ -41,7 +43,9 @@ console.log("=== Counts ===");
 console.log(`guestactivated:     ${activated.length}`);
 console.log(`saleswithin7d:      ${within.length}`);
 console.log(`salesoutsidewindow: ${outside.length}`);
-console.log(`injectionhistory:   ${history.length} docs / ${phonesWithHistory.size} unique phones`);
+console.log(
+  `injectionhistory:   ${history.length} docs / ${phonesWithHistory.size} unique phones`,
+);
 console.log("");
 
 console.log("=== Activated guests (sorted by activatedAt) ===");
@@ -53,7 +57,9 @@ const sorted = activated.slice().sort((a, b) => {
 for (const a of sorted) {
   const d = a.data as Record<string, unknown>;
   console.log(
-    `${a.id}  activatedAt=${d.activatedAt ?? "?"}  matchReason=${d.matchReason ?? "?"}  office="${d.office ?? ""}"  activator="${d.activator ?? ""}"`,
+    `${a.id}  activatedAt=${d.activatedAt ?? "?"}  matchReason=${
+      d.matchReason ?? "?"
+    }  office="${d.office ?? ""}"  activator="${d.activator ?? ""}"`,
   );
 }
 console.log("");
@@ -62,7 +68,9 @@ console.log("=== Outside Window (could be claimed back) ===");
 for (const o of outside) {
   const d = o.data as Record<string, unknown>;
   console.log(
-    `${o.id}  activatedAt=${d.activatedAt ?? "?"}  daysOff=${d.closestDaysDiff ?? "?"}  office="${d.office ?? ""}"  activator="${d.activator ?? ""}"`,
+    `${o.id}  activatedAt=${d.activatedAt ?? "?"}  daysOff=${
+      d.closestDaysDiff ?? "?"
+    }  office="${d.office ?? ""}"  activator="${d.activator ?? ""}"`,
   );
 }
 console.log("");
@@ -83,7 +91,9 @@ console.log("");
 console.log(`=== Phones in outside-window AND have injection history ===`);
 for (const o of outside) {
   if (phonesWithHistory.has(o.id)) {
-    console.log(`  - ${o.id} (has injection history → real lead, candidate to claim)`);
+    console.log(
+      `  - ${o.id} (has injection history → real lead, candidate to claim)`,
+    );
   }
 }
 

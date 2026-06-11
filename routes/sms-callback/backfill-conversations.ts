@@ -13,7 +13,11 @@ export const handler = define.handlers({
       | { conversationIds?: string[] }
       | null;
     const ids = body?.conversationIds ?? [];
-    if (!ids.length) return Response.json({ error: "conversationIds required" }, { status: 400 });
+    if (!ids.length) {
+      return Response.json({ error: "conversationIds required" }, {
+        status: 400,
+      });
+    }
 
     const results: Record<string, string> = {};
     for (const conversationId of ids) {

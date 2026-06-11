@@ -70,7 +70,9 @@ export async function verifySession(
   }
   if (diff !== 0) return null;
   try {
-    const payload = JSON.parse(DEC.decode(b64urlDecode(body))) as SessionPayload;
+    const payload = JSON.parse(
+      DEC.decode(b64urlDecode(body)),
+    ) as SessionPayload;
     if (typeof payload.email !== "string" || !payload.email) return null;
     if (typeof payload.exp !== "number") return null;
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;

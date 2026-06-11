@@ -20,7 +20,9 @@ export const handler = define.handlers({
       | { hashes?: string[] }
       | null;
     if (!Array.isArray(body?.hashes)) {
-      return Response.json({ error: "Body must be {hashes: [hex,...]}" }, { status: 400 });
+      return Response.json({ error: "Body must be {hashes: [hex,...]}" }, {
+        status: 400,
+      });
     }
     const incoming = new Set(body!.hashes.map((h) => h.toLowerCase()));
     const db = getFirestoreClient();

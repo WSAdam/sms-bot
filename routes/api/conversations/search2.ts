@@ -14,16 +14,24 @@ export const handler = define.handlers({
     const contains = url.searchParams.get("contains");
     const limit = Number(url.searchParams.get("limit") ?? 200);
 
-    if (!phone) return Response.json({ error: "Missing phone" }, { status: 400 });
+    if (!phone) {
+      return Response.json({ error: "Missing phone" }, { status: 400 });
+    }
 
     const all = await getAllConversations(phone);
     const filtered = all.filter((m) => {
       if (callId && m.callId !== callId) return false;
-      if (sender && m.sender.toLowerCase() !== sender.toLowerCase()) return false;
-      if (nodeTag && (m.nodeTag ?? "").toLowerCase() !== nodeTag.toLowerCase()) {
+      if (sender && m.sender.toLowerCase() !== sender.toLowerCase()) {
         return false;
       }
-      if (contains && !m.message.toLowerCase().includes(contains.toLowerCase())) {
+      if (
+        nodeTag && (m.nodeTag ?? "").toLowerCase() !== nodeTag.toLowerCase()
+      ) {
+        return false;
+      }
+      if (
+        contains && !m.message.toLowerCase().includes(contains.toLowerCase())
+      ) {
         return false;
       }
       return true;

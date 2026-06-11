@@ -1,10 +1,7 @@
 // Maps inbound webhook payloads to a normalized StandardLead, and back to
 // per-domain Custom_XX field naming for outbound injection.
 
-import {
-  DialerDomain,
-  type StandardLead,
-} from "@shared/types/readymode.ts";
+import { DialerDomain, type StandardLead } from "@shared/types/readymode.ts";
 
 type FieldMap = Record<keyof StandardLead, string>;
 
@@ -158,9 +155,11 @@ export function normalize(
     for (const [standardField, rawField] of Object.entries(map)) {
       const value = rawData?.[rawField] ?? rawData?.[`lead[0][${rawField}]`];
       if (!nonEmpty(value)) continue;
-      if (standardField === "reservationId") lead[standardField] = String(value);
-      else if (standardField === "phone") lead[standardField] = cleanPhone(value);
-      else lead[standardField] = value;
+      if (standardField === "reservationId") {
+        lead[standardField] = String(value);
+      } else if (standardField === "phone") {
+        lead[standardField] = cleanPhone(value);
+      } else lead[standardField] = value;
     }
   }
 

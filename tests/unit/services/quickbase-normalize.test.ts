@@ -88,7 +88,10 @@ Deno.test("normalizeBookingRowsDetailed falls back to label match when type miss
 
 Deno.test("normalizeBookingRowsDetailed falls back to legacy 48/-1 when no metadata", () => {
   const resp: QuickbaseReportResponse = {
-    data: [{ "48": { value: "(555) 999-1234" }, "-1": { value: "2026-04-01" } }],
+    data: [{
+      "48": { value: "(555) 999-1234" },
+      "-1": { value: "2026-04-01" },
+    }],
   };
   const result = normalizeBookingRowsDetailed(resp);
   assertEquals(result.phoneFieldId, "48");
