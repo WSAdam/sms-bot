@@ -388,11 +388,22 @@ Sections:
 ```bash
 deno task dev          # Fresh on port 5173/5174 with --env-file=env/local
 deno task tunnel --env=dev    # ngrok exposing the dev server
-deno task test         # 109 unit tests (all mocked)
+deno task test         # 126 unit tests (all mocked)
 deno task build        # Vite production build
 deno task migrate      # KV → Firestore one-shot
 deno task shape-check  # ignore output, structure incompatible with Fresh
+deno fmt               # auto-format; deno task check = fmt --check + lint + check
 ```
+
+**Formatting** — `deno fmt`/lint/check skip `**/_fresh/*` and
+`_source-omnisource/` (archived NestJS reference dump, not valid Deno) via the
+`exclude` list in `deno.json`. A tracked pre-commit hook
+(`.githooks/pre-commit`) blocks commits containing unformatted code; enable it
+once per clone with `git config core.hooksPath .githooks`. Nothing else enforces
+fmt (no CI), so the hook is the guard against drift. Note `deno task
+check`'s
+lint step still reports pre-existing `no-unused-vars`/`no-explicit-any` debt
+(mostly `_legacy-main.ts`) — separate from formatting.
 
 `env/local` is gitignored (`env/example` is the template). Both `data/` and
 `env/` are gitignored except `data/*.example` (ngrok yaml templates) and
@@ -765,6 +776,34 @@ catch sites (deferred — a hot-path change).
 
 **Env:** `CANARY_SECRET` (fail-closed if unset). The monitor sends it as the
 bearer header; the same value is set in Deno Deploy settings.
+
+### 0.17 Performance profiling (June 2026)
+
+`withTiming(label, fn, thresholdMs = 1000)` in
+[shared/util/timing.ts](shared/util/timing.ts) wraps an async call and logs
+`⏱️  [FS-PROFILE] <label> took <ms>ms (ok|err)` **only when** it exceeds the
+threshold (default 1s), so the happy path stays quiet and prod logs pinpoint
+which call is slow instead of guessing from generic abort errors. Grep Deno
+Deploy logs for `FS-PROFILE` to find the offenders.
+
+Wired in at the **leaf I/O boundaries**, which transitively covers every
+higher-level repository/service function (no per-function instrumentation, no
+double-logging):
+
+- **Firestore** — all 9 `FirebaseAdminClient` methods in
+  [shared/firestore/wrapper.ts](shared/firestore/wrapper.ts)
+  (get/set/delete/list/batch/atomicCreate/incrementField/setMerge/
+  transactionalUpdate), each labeled with its doc/collection path
+  (`firestore.get <path>`).
+- **Bland** — `sendSms`, `getConversation`, and the per-page cursor fetch in
+  [shared/services/bland/client.ts](shared/services/bland/client.ts).
+- **ReadyMode TPI** — the shared `httpGetJson` leaf in
+  [shared/services/readymode/tpi-client.ts](shared/services/readymode/tpi-client.ts),
+  labeled by URL path (covers all callers incl. `fetchAttemptsFromTpi`).
+- **Quickbase** — the per-attempt `fetch` in `queryRecords`/`upsertRecords`
+  ([shared/services/quickbase/api.ts](shared/services/quickbase/api.ts)), scoped
+  to the network round-trip so the 2s/5s/10s retry backoff is **not** counted
+  (see the AbortError gotcha in §0.2).
 
 ---
 
