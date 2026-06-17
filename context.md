@@ -398,7 +398,7 @@ Sections:
 ```bash
 deno task dev          # Fresh on port 5173/5174 with --env-file=env/local
 deno task tunnel --env=dev    # ngrok exposing the dev server
-deno task test         # 126 unit tests (all mocked)
+deno task test         # 142 unit tests (all mocked)
 deno task build        # Vite production build
 deno task migrate      # KV → Firestore one-shot
 deno task shape-check  # ignore output, structure incompatible with Fresh
@@ -508,7 +508,7 @@ truly safe re-runs. Not built yet.
 
 ### 0.12 What's NOT done (vs. original plan)
 
-- **Emulator tests** (`tests/emulator/*`) — never built. All 109 tests are
+- **Emulator tests** (`tests/emulator/*`) — never built. All 142 tests are
   unit + mocked. The `deno task test:emulator` task in `deno.json` still points
   at the missing dir; left in place but harmless if not invoked.
 - **MostRecentPackage QB fields** — `MostRecentPackageIdDateOfBooking`,

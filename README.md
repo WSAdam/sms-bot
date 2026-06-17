@@ -12,7 +12,7 @@ One Deno Deploy app (Fresh framework, Firestore-backed). Production:
 
 Read [context.md](context.md) first — that's the canonical source of truth
 covering architecture decisions, env vars, endpoints, scheduled jobs, gotchas,
-and the May 2026 safety stack. Sections §0.1 through §0.14 are kept current; the
+and the May 2026 safety stack. Sections §0.1 through §0.18 are kept current; the
 rest is historical.
 
 For operational incidents and fixes see:
@@ -38,7 +38,7 @@ Firebase service-account JSON at the path in `GOOGLE_APPLICATION_CREDENTIALS`.
 deno task test
 ```
 
-124 unit tests, all mocked Firestore + Bland. No emulator tests.
+142 unit tests, all mocked Firestore + Bland. No emulator tests.
 
 ## Type-check + build
 
