@@ -333,13 +333,21 @@ surfaces stale crons within hours rather than days.
   Bland conversation from the previous ET day + chained
   `scanConversationsForBookings` over that window. Catches webhook gaps and
   surfaces any booking signal Cal.com missed.
-- **`nightly-report`** — `15 8 * * *` UTC = 4:15 AM EDT / 3:15 AM EST. Sends the
-  daily Postmark email summary. Was every-minute with a
-  `cronConfig.report.timeOfDayEt` field for live-editable send time; refactored
-  2026-05-26 to a fixed schedule. The `cronConfig.report.timeOfDayEt` field is
-  vestigial (no longer read). `cronConfig.report.enabled` is still respected as
-  a kill-switch, and `cronConfig.report.lastSentEtDate` enforces
-  exactly-once-per-day.
+- **`nightly-report`** — `15 10 * * *` UTC = 6:15 AM EDT / 5:15 AM EST. Sends
+  the daily Postmark email summary. Leads with a **"Yesterday" funnel** (SMS
+  sent, calls scheduled, calls answered, bookings) read from a single
+  `metrics/daily/{yesterday}` doc, above the existing week-to-date / lifetime
+  totals. Fires at 6:15 AM (not 4:15) **on purpose**: yesterday's `answered` and
+  `activations` aren't fully collected until `daily-qb-sale-match` (09:00 UTC)
+  and `readymode-daily-pull` (09:30 UTC) run, so an earlier fire left those two
+  numbers empty. Was every-minute with a `cronConfig.report.timeOfDayEt` field
+  for live-editable send time; refactored 2026-05-26 to a fixed schedule. The
+  `cronConfig.report.timeOfDayEt` field is vestigial (no longer read).
+  `cronConfig.report.enabled` is still respected as a kill-switch, and
+  `cronConfig.report.lastSentEtDate` enforces exactly-once-per-day.
+  `GET|POST /api/report/nightly?force=1` test-sends past the `enabled`
+  kill-switch (never stamps `lastSentEtDate`, so it won't suppress the real
+  cron).
 - **`daily-qb-sale-match`** — `0 9 * * *` UTC = 5 AM EDT / 4 AM EST. Pulls
   today's Quickbase report (id 678 by default, set in
   `cronConfig.qbSaleMatch.reportId`) and writes `saleswithin7d` markers for any
@@ -347,7 +355,9 @@ surfaces stale crons within hours rather than days.
   matching QB sale.
 - **`readymode-daily-pull`** — `30 9 * * *` UTC = 5:30 AM EDT. Logs into the
   ReadyMode portal, pages through yesterday's full call log, writes
-  `calldispositions`, upserts `guestanswered` for non-No-Answer calls. RM
+  `calldispositions`, upserts `guestanswered` for non-No-Answer calls, and
+  increments the per-ET-day `metrics/daily.answered` counter (bucketed by the
+  answered call's day, delta-applied so re-imports don't double-count). RM
   enforces single-session-per-user, so this kicks Adam's own RM session if he's
   logged in at the time.
 
@@ -805,6 +815,41 @@ double-logging):
   to the network round-trip so the 2s/5s/10s retry backoff is **not** counted
   (see the AbortError gotcha in §0.2).
 
+### 0.18 Nightly report — daily funnel + retime (June 2026)
+
+The daily Postmark report ("the 4:15 email") was reworked to lead with the four
+numbers that matter for the prior ET day, and retimed so those numbers are
+actually settled when it fires.
+
+- **Yesterday funnel block** in
+  [shared/services/report/nightly.ts](shared/services/report/nightly.ts): SMS
+  sent → calls scheduled → calls answered → bookings, all read from a single
+  `metrics/daily/{yesterday}` doc (one `db.get`, no scans). Mapping: `textsSent`
+  → SMS sent, `apptsBooked` → calls scheduled, `answered` → calls answered,
+  `activations` → bookings. The existing week-to-date / lifetime table is kept
+  below it. Note the four counters use **different event clocks** (sends,
+  bookings, calls, sales each bucket by their own day), so a day's `answered`
+  can exceed its `scheduled` — the `answered ⊆ booked` invariant only holds
+  lifetime.
+- **New write-side `answered` counter.** There was no per-day answered counter;
+  added one in
+  [shared/services/readymode/import-dispositions.ts](shared/services/readymode/import-dispositions.ts),
+  mirroring the sale-match activations counter: fire-and-forget **after** the
+  batch commit, bucketed by the ET day of the answered call. It applies
+  **deltas, not events** — a re-import that surfaces an earlier `answeredAt`
+  moves the count between days (+1 new / −1 old) instead of double-counting;
+  lifetime only bumps on a first-ever answer. Backfill historical days with
+  `scripts/backfill-daily-answered.ts` (recomputes from `guestanswered`; uses
+  `setMerge` so it never clobbers the other daily counters).
+- **Retimed `15 8 * * *` → `15 10 * * *`** (4:15 → 6:15 AM ET) in `main.ts`, so
+  the report fires after `daily-qb-sale-match` (09:00 UTC) and
+  `readymode-daily-pull` (09:30 UTC) populate yesterday's bookings + answered.
+- **`?force=1`** on `/api/report/nightly` test-sends past the `enabled`
+  kill-switch without stamping `lastSentEtDate`.
+- **Log noise:** the every-minute `⏰ sweep: scanned=0 …` no-op line is now
+  suppressed (only logs when the sweep did work or errored); the per-minute
+  `[cron-tick]` heartbeat is deliberately kept as the liveness signal.
+
 ---
 
 ## 1. Project goals
@@ -1058,10 +1103,11 @@ sms-bot (collection)
 │       └── {phone10}
 │              { phone10, Activated: true, activatedAt, eventTime }
 │
-├── guestanswered (doc)
-│   └── byPhone (subcollection)
-│       └── {phone10}
-│              { phone10, answered: true, answeredAt }
+├── guestanswered (doc)                           ← one doc per phone whose
+│   └── byPhone (subcollection)                     dialer call connected.
+│       └── {phone10}                               answeredAt also drives
+│              { phone10, answered: true,           metrics/daily.answered.
+│                answeredAt, source?, lastDisposition? }
 │
 ├── audit (doc)                                   ← legacy "global" audit keys
 │   └── byRecordId (subcollection)
@@ -1134,11 +1180,15 @@ sms-bot (collection)
 │   ├── daily (subcollection)                       counters for the
 │   │   └── {YYYY-MM-DD}                            morning report.
 │   │          { apptsBooked, activations,          Incremented at every
-│   │            textsSent, updatedAt }             write site (atomic
+│   │            answered, textsSent, updatedAt }   write site (atomic
 │   └── lifetime (subcollection)                    FieldValue.increment).
 │       └── totals                                  Report reads, never
-│              { apptsBooked, activations,          scans.
-│                textsSent, updatedAt }
+│              { apptsBooked, activations,          scans. `answered` is
+│                answered, textsSent, updatedAt }   bucketed by the ET day
+│                                                   of the answered call
+│                                                   (readymode-daily-pull);
+│                                                   the others by their own
+│                                                   write site's day.
 │
 ├── abtest (doc)
 │   └── byPhone (subcollection)
