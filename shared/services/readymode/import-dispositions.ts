@@ -12,10 +12,13 @@ import {
   guestActivatedCollection,
   guestAnsweredDocPath,
   injectionHistoryCollection,
+  metricsDailyDocPath,
+  metricsLifetimeDocPath,
   scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
 import { type BatchOp, getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import type { DialerCallRow } from "@shared/services/readymode/portal-client.ts";
+import { easternDateString } from "@shared/util/time.ts";
 
 // "Did this call connect with a human?" — substring match catches the
 // literal "No Answer" plus team-prefixed variants RM uses ("ODR No Answer",
@@ -134,6 +137,11 @@ export async function importDailyDispositions(
   const existing = await Promise.all(
     phones.map((p) => db.get(guestAnsweredDocPath(p))),
   );
+  // `answered` daily-counter deltas, bucketed by the ET day of the answered
+  // call. firstEver feeds the lifetime counter; the per-day map handles the
+  // re-import case where a phone's earliest answer moves to an earlier day.
+  const answeredDayDelta = new Map<string, number>();
+  let answeredFirstEver = 0;
   for (let i = 0; i < phones.length; i++) {
     const phone10 = phones[i];
     if (!inFunnel.has(phone10)) {
@@ -146,6 +154,21 @@ export async function importDailyDispositions(
     if (curAt && curAt <= newAt) {
       summary.answeredAlreadyEarlier++;
       continue;
+    }
+    // Counter bookkeeping (we only reach here on a first-ever answer or an
+    // earlier-than-stored answer — the `curAt <= newAt` short-circuit above
+    // already returned). First-ever = +1 on its day + lifetime. Moved-earlier
+    // across ET days = +1 new day, −1 old day, no lifetime change.
+    const newDay = easternDateString(new Date(newAt));
+    if (!curAt) {
+      answeredFirstEver++;
+      answeredDayDelta.set(newDay, (answeredDayDelta.get(newDay) ?? 0) + 1);
+    } else {
+      const oldDay = easternDateString(new Date(curAt));
+      if (oldDay !== newDay) {
+        answeredDayDelta.set(newDay, (answeredDayDelta.get(newDay) ?? 0) + 1);
+        answeredDayDelta.set(oldDay, (answeredDayDelta.get(oldDay) ?? 0) - 1);
+      }
     }
     // Find the disposition that corresponds to the earliest answered call
     // in this batch (for the lastDisposition snapshot).
@@ -171,6 +194,45 @@ export async function importDailyDispositions(
       `[rm-import] committing ${ops.length} writes (${summary.dispositionsWritten} dispositions, ${summary.answeredUpserted} answered upserts)`,
     );
     await db.batch(ops);
+  }
+
+  // `answered` daily + lifetime counters (powers the nightly report's "calls
+  // answered" stat). Fire-and-forget AFTER the batch commit — a counter
+  // failure must never block the disposition/answered writes. Same fail-safe
+  // posture as the sale-match activations counter.
+  const answeredDayEntries = Array.from(answeredDayDelta.entries()).filter(
+    ([, n]) => n !== 0,
+  );
+  if (answeredDayEntries.length > 0 || answeredFirstEver > 0) {
+    const nowIso = new Date().toISOString();
+    try {
+      await Promise.all([
+        ...answeredDayEntries.flatMap(([day, n]) => [
+          db.incrementField(metricsDailyDocPath(day), { answered: n }),
+          db.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
+        ]),
+        ...(answeredFirstEver > 0
+          ? [
+            db.incrementField(metricsLifetimeDocPath(), {
+              answered: answeredFirstEver,
+            }),
+            db.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
+          ]
+          : []),
+      ]);
+      console.log(
+        `[rm-import] answered counters: +${answeredFirstEver} (lifetime), days=${
+          answeredDayEntries.map(([d, n]) => `${d}:${n >= 0 ? "+" : ""}${n}`)
+            .join(",") || "(none)"
+        }`,
+      );
+    } catch (e) {
+      console.warn(
+        `[rm-import] answered counter writes failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
   }
 
   console.log(

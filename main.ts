@@ -89,9 +89,14 @@ if (
           return;
         }
         const r = await sweepScheduledInjections("cron");
-        console.log(
-          `⏰ sweep: scanned=${r.scanned} fired=${r.fired} skipped=${r.skipped} errors=${r.errors.length}`,
-        );
+        // Only log when the sweep actually did something. A no-op tick
+        // every minute floods the logs; the `[cron-tick]` heartbeat above
+        // still proves the handler fired on quiet minutes.
+        if (r.scanned > 0 || r.fired > 0 || r.errors.length > 0) {
+          console.log(
+            `⏰ sweep: scanned=${r.scanned} fired=${r.fired} skipped=${r.skipped} errors=${r.errors.length}`,
+          );
+        }
       });
     } catch (e) {
       console.error(`❌ sweep failed: ${(e as Error).message}`);
@@ -155,17 +160,21 @@ if (
     }
   });
 
-  // Once a day at 08:15 UTC = 4:15 AM EDT (3:15 AM EST). The
-  // every-minute "live-editable send time" schedule was retired
-  // 2026-05-26 — it cluttered the Cron tab with 1,440 invocations/
-  // day. Changing the time now requires a code change + redeploy.
-  // `cronConfig.report.lastSentEtDate` is kept as an idempotency
-  // belt against duplicate fires (Deno Deploy retries, manual
-  // "Run Now" clicks). `cronConfig.report.timeOfDayEt` is now
-  // ignored by this handler but left in the type for backward
-  // compat with existing Firestore docs.
+  // Once a day at 10:15 UTC = 6:15 AM EDT (5:15 AM EST). Fires AFTER the
+  // overnight data pulls — daily-qb-sale-match (09:00 UTC) and
+  // readymode-daily-pull (09:30 UTC) — so the report's "Yesterday" funnel
+  // sees fully-settled bookings (activations) + calls answered. It used to
+  // run at 08:15 UTC / 4:15 AM ET, but that was before both pulls, which
+  // left yesterday's answered + bookings empty. The every-minute
+  // "live-editable send time" schedule was retired 2026-05-26 — it
+  // cluttered the Cron tab with 1,440 invocations/day. Changing the time
+  // now requires a code change + redeploy. `cronConfig.report.lastSentEtDate`
+  // is kept as an idempotency belt against duplicate fires (Deno Deploy
+  // retries, manual "Run Now" clicks). `cronConfig.report.timeOfDayEt` is
+  // now ignored by this handler but left in the type for backward compat
+  // with existing Firestore docs.
 
-  Deno.cron("nightly-report", "15 8 * * *", async () => {
+  Deno.cron("nightly-report", "15 10 * * *", async () => {
     console.log(
       `[cron-tick] nightly-report ${new Date().toISOString()}`,
     );
@@ -186,6 +195,9 @@ if (
         await setCronConfig({ report: { lastSentEtDate: todayEt } });
         console.log(
           `⏰ daily report sent: date=${r.date} ` +
+            `yesterday(${r.counts.yesterdayDate}) sms=${r.counts.ydSmsSent} ` +
+            `scheduled=${r.counts.ydCallsScheduled} answered=${r.counts.ydCallsAnswered} ` +
+            `bookings=${r.counts.ydBookings} | ` +
             `texts wtd=${r.counts.textsSentWtd}/lt=${r.counts.textsSentLifetime} ` +
             `appts wtd=${r.counts.apptsBookedWtd}/lt=${r.counts.apptsBookedLifetime} ` +
             `acts wtd=${r.counts.activationsWtd}/lt=${r.counts.activationsLifetime}`,

@@ -47,6 +47,14 @@ export interface DailyReportCounts {
   apptsBookedLifetime: number;
   activationsWtd: number;
   activationsLifetime: number;
+  // Yesterday's funnel — the most recent fully-settled ET day at the
+  // 6:15 AM fire (answered + bookings finish collecting that morning).
+  // All four read from the single metrics/daily/{yesterday} counter doc.
+  yesterdayDate: string;
+  ydSmsSent: number; // metrics/daily.textsSent (raw outbound)
+  ydCallsScheduled: number; // metrics/daily.apptsBooked
+  ydCallsAnswered: number; // metrics/daily.answered
+  ydBookings: number; // metrics/daily.activations
 }
 
 export interface NightlyReportResult {
@@ -86,17 +94,19 @@ async function build(reportDate: string): Promise<{
   const db = getFirestoreClient();
   const currentWeekKey = easternMondayDateString();
   const wtdDays = weekToDateEtDays(reportDate);
+  const yesterdayDate = yesterdayEasternDateString();
 
   // All reads run in parallel — total cost is bounded by 1 lifetime doc
-  // + 7 daily docs + uniquerecipientbyphone (the lifetime unique count)
-  // + weeklyrecipientbyphoneweek filtered to the current week. The
-  // unique-recipient collections are the only multi-doc reads and they
-  // both have indexed where/list. No more full-table scans.
+  // + 7 daily docs + the yesterday daily doc + uniquerecipientbyphone (the
+  // lifetime unique count) + weeklyrecipientbyphoneweek filtered to the
+  // current week. The unique-recipient collections are the only multi-doc
+  // reads and they both have indexed where/list. No more full-table scans.
   const [
     lifetimeDoc,
     dailyDocs,
     lifetimeRecipientDocs,
     wtdRecipientDocs,
+    yesterdayDoc,
   ] = await Promise.all([
     db.get(metricsLifetimeDocPath()),
     Promise.all(wtdDays.map((d) => db.get(metricsDailyDocPath(d)))),
@@ -105,11 +115,14 @@ async function build(reportDate: string): Promise<{
       where: { field: "weekKey", op: "==", value: currentWeekKey },
       limit: 200_000,
     }),
+    db.get(metricsDailyDocPath(yesterdayDate)),
   ]);
 
   function num(v: unknown): number {
     return typeof v === "number" && Number.isFinite(v) ? v : 0;
   }
+
+  const yd = (yesterdayDoc ?? {}) as Record<string, unknown>;
 
   // WTD sums from daily docs.
   let apptsBookedWtd = 0;
@@ -126,6 +139,11 @@ async function build(reportDate: string): Promise<{
     apptsBookedLifetime: num(lifetimeDoc?.apptsBooked),
     activationsWtd,
     activationsLifetime: num(lifetimeDoc?.activations),
+    yesterdayDate,
+    ydSmsSent: num(yd.textsSent),
+    ydCallsScheduled: num(yd.apptsBooked),
+    ydCallsAnswered: num(yd.answered),
+    ydBookings: num(yd.activations),
   };
 
   const rows: Array<[string, number, number]> = [
@@ -138,7 +156,38 @@ async function build(reportDate: string): Promise<{
     ["Activations", counts.activationsWtd, counts.activationsLifetime],
   ];
 
+  // Yesterday's funnel: SMS sent → calls scheduled → calls answered →
+  // bookings. These count distinct event clocks (sends/bookings/calls/sales
+  // all on different days), so "answered" can exceed "scheduled" on a given
+  // day — that's expected, don't read it as a same-cohort funnel.
+  const ydRows: Array<[string, number]> = [
+    ["SMS sent", counts.ydSmsSent],
+    ["Calls scheduled", counts.ydCallsScheduled],
+    ["Calls answered", counts.ydCallsAnswered],
+    ["Bookings", counts.ydBookings],
+  ];
+
   const fmt = (n: number) => n.toLocaleString("en-US");
+
+  const ydHtml = `
+    <h3 style="margin:0 0 4px 0;font-size:1.05rem">Yesterday</h3>
+    <p style="margin:0 0 10px 0;color:#666;font-size:.8rem">${counts.yesterdayDate} ET</p>
+    <table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:.95rem;margin-bottom:22px">
+      <tbody>
+        ${
+    ydRows
+      .map(([label, v]) =>
+        `<tr>
+          <td style="border-bottom:1px solid #eee">${label}</td>
+          <td style="border-bottom:1px solid #eee;text-align:right"><b>${
+          fmt(v)
+        }</b></td>
+        </tr>`
+      )
+      .join("")
+  }
+      </tbody>
+    </table>`;
 
   const html =
     `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#fafafa;padding:24px;color:#222">
@@ -148,6 +197,8 @@ async function build(reportDate: string): Promise<{
     </p>
     <h2 style="margin:0 0 4px 0;font-size:1.25rem">Daily morning report</h2>
     <p style="margin:0 0 18px 0;color:#666;font-size:.85rem">${reportDate} ET</p>
+    ${ydHtml}
+    <h3 style="margin:0 0 8px 0;font-size:1.05rem">Totals</h3>
     <table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:.95rem">
       <thead>
         <tr>
@@ -181,6 +232,12 @@ async function build(reportDate: string): Promise<{
     `Daily morning report — ${reportDate} ET`,
     `Dashboard: ${DASHBOARD_URL}`,
     ``,
+    `Yesterday — ${counts.yesterdayDate} ET`,
+    ...ydRows.map(([label, v]) =>
+      `${label.padEnd(20)}${String(fmt(v)).padStart(8)}`
+    ),
+    ``,
+    `Totals`,
     `                              Week to date    Lifetime`,
     ...rows.map(([label, wtd, lt]) =>
       `${label.padEnd(34)}${String(fmt(wtd)).padStart(8)}${
@@ -215,6 +272,11 @@ export async function runNightlyReport(
         apptsBookedLifetime: 0,
         activationsWtd: 0,
         activationsLifetime: 0,
+        yesterdayDate: yesterdayEasternDateString(),
+        ydSmsSent: 0,
+        ydCallsScheduled: 0,
+        ydCallsAnswered: 0,
+        ydBookings: 0,
       },
       skipped: true,
       reason: "disabled in cron config",
@@ -232,6 +294,9 @@ export async function runNightlyReport(
 
   console.log(
     `[report] ✅ sent to "${cfg.recipients}" — ` +
+      `yesterday(${r.counts.yesterdayDate}) sms=${r.counts.ydSmsSent} ` +
+      `scheduled=${r.counts.ydCallsScheduled} answered=${r.counts.ydCallsAnswered} ` +
+      `bookings=${r.counts.ydBookings} | ` +
       `texts wtd=${r.counts.textsSentWtd}/lt=${r.counts.textsSentLifetime} ` +
       `appts wtd=${r.counts.apptsBookedWtd}/lt=${r.counts.apptsBookedLifetime} ` +
       `acts wtd=${r.counts.activationsWtd}/lt=${r.counts.activationsLifetime}`,
