@@ -843,10 +843,17 @@ actually settled when it fires.
   pre-counter answer can't drive an old day below zero before the backfill seeds
   it. Backfill historical days with `scripts/backfill-daily-answered.ts`
   (recomputes from `guestanswered`; uses `setMerge` so it never clobbers the
-  other daily counters).
+  other daily counters, and **skips the current ET day** — that's owned by the
+  live forward counter, so overwriting it with a mid-day snapshot would
+  transiently undercount). `bucketDay`/`runBackfill` are exported and
+  unit-tested
+  ([tests/unit/scripts/backfill-daily-answered.test.ts](tests/unit/scripts/backfill-daily-answered.test.ts)).
 - **Retimed `15 8 * * *` → `15 10 * * *`** (4:15 → 6:15 AM ET) in `main.ts`, so
   the report fires after `daily-qb-sale-match` (09:00 UTC) and
   `readymode-daily-pull` (09:30 UTC) populate yesterday's bookings + answered.
+  The report derives "Yesterday" from its `reportDate` (not the wall clock), so
+  an ad-hoc `?date=` back-fill run reports the day before that date and keeps
+  the header + funnel block aligned.
 - **`?force=1`** on `/api/report/nightly` test-sends past the `enabled`
   kill-switch without stamping `lastSentEtDate`.
 - **Log noise:** the every-minute `⏰ sweep: scanned=0 …` no-op line is now

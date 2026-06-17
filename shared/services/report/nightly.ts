@@ -86,6 +86,20 @@ function weekToDateEtDays(today: string = easternDateString()): string[] {
   return days;
 }
 
+// The ET day before a given YYYY-MM-DD, via pure UTC date arithmetic (the
+// wall-clock offset doesn't matter for date-component math on an ET string).
+// Derived from reportDate — NOT the clock — so an ad-hoc ?date= back-fill run
+// reports the day before THAT date, keeping the email header and the
+// "Yesterday" block aligned.
+function etDayBefore(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map((s) => Number(s));
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return `${dt.getUTCFullYear()}-${
+    String(dt.getUTCMonth() + 1).padStart(2, "0")
+  }-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
 async function build(reportDate: string): Promise<{
   html: string;
   text: string;
@@ -94,7 +108,7 @@ async function build(reportDate: string): Promise<{
   const db = getFirestoreClient();
   const currentWeekKey = easternMondayDateString();
   const wtdDays = weekToDateEtDays(reportDate);
-  const yesterdayDate = yesterdayEasternDateString();
+  const yesterdayDate = etDayBefore(reportDate);
 
   // All reads run in parallel — total cost is bounded by 1 lifetime doc
   // + 7 daily docs + the yesterday daily doc + uniquerecipientbyphone (the
@@ -266,7 +280,7 @@ export async function runNightlyReport(
         apptsBookedLifetime: 0,
         activationsWtd: 0,
         activationsLifetime: 0,
-        yesterdayDate: yesterdayEasternDateString(),
+        yesterdayDate: etDayBefore(reportDate),
         ydSmsSent: 0,
         ydCallsScheduled: 0,
         ydCallsAnswered: 0,

@@ -205,32 +205,31 @@ export async function importDailyDispositions(
   );
   if (answeredDayEntries.length > 0 || answeredFirstEver > 0) {
     const nowIso = new Date().toISOString();
+    // Apply one day's delta. Positive = a plain atomic increment + stamp.
+    // Negative (a re-import moved an answer off this day) clamps at 0 via a
+    // transactional read+write — a day whose original answer predates this
+    // counter was never incremented, so a blind −1 would drive it negative
+    // until the backfill seeds it.
+    const applyAnsweredDelta = (day: string, n: number) =>
+      n > 0
+        ? Promise.all([
+          db.incrementField(metricsDailyDocPath(day), { answered: n }),
+          db.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
+        ])
+        : db.transactionalUpdate(metricsDailyDocPath(day), (cur) => {
+          const prevRaw = cur?.answered;
+          const prev = typeof prevRaw === "number" && Number.isFinite(prevRaw)
+            ? prevRaw
+            : 0;
+          return {
+            ...(cur ?? {}),
+            answered: Math.max(0, prev + n),
+            updatedAt: nowIso,
+          };
+        });
     try {
       await Promise.all([
-        ...answeredDayEntries.map(([day, n]) =>
-          n > 0
-            // Positive delta: a plain atomic increment + stamp.
-            ? Promise.all([
-              db.incrementField(metricsDailyDocPath(day), { answered: n }),
-              db.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
-            ])
-            // Negative delta: a re-import moved an answer off this day. Clamp
-            // at 0 — a day whose original answer predates this counter was
-            // never incremented, so a blind −1 would drive it negative until
-            // the backfill seeds it. Transactional so the read+clamp is atomic.
-            : db.transactionalUpdate(metricsDailyDocPath(day), (cur) => {
-              const prevRaw = cur?.answered;
-              const prev =
-                typeof prevRaw === "number" && Number.isFinite(prevRaw)
-                  ? prevRaw
-                  : 0;
-              return {
-                ...(cur ?? {}),
-                answered: Math.max(0, prev + n),
-                updatedAt: nowIso,
-              };
-            })
-        ),
+        ...answeredDayEntries.map(([day, n]) => applyAnsweredDelta(day, n)),
         ...(answeredFirstEver > 0
           ? [
             db.incrementField(metricsLifetimeDocPath(), {

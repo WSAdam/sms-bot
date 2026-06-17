@@ -9,10 +9,7 @@ import {
   metricsDailyDocPath,
 } from "@shared/firestore/paths.ts";
 import { setFirestoreClientForTests } from "@shared/firestore/wrapper.ts";
-import {
-  runNightlyReport,
-  yesterdayEasternDateString,
-} from "@shared/services/report/nightly.ts";
+import { runNightlyReport } from "@shared/services/report/nightly.ts";
 import { setPostmarkClientForTests } from "@shared/services/postmark/client.ts";
 import { FirestoreMock } from "@tests/mocks/firestore-mock.ts";
 
@@ -37,9 +34,10 @@ function setup() {
   return { db, sent };
 }
 
-// Seed yesterday's metrics/daily counter doc with the four source fields.
-function seedYesterday(
+// Seed a metrics/daily counter doc for `day` with the four source fields.
+function seedDaily(
   db: FirestoreMock,
+  day: string,
   fields: {
     textsSent: number;
     apptsBooked: number;
@@ -47,21 +45,25 @@ function seedYesterday(
     activations: number;
   },
 ) {
-  db.docs.set(metricsDailyDocPath(yesterdayEasternDateString()), fields);
+  db.docs.set(metricsDailyDocPath(day), fields);
 }
 
 Deno.test("report maps yesterday's daily counters to the four funnel stats", async () => {
   const { db, sent } = setup();
-  seedYesterday(db, {
+  // Explicit reportDate exercises the ?date= path: "Yesterday" must be the day
+  // BEFORE reportDate (derived from the date, not the wall clock).
+  const REPORT_DATE = "2026-06-15";
+  const YESTERDAY = "2026-06-14";
+  seedDaily(db, YESTERDAY, {
     textsSent: 1234, // → SMS sent
     apptsBooked: 567, // → Calls scheduled
     answered: 89, // → Calls answered
     activations: 21, // → Bookings
   });
 
-  const r = await runNightlyReport();
+  const r = await runNightlyReport(REPORT_DATE);
 
-  assertEquals(r.counts.yesterdayDate, yesterdayEasternDateString());
+  assertEquals(r.counts.yesterdayDate, YESTERDAY);
   assertEquals(r.counts.ydSmsSent, 1234);
   assertEquals(r.counts.ydCallsScheduled, 567);
   assertEquals(r.counts.ydCallsAnswered, 89);
