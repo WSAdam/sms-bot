@@ -122,7 +122,7 @@ async function build(reportDate: string): Promise<{
     return typeof v === "number" && Number.isFinite(v) ? v : 0;
   }
 
-  const yd = (yesterdayDoc ?? {}) as Record<string, unknown>;
+  const ydData = (yesterdayDoc ?? {}) as Record<string, unknown>;
 
   // WTD sums from daily docs.
   let apptsBookedWtd = 0;
@@ -140,10 +140,10 @@ async function build(reportDate: string): Promise<{
     activationsWtd,
     activationsLifetime: num(lifetimeDoc?.activations),
     yesterdayDate,
-    ydSmsSent: num(yd.textsSent),
-    ydCallsScheduled: num(yd.apptsBooked),
-    ydCallsAnswered: num(yd.answered),
-    ydBookings: num(yd.activations),
+    ydSmsSent: num(ydData.textsSent),
+    ydCallsScheduled: num(ydData.apptsBooked),
+    ydCallsAnswered: num(ydData.answered),
+    ydBookings: num(ydData.activations),
   };
 
   const rows: Array<[string, number, number]> = [
@@ -169,6 +169,11 @@ async function build(reportDate: string): Promise<{
 
   const fmt = (n: number) => n.toLocaleString("en-US");
 
+  // Shared <td> for both tables' body rows — same bottom border, with any
+  // alignment/padding appended via `extra`.
+  const td = (inner: string, extra = "") =>
+    `<td style="border-bottom:1px solid #eee${extra}">${inner}</td>`;
+
   const ydHtml = `
     <h3 style="margin:0 0 4px 0;font-size:1.05rem">Yesterday</h3>
     <p style="margin:0 0 10px 0;color:#666;font-size:.8rem">${counts.yesterdayDate} ET</p>
@@ -177,12 +182,7 @@ async function build(reportDate: string): Promise<{
         ${
     ydRows
       .map(([label, v]) =>
-        `<tr>
-          <td style="border-bottom:1px solid #eee">${label}</td>
-          <td style="border-bottom:1px solid #eee;text-align:right"><b>${
-          fmt(v)
-        }</b></td>
-        </tr>`
+        `<tr>${td(label)}${td(`<b>${fmt(v)}</b>`, ";text-align:right")}</tr>`
       )
       .join("")
   }
@@ -211,15 +211,9 @@ async function build(reportDate: string): Promise<{
         ${
       rows
         .map(([label, wtd, lt]) =>
-          `<tr>
-          <td style="border-bottom:1px solid #eee">${label}</td>
-          <td style="border-bottom:1px solid #eee;text-align:right;padding-right:12px"><b>${
-            fmt(wtd)
-          }</b></td>
-          <td style="border-bottom:1px solid #eee;text-align:right"><b>${
-            fmt(lt)
-          }</b></td>
-        </tr>`
+          `<tr>${td(label)}${
+            td(`<b>${fmt(wtd)}</b>`, ";text-align:right;padding-right:12px")
+          }${td(`<b>${fmt(lt)}</b>`, ";text-align:right")}</tr>`
         )
         .join("")
     }

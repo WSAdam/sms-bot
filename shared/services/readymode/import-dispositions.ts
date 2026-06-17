@@ -207,10 +207,30 @@ export async function importDailyDispositions(
     const nowIso = new Date().toISOString();
     try {
       await Promise.all([
-        ...answeredDayEntries.flatMap(([day, n]) => [
-          db.incrementField(metricsDailyDocPath(day), { answered: n }),
-          db.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
-        ]),
+        ...answeredDayEntries.map(([day, n]) =>
+          n > 0
+            // Positive delta: a plain atomic increment + stamp.
+            ? Promise.all([
+              db.incrementField(metricsDailyDocPath(day), { answered: n }),
+              db.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
+            ])
+            // Negative delta: a re-import moved an answer off this day. Clamp
+            // at 0 — a day whose original answer predates this counter was
+            // never incremented, so a blind −1 would drive it negative until
+            // the backfill seeds it. Transactional so the read+clamp is atomic.
+            : db.transactionalUpdate(metricsDailyDocPath(day), (cur) => {
+              const prevRaw = cur?.answered;
+              const prev =
+                typeof prevRaw === "number" && Number.isFinite(prevRaw)
+                  ? prevRaw
+                  : 0;
+              return {
+                ...(cur ?? {}),
+                answered: Math.max(0, prev + n),
+                updatedAt: nowIso,
+              };
+            })
+        ),
         ...(answeredFirstEver > 0
           ? [
             db.incrementField(metricsLifetimeDocPath(), {

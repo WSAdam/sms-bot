@@ -838,9 +838,12 @@ actually settled when it fires.
   batch commit, bucketed by the ET day of the answered call. It applies
   **deltas, not events** — a re-import that surfaces an earlier `answeredAt`
   moves the count between days (+1 new / −1 old) instead of double-counting;
-  lifetime only bumps on a first-ever answer. Backfill historical days with
-  `scripts/backfill-daily-answered.ts` (recomputes from `guestanswered`; uses
-  `setMerge` so it never clobbers the other daily counters).
+  lifetime only bumps on a first-ever answer. A negative day-delta is written
+  through a clamped transactional update (`max(0, …)`) so a re-import moving a
+  pre-counter answer can't drive an old day below zero before the backfill seeds
+  it. Backfill historical days with `scripts/backfill-daily-answered.ts`
+  (recomputes from `guestanswered`; uses `setMerge` so it never clobbers the
+  other daily counters).
 - **Retimed `15 8 * * *` → `15 10 * * *`** (4:15 → 6:15 AM ET) in `main.ts`, so
   the report fires after `daily-qb-sale-match` (09:00 UTC) and
   `readymode-daily-pull` (09:30 UTC) populate yesterday's bookings + answered.

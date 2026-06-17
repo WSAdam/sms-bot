@@ -6,6 +6,7 @@
 
 import { assertEquals } from "@std/assert";
 import {
+  guestAnsweredDocPath,
   metricsDailyDocPath,
   metricsLifetimeDocPath,
   scheduledInjectionDocPath,
@@ -95,6 +96,39 @@ Deno.test("answered counter: an earlier answer on a prior day moves the count, n
   assertEquals(dailyAnswered(db, D0), 1); // +1 on the new (earlier) day
   assertEquals(dailyAnswered(db, D1), 0); // −1 off the old day
   assertEquals(lifetimeAnswered(db), 1); // same phone — no new lifetime count
+});
+
+Deno.test("answered counter: an earlier answer on the SAME ET day does not churn the count", async () => {
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  const tLate = "2026-06-10T20:00:00.000Z"; // 4pm ET 2026-06-10
+  const tEarly = "2026-06-10T16:00:00.000Z"; // noon ET, same ET day (= D1)
+  await importDailyDispositions([row(PHONE, "c1", tLate)]);
+  const s2 = await importDailyDispositions([row(PHONE, "c0", tEarly)]);
+  // The doc moves earlier (not the already-earlier short-circuit) but the ET
+  // day is unchanged, so no per-day delta is applied.
+  assertEquals(s2.answeredUpserted, 1);
+  assertEquals(s2.answeredAlreadyEarlier, 0);
+  assertEquals(dailyAnswered(db, D1), 1); // no +1/−1 churn
+  assertEquals(lifetimeAnswered(db), 1);
+});
+
+Deno.test("answered counter: moving off a never-counted (pre-counter) day clamps at 0", async () => {
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  // Simulate a guestanswered doc written BEFORE this counter existed: the doc
+  // exists with answeredAt on D1, but metrics/daily/D1.answered was never
+  // incremented. A re-import then surfaces an earlier call on the prior day.
+  db.docs.set(guestAnsweredDocPath(PHONE), {
+    phone10: PHONE,
+    answered: true,
+    answeredAt: T_D1,
+    source: "readymode-call-log",
+  });
+  const s = await importDailyDispositions([row(PHONE, "c0", T_D0)]);
+  assertEquals(s.answeredUpserted, 1);
+  assertEquals(dailyAnswered(db, D0), 1); // +1 on the new (earlier) day
+  assertEquals(dailyAnswered(db, D1), 0); // clamped, NOT −1
 });
 
 Deno.test("answered counter: out-of-funnel phone is not counted", async () => {

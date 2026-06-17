@@ -67,15 +67,24 @@ Deno.test("report maps yesterday's daily counters to the four funnel stats", asy
   assertEquals(r.counts.ydCallsAnswered, 89);
   assertEquals(r.counts.ydBookings, 21);
 
-  // The email actually rendered with those values.
+  // The email rendered with those values. Assert the exact <b>value</b> shape —
+  // bare "89"/"21" could collide with inline-style numbers (e.g. 22px), and
+  // distinct values mean a label↔value transposition would fail these.
   assertEquals(sent.length, 1);
   const { HtmlBody, TextBody } = sent[0];
   assert(HtmlBody.includes("Yesterday"), "html has a Yesterday section");
-  assert(HtmlBody.includes("1,234"), "html shows SMS sent");
+  assert(HtmlBody.includes("<b>1,234</b>"), "html shows SMS sent value");
+  assert(HtmlBody.includes("<b>567</b>"), "html shows Calls scheduled value");
+  assert(HtmlBody.includes("<b>89</b>"), "html shows Calls answered value");
+  assert(HtmlBody.includes("<b>21</b>"), "html shows Bookings value");
   assert(TextBody.includes("SMS sent"), "text has the SMS sent label");
   assert(TextBody.includes("Calls scheduled"), "text has Calls scheduled");
   assert(TextBody.includes("Calls answered"), "text has Calls answered");
   assert(TextBody.includes("Bookings"), "text has Bookings");
+
+  // The service never stamps lastSentEtDate (only the main.ts cron does), so a
+  // normal send leaves cronConfig untouched and can't suppress the real cron.
+  assertEquals(db.docs.get(cronConfigDocPath()), undefined);
 });
 
 Deno.test("report defaults missing daily fields to zero (cold start)", async () => {
@@ -105,4 +114,11 @@ Deno.test("report forceSend bypasses the enabled=false kill-switch (backs ?force
   const r = await runNightlyReport(undefined, { forceSend: true });
   assertEquals(r.skipped, undefined);
   assertEquals(sent.length, 1);
+  // A forced send must NOT stamp lastSentEtDate — the seeded cfg only had
+  // { enabled: false }, so the field stays undefined. (The cron's stamping in
+  // main.ts is what suppresses duplicate real fires; not covered by this test.)
+  const cfg = db.docs.get(cronConfigDocPath()) as
+    | { report?: Record<string, unknown> }
+    | undefined;
+  assertEquals(cfg?.report?.lastSentEtDate, undefined);
 });

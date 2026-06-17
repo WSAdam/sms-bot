@@ -11,9 +11,7 @@ import { runNightlyReport } from "@shared/services/report/nightly.ts";
 async function handle(ctx: { req: Request }) {
   const url = new URL(ctx.req.url);
   const date = url.searchParams.get("date") ?? undefined;
-  const forceRaw = (url.searchParams.get("force") ?? "").toLowerCase();
-  const forceSend = forceRaw === "1" || forceRaw === "true" ||
-    forceRaw === "yes";
+  const forceSend = url.searchParams.get("force") === "1";
   const r = await runNightlyReport(date, { forceSend });
   return Response.json({ success: true, forced: forceSend, ...r });
 }
