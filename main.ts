@@ -244,7 +244,9 @@ if (
     );
     try {
       await recordCronRun("readymode-daily-pull", async () => {
-        const r = await scrapeReadymode();
+        // AlexA is a dedicated bot account, so kick any stale session that's
+        // pinning the single-session lock rather than failing the morning pull.
+        const r = await scrapeReadymode({ takeoverIfLoggedIn: true });
         const errored = r.perDomain.filter((d) => d.error).length;
         console.log(
           `⏰ readymode pull: ${r.fromDate} rows=${r.totals.rowsFetched} dispositions=${r.totals.dispositionsWritten} answered=${r.totals.answeredUpserted} domainsErrored=${errored}`,
@@ -255,7 +257,15 @@ if (
           }
         }
         if (errored > 0) {
-          throw new Error(`${errored} domain(s) errored — see logs`);
+          // Fold the real per-domain failure(s) into the thrown message so
+          // the cron-health marker's lastError captures the actual cause
+          // (login rejected / missing creds / portal error) instead of a
+          // useless "see logs" that vanishes with the ephemeral console.
+          const detail = r.perDomain
+            .filter((d) => d.error)
+            .map((d) => `${d.domain}: ${d.error}`)
+            .join(" | ");
+          throw new Error(`${errored} domain(s) errored — ${detail}`);
         }
       });
     } catch (e) {

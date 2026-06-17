@@ -6,6 +6,7 @@
 import { assert, assertEquals } from "@std/assert";
 import {
   cronConfigDocPath,
+  metricsCronRunDocPath,
   metricsDailyDocPath,
 } from "@shared/firestore/paths.ts";
 import { setFirestoreClientForTests } from "@shared/firestore/wrapper.ts";
@@ -97,9 +98,94 @@ Deno.test("report defaults missing daily fields to zero (cold start)", async () 
   assertEquals(r.counts.ydCallsScheduled, 0);
   assertEquals(r.counts.ydCallsAnswered, 0);
   assertEquals(r.counts.ydBookings, 0);
+  // No cron markers seeded → the answered/bookings zeros are "not collected",
+  // not measured. They must report as unreliable so a 0 can't pass as fact.
+  assertEquals(r.counts.ydAnsweredReliable, false);
+  assertEquals(r.counts.ydBookingsReliable, false);
   assertEquals(sent.length, 1); // still sends
   // db referenced to keep the linter happy about the binding.
   assert(db.size() >= 0);
+});
+
+Deno.test("report flags yesterday stats as unverified when the feeding cron failed", async () => {
+  const { db, sent } = setup();
+  const REPORT_DATE = "2026-06-15";
+  const YESTERDAY = "2026-06-14";
+  seedDaily(db, YESTERDAY, {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 0, // the bogus zero a failed pull leaves behind
+    activations: 0,
+  });
+  // ReadyMode pull errored this morning; sale-match marker absent entirely.
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "error",
+    lastRunAt: "2026-06-15T09:30:00.000Z",
+    lastError: "1 domain(s) errored — ODR: login rejected",
+  });
+
+  const r = await runNightlyReport(REPORT_DATE);
+
+  assertEquals(r.counts.ydAnsweredReliable, false); // pull errored
+  assertEquals(r.counts.ydBookingsReliable, false); // marker missing
+  const { HtmlBody, TextBody } = sent[0];
+  assert(HtmlBody.includes("⚠ unverified"), "html marks the unverified rows");
+  assert(
+    HtmlBody.includes("ReadyMode daily pull did not complete"),
+    "html carries the answered warning banner",
+  );
+  assert(TextBody.includes("⚠ unverified"), "text marks the unverified rows");
+});
+
+Deno.test("report marks yesterday stats verified when the feeding crons are fresh + ok", async () => {
+  const { sent, db } = setup();
+  const REPORT_DATE = "2026-06-15";
+  const YESTERDAY = "2026-06-14";
+  seedDaily(db, YESTERDAY, {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 7,
+    activations: 1,
+  });
+  // Both pulls ran on the report's own ET morning and succeeded.
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:30:00.000Z",
+  });
+  db.docs.set(metricsCronRunDocPath("daily-qb-sale-match"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:00:00.000Z",
+  });
+
+  const r = await runNightlyReport(REPORT_DATE);
+
+  assertEquals(r.counts.ydAnsweredReliable, true);
+  assertEquals(r.counts.ydBookingsReliable, true);
+  assert(
+    !sent[0].HtmlBody.includes("unverified"),
+    "no unverified marker when both pulls are fresh + ok",
+  );
+});
+
+Deno.test("report treats a stale-but-ok pull (ran yesterday, not today) as unverified", async () => {
+  const { sent, db } = setup();
+  const REPORT_DATE = "2026-06-15";
+  seedDaily(db, "2026-06-14", {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 0,
+    activations: 0,
+  });
+  // Last successful pull was the PRIOR morning — today's never ran.
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-14T09:30:00.000Z",
+  });
+
+  const r = await runNightlyReport(REPORT_DATE);
+
+  assertEquals(r.counts.ydAnsweredReliable, false);
+  assert(sent[0].HtmlBody.includes("⚠ unverified"));
 });
 
 Deno.test("report skips (no email) when report.enabled=false and not forced", async () => {

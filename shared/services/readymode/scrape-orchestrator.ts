@@ -26,6 +26,13 @@ export interface ScrapeOptions {
   domains?: DialerDomain[];
   /** Hard cap on pages per domain (testing). */
   maxPagesPerDomain?: number;
+  /**
+   * On an "already logged in" rejection, kick the stale session via
+   * logout_other_sessions=on and retry (mirrors RM's "Continue"). Default off:
+   * the 5:30 AM cron runs when nobody's on, but manual/triage pulls fire mid-day
+   * and need to take over a lingering human session.
+   */
+  takeoverIfLoggedIn?: boolean;
 }
 
 export interface ScrapeResult {
@@ -71,7 +78,9 @@ export async function scrapeReadymode(
   for (const domain of domains) {
     try {
       const creds = getRmCreds(domain);
-      const session = await login(domain, creds.user, creds.pass);
+      const session = await login(domain, creds.user, creds.pass, {
+        takeoverIfLoggedIn: options.takeoverIfLoggedIn,
+      });
       const fetchResult = await fetchCallLog(
         session,
         domain,

@@ -25,6 +25,7 @@
 // scripts/backfill-daily-metrics.ts.
 
 import {
+  metricsCronRunDocPath,
   metricsDailyDocPath,
   metricsLifetimeDocPath,
   uniqueRecipientByPhoneCollection,
@@ -55,6 +56,13 @@ export interface DailyReportCounts {
   ydCallsScheduled: number; // metrics/daily.apptsBooked
   ydCallsAnswered: number; // metrics/daily.answered
   ydBookings: number; // metrics/daily.activations
+  // Reliability of the two cron-fed yesterday stats above. false = the
+  // upstream pull that populates the counter did NOT complete on this
+  // report's own ET morning, so the 0 means "not collected", not "measured
+  // zero". The email shows a ⚠ banner and the API JSON exposes these, so a
+  // failed pull can never again masquerade as a real zero.
+  ydAnsweredReliable?: boolean; // readymode-daily-pull cron fresh + ok
+  ydBookingsReliable?: boolean; // daily-qb-sale-match cron fresh + ok
 }
 
 export interface NightlyReportResult {
@@ -100,6 +108,16 @@ function etDayBefore(dateStr: string): string {
   }-${String(dt.getUTCDate()).padStart(2, "0")}`;
 }
 
+// The ET calendar day (YYYY-MM-DD) on which an ISO instant fell. Used to
+// decide whether a cron marker's lastRunAt happened on the report's own ET
+// morning. Returns null for missing/unparseable input.
+function etDateOfInstant(iso: unknown): string | null {
+  if (typeof iso !== "string") return null;
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
 async function build(reportDate: string): Promise<{
   html: string;
   text: string;
@@ -121,6 +139,8 @@ async function build(reportDate: string): Promise<{
     lifetimeRecipientDocs,
     wtdRecipientDocs,
     yesterdayDoc,
+    pullMarker,
+    saleMatchMarker,
   ] = await Promise.all([
     db.get(metricsLifetimeDocPath()),
     Promise.all(wtdDays.map((d) => db.get(metricsDailyDocPath(d)))),
@@ -130,6 +150,12 @@ async function build(reportDate: string): Promise<{
       limit: 200_000,
     }),
     db.get(metricsDailyDocPath(yesterdayDate)),
+    // Cron-health markers for the two pulls that populate the yesterday
+    // funnel: answered comes from the ReadyMode pull, bookings/activations
+    // from the sale-match pull. We use these to flag a 0 that's really
+    // "the pull failed" rather than a measured zero.
+    db.get(metricsCronRunDocPath("readymode-daily-pull")),
+    db.get(metricsCronRunDocPath("daily-qb-sale-match")),
   ]);
 
   function num(v: unknown): number {
@@ -146,6 +172,25 @@ async function build(reportDate: string): Promise<{
     activationsWtd += num((doc as Record<string, unknown> | null)?.activations);
   }
 
+  // A yesterday stat fed by a morning cron is trustworthy only if that cron
+  // ran on THIS report's ET morning (lastRunAt >= reportDate) and succeeded.
+  // A failed / missing / stale marker means the counter was never populated
+  // for yesterday, so its 0 is "no data pulled", not "measured zero". (This
+  // is exactly the readymode-daily-pull failure that silently produced
+  // ydCallsAnswered=0.) For a historical ?date= backfill the marker is newer
+  // than reportDate, so lastRunAt >= reportDate holds and we don't cry wolf.
+  const cronFreshFor = (marker: Record<string, unknown> | null): boolean => {
+    if (!marker || marker.lastStatus !== "ok") return false;
+    const et = etDateOfInstant(marker.lastRunAt);
+    return et !== null && et >= reportDate;
+  };
+  const ydAnsweredReliable = cronFreshFor(
+    pullMarker as Record<string, unknown> | null,
+  );
+  const ydBookingsReliable = cronFreshFor(
+    saleMatchMarker as Record<string, unknown> | null,
+  );
+
   const counts: DailyReportCounts = {
     textsSentWtd: wtdRecipientDocs.length,
     textsSentLifetime: lifetimeRecipientDocs.length,
@@ -158,6 +203,8 @@ async function build(reportDate: string): Promise<{
     ydCallsScheduled: num(ydData.apptsBooked),
     ydCallsAnswered: num(ydData.answered),
     ydBookings: num(ydData.activations),
+    ydAnsweredReliable,
+    ydBookingsReliable,
   };
 
   const rows: Array<[string, number, number]> = [
@@ -181,6 +228,23 @@ async function build(reportDate: string): Promise<{
     ["Bookings", counts.ydBookings],
   ];
 
+  // Rows whose value is "not collected" because the feeding pull failed.
+  const ydUnreliable: Record<string, boolean> = {
+    "Calls answered": !ydAnsweredReliable,
+    "Bookings": !ydBookingsReliable,
+  };
+  const warnings: string[] = [];
+  if (!ydAnsweredReliable) {
+    warnings.push(
+      "“Calls answered” is unverified — the ReadyMode daily pull did not complete on this report’s morning, so yesterday’s answered calls were never imported. Treat the value as “no data”, not zero.",
+    );
+  }
+  if (!ydBookingsReliable) {
+    warnings.push(
+      "“Bookings” is unverified — the daily sale-match pull did not complete, so yesterday’s bookings/activations were never imported. Treat the value as “no data”, not zero.",
+    );
+  }
+
   const fmt = (n: number) => n.toLocaleString("en-US");
 
   // Shared <td> for both tables' body rows — same bottom border, with any
@@ -188,16 +252,28 @@ async function build(reportDate: string): Promise<{
   const td = (inner: string, extra = "") =>
     `<td style="border-bottom:1px solid #eee${extra}">${inner}</td>`;
 
+  const warnBanner = warnings.length
+    ? `<div style="background:#fff4f4;border:1px solid #f0c0c0;border-radius:6px;padding:10px 12px;margin:0 0 14px 0;font-size:.82rem;color:#900">${
+      warnings.map((w) => `<div style="margin:2px 0">⚠ ${w}</div>`).join("")
+    }</div>`
+    : "";
+
   const ydHtml = `
     <h3 style="margin:0 0 4px 0;font-size:1.05rem">Yesterday</h3>
     <p style="margin:0 0 10px 0;color:#666;font-size:.8rem">${counts.yesterdayDate} ET</p>
+    ${warnBanner}
     <table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:.95rem;margin-bottom:22px">
       <tbody>
         ${
     ydRows
-      .map(([label, v]) =>
-        `<tr>${td(label)}${td(`<b>${fmt(v)}</b>`, ";text-align:right")}</tr>`
-      )
+      .map(([label, v]) => {
+        const cell = ydUnreliable[label]
+          ? `<b>${
+            fmt(v)
+          }</b> <span style="color:#c00;font-size:.8rem">⚠ unverified</span>`
+          : `<b>${fmt(v)}</b>`;
+        return `<tr>${td(label)}${td(cell, ";text-align:right")}</tr>`;
+      })
       .join("")
   }
       </tbody>
@@ -242,8 +318,11 @@ async function build(reportDate: string): Promise<{
     ``,
     `Yesterday — ${counts.yesterdayDate} ET`,
     ...ydRows.map(([label, v]) =>
-      `${label.padEnd(20)}${String(fmt(v)).padStart(8)}`
+      `${label.padEnd(20)}${String(fmt(v)).padStart(8)}${
+        ydUnreliable[label] ? "  ⚠ unverified" : ""
+      }`
     ),
+    ...(warnings.length ? ["", ...warnings.map((w) => `⚠ ${w}`)] : []),
     ``,
     `Totals`,
     `                              Week to date    Lifetime`,

@@ -79,6 +79,7 @@ export async function login(
   domain: DialerDomain | string,
   user: string,
   password: string,
+  opts: { takeoverIfLoggedIn?: boolean } = {},
 ): Promise<SessionCookies> {
   const baseUrl = `https://${domain}.readymode.com`;
   // Step 1: GET to seed PHPSESSID
@@ -127,7 +128,7 @@ export async function login(
   const requestCookie =
     `PHPSESSID=${phpsessid}; stationId=3038; sp=69f262f0ce3c2`;
 
-  const postRes = await fetch(`${baseUrl}/login_new/?then=/`, {
+  let postRes = await fetch(`${baseUrl}/login_new/?then=/`, {
     method: "POST",
     headers: {
       "user-agent": UA,
@@ -138,7 +139,53 @@ export async function login(
     body,
     redirect: "manual",
   });
-  const respBody = await postRes.text().catch(() => "");
+  let respBody = await postRes.text().catch(() => "");
+
+  // Reactive single-session takeover. When the bot account is already logged
+  // in elsewhere, RM answers the first POST with a 200 "already logged in"
+  // interstitial whose form carries logout_other_sessions=on. Re-POSTing the
+  // SAME login + that flag — only AFTER seeing the interstitial, never on the
+  // first POST (which 500s with "cURL malformed URL") — evicts the stale
+  // session, mirroring RM's "Continue" button. Opt-in: the daily cron runs at
+  // 5:30 AM ET when nobody's on, but manual/triage pulls fire mid-day and need
+  // to kick a human's lingering session.
+  if (
+    opts.takeoverIfLoggedIn &&
+    postRes.status === 200 &&
+    /already logged in|We're sorry|log out all your other sessions/i.test(
+      respBody,
+    )
+  ) {
+    console.log(
+      `[rm-login ${domain}] account already logged in — sending logout_other_sessions takeover`,
+    );
+    // Reuse the live PHPSESSID (RM may have rotated it on the interstitial)
+    // plus the seH the server set and the pre-claimed station/sp — the same
+    // jar the "Continue" form posts back with.
+    const phpForKick = extractCookie(postRes.headers, "PHPSESSID") ?? phpsessid;
+    const seH = extractCookie(postRes.headers, "seH") ??
+      extractCookie(seedRes.headers, "seH");
+    const kickCookie = [
+      `PHPSESSID=${phpForKick}`,
+      `stationId=3038`,
+      `sp=69f262f0ce3c2`,
+      ...(seH ? [`seH=${seH}`] : []),
+    ].join("; ");
+    postRes = await fetch(`${baseUrl}/login_new/?then=/`, {
+      method: "POST",
+      headers: {
+        "user-agent": UA,
+        "content-type": "application/x-www-form-urlencoded",
+        cookie: kickCookie,
+        referer: `${baseUrl}/login_new/?then=/`,
+        origin: baseUrl,
+        accept: "text/html",
+      },
+      body: `${body}&logout_other_sessions=on`,
+      redirect: "manual",
+    });
+    respBody = await postRes.text().catch(() => "");
+  }
 
   if (postRes.status >= 400) {
     throw new Error(
@@ -275,7 +322,7 @@ export async function fetchCallLog(
     let json: Record<string, unknown>;
     try {
       json = JSON.parse(text);
-    } catch (e) {
+    } catch {
       throw new Error(
         `[rm-call-log ${domain}] page ${page} non-JSON body (likely session ` +
           `rejection): "${text.slice(0, 250)}"`,
