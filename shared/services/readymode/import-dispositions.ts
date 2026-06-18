@@ -6,7 +6,10 @@
 // Idempotent: each call is keyed by RM's `callLogId` (server-side primary
 // key). A re-run over the same date range never double-writes.
 
-import { isExcludedFromReporting } from "@shared/config/constants.ts";
+import {
+  ANSWERED_MIN_SECONDS,
+  isExcludedFromReporting,
+} from "@shared/config/constants.ts";
 import {
   callDispositionDocPath,
   guestActivatedCollection,
@@ -57,7 +60,14 @@ export interface ImportDispositionsSummary {
 
 export async function importDailyDispositions(
   rows: DialerCallRow[],
+  opts: { requireInFunnel?: boolean } = {},
 ): Promise<ImportDispositionsSummary> {
+  // When the scrape is restricted to our leads' campaign (Appointments), every
+  // answered call is one of ours, so the injectionhistory funnel gate is both
+  // unnecessary and HARMFUL — it undercounts leads loaded into ODR directly
+  // (the bug behind the historically low "answered" count). Default true keeps
+  // the safe behavior for all-campaigns imports (which still need the gate).
+  const requireInFunnel = opts.requireInFunnel ?? true;
   const summary: ImportDispositionsSummary = {
     rowsFetched: rows.length,
     dispositionsWritten: 0,
@@ -112,8 +122,12 @@ export async function importDailyDispositions(
     });
     summary.dispositionsWritten++;
 
-    // Track earliest answered call per phone for the upsert.
-    if (!isNonAnswered(disposition)) {
+    // Track earliest answered call per phone for the upsert. ANSWERED = a real
+    // conversation: not a No-Answer/test disposition AND at least
+    // ANSWERED_MIN_SECONDS of talk time. Duration alone isn't enough (RM logs
+    // long-duration "No Answer" rows) and disposition alone isn't either (short
+    // blips that never connected) — both gates apply.
+    if (!isNonAnswered(disposition) && r.durationSecs >= ANSWERED_MIN_SECONDS) {
       const cur = earliestAnsweredInBatch.get(r.phone10);
       if (!cur || r.callTime < cur) {
         earliestAnsweredInBatch.set(r.phone10, r.callTime);
@@ -130,7 +144,11 @@ export async function importDailyDispositions(
   // dialer (other teams' campaigns, manual dials). Marking those "answered"
   // flooded the funnel — answered must stay ⊆ phones we ourselves booked /
   // injected, otherwise the invariant answered ⊆ booked breaks.
-  const inFunnel = await loadInFunnelPhones(db);
+  // Skipped when requireInFunnel=false (campaign-restricted scrape already
+  // guarantees every row is one of our leads).
+  const inFunnel = requireInFunnel
+    ? await loadInFunnelPhones(db)
+    : new Set<string>();
 
   // Read existing guestanswered docs in parallel for the in-funnel subset.
   const phones = Array.from(earliestAnsweredInBatch.keys());
@@ -144,7 +162,7 @@ export async function importDailyDispositions(
   let answeredFirstEver = 0;
   for (let i = 0; i < phones.length; i++) {
     const phone10 = phones[i];
-    if (!inFunnel.has(phone10)) {
+    if (requireInFunnel && !inFunnel.has(phone10)) {
       summary.answeredOutOfSystemSkipped++;
       continue;
     }

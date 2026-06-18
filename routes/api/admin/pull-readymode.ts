@@ -4,10 +4,11 @@
 // POST body (all optional):
 //   { fromDate?: "MM/DD/YYYY", toDate?: "MM/DD/YYYY",
 //     domains?: string[],     // subset of DialerDomain values
-//     maxPagesPerDomain?: number   // testing
+//     maxPagesPerDomain?: number,  // testing
+//     restrictCampaign?: string    // report campaign id; "0" = all campaigns
 //   }
 //
-// Defaults: yesterday in ET, ODR domain only.
+// Defaults: yesterday in ET, ODR domain only, Appointments campaign only.
 //
 // Returns the per-domain ScrapeResult so the caller can verify rows
 // fetched / dispositions written / answered upserts.
@@ -25,6 +26,7 @@ export const handler = define.handlers({
       toDate?: string;
       domains?: string[];
       maxPagesPerDomain?: number;
+      restrictCampaign?: string;
     };
 
     let domains: DialerDomain[] | undefined;
@@ -48,6 +50,11 @@ export const handler = define.handlers({
         toDate: body.toDate,
         domains,
         maxPagesPerDomain: body.maxPagesPerDomain,
+        // Optional: "0" = all campaigns (keeps funnel gate); omitted = default
+        // Appointments-only (see scrape-orchestrator.ts).
+        restrictCampaign: typeof body.restrictCampaign === "string"
+          ? body.restrictCampaign
+          : undefined,
       });
       return Response.json({ success: true, ...result });
     } catch (e) {

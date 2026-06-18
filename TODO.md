@@ -80,11 +80,14 @@ answered → (booked within X days = sale).
       **best-effort/non-fatal** (`catch→warn`) — bland-talk-now.ts:103-107 and
       the scheduled sweep. A failed write = lead injected into ODR but
       unrecorded → undercount.
-- [x] **RESOLVED:** 206 is only the SMS-bot's _recorded_ injections. Adam loads
-      most leads into ODR directly, all into the `ODR - Appointments` campaign —
-      which IS our entire ODR call volume. So the true injected/loaded set is
-      thousands, and the canonical source is the campaign-filtered call log, not
-      `injectionhistory`. (Supersedes the "≈206-210, not thousands" line above.)
+- [x] **RESOLVED (then CORRECTED 2026-06-18):** the canonical "answered" source
+      is the **Appointments** campaign call log, filtered by the call-log REPORT
+      id **`81`** (NOT the inject channel code `cuCyA6Xoeu88` — the report
+      silently ignores that and returns ALL ~24 campaigns). The earlier claim
+      that this campaign "IS our entire ODR volume → thousands" was FALSE: it
+      was an artifact of the ignored filter. Appointments is small (~1–2
+      answered/week, ~74 distinct Feb→Jun). Answered = distinct phone, call ≥
+      60s, disposition ≠ No-Answer/test.
 - [ ] Fix the non-fatal injection writes → make recording reliable going forward
       (still worth it for the records, even though the call log is the truth).
 
@@ -94,34 +97,38 @@ answered → (booked within X days = sale).
       returns only `times called` + `status_time` — NO disposition/answered
       field. TPI tells us a lead was _dialed_, not _answered_. So the light
       per-lead method can't drive the answered backfill.
-- [x] **Pivot — campaign filter.** `ODR - Appointments` (`cuCyA6Xoeu88`) = ALL
-      our leads, so a campaign-filtered call-log pull IS our answered set. Built
-      `scripts/backfill-answered-by-campaign.ts` — paced ≤1 DAY of data/min (not
-      per page; corrected after Adam clarified), weekdays only, additive, never
-      overwrites manual-verified.
-- [x] **1-day dry-run (06/16):** 1968 calls / 79 pages → **225 answered, all 225
-      NEW** (vs 153 lifetime). Confirms the real count is in the thousands and
-      the tool works. Timing: **3m21s for ONE day** (RM call_log ~2.5s/page). →
-      full Feb→Jun (~90 weekdays) ≈ **~5 hours**. ≤1-day/min cap is satisfied
-      for free (each day already takes ~3.4 min).
-- [ ] **AWAITING GO:** run the full `--apply` (additive, ~5h, monitored; per-day
-      progress logged) — or chunk it (month-by-month, ~1h each), or a recent
-      window only.
-- [ ] After backfill: `backfill-daily-answered.ts` to recompute counters.
+- [x] **Campaign filter — FIXED to report id `81`.**
+      `scripts/backfill-answered-by-campaign.ts` now restricts to campaign 81 +
+      the duration rule + writes real `answeredAt`.
+- [x] ~~1-day dry-run (06/16): 1968 calls → 225 answered~~ **BOGUS** — that pull
+      used `cuCyA6Xoeu88` (inject code), which the report ignores → it pulled
+      ALL campaigns. The 225 docs were written, verified wrong vs the RM UI, and
+      **rolled back**. With id 81 + duration gate, 06-16 = 0 new answers.
+- [x] **Historical backfill DONE (corrected).** One read-only range pull of
+      campaign 81 (Feb→Jun) found 74 distinct answered, 70 already present, **4
+      NEW** — applied additively. `guestanswered` 153 → **157**.
+- [x] **Recompute DONE:** `backfill-daily-answered.ts` → lifetime **157**, 46
+      daily buckets, no duplicates (`skippedNoDate=0`).
 
-## Phase 2b — Forward gate fix (so the LIVE cron stops undercounting)
+## Phase 2b — Forward gate fix (so the LIVE cron stops undercounting) — DONE 2026-06-18
 
-- [ ] The live `import-dispositions.ts` still gates `guestanswered` to
-      `injectionhistory` (~206), so forward it only counts answers from the
-      SMS-bot's recorded injections — NOT all leads loaded into ODR. Widen the
-      gate to the `ODR - Appointments` campaign (or drop it, since that campaign
-      == our leads) so new days match the backfill's definition. Add a test.
+- [x] `scrapeReadymode` defaults to `restrictCampaign:"81"` → daily pull is ~1
+      page, every row is our lead. `importDailyDispositions` now (a) requires
+      duration ≥ 60s AND not No-Answer, (b) drops the injectionhistory funnel
+      gate for campaign-restricted pulls (`requireInFunnel:false`);
+      all-campaigns pulls keep it. `DialerCallRow.durationSecs` added (parsed
+      from `Calltime`). 4 new unit tests; full suite 153/153. Trade-off:
+      `calldispositions` now Appointments-scoped forward (dashboard activated
+      drill-in).
 
 ## Phase 3 — Recompute + verify _(Firestore-only)_
 
-- [ ] `backfill-daily-answered` → recompute `metrics/daily.answered` + lifetime.
+- [x] `backfill-daily-answered` → recompute `metrics/daily.answered` + lifetime
+      (done 2026-06-18; lifetime **157**).
 - [ ] Checks: answered ≤ injected; spot-check known leads; reconcile vs Adam's
-      manual list.
+      manual list. (Open Q: only 70 of the 153 fall in the strict campaign-81 /
+      ≥60s set — the other 83 are pre-Feb, other-campaign recycle answers, or
+      manual; left as-is per "don't delete my data".)
 
 ## Phase 4 — PROVE it works forward
 

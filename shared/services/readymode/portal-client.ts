@@ -56,6 +56,7 @@ export interface DialerCallRow {
   disposition: string;
   callType: string | null;
   callTime: string; // ISO
+  durationSecs: number; // talk time in seconds (RM "Calltime" cell, parsed)
   recId: string | null;
   callLogId: string;
   domain: string; // "monsterodr"
@@ -256,6 +257,10 @@ export interface FetchCallLogOptions {
   // Hard cap on pages — useful for testing or when we just want a sample.
   // 0/undefined = no cap (paginate until pages_total).
   maxPages?: number;
+  // Call-log REPORT campaign id (integer, e.g. "81" = Appointments) for the
+  // restrict_campaign filter. "0"/undefined = all campaigns. See
+  // APPOINTMENTS_CAMPAIGN_REPORT_ID in shared/config/constants.ts.
+  restrictCampaign?: string;
 }
 
 export async function fetchCallLog(
@@ -298,6 +303,7 @@ export async function fetchCallLog(
       fromDateMmDdYyyy,
       toDateMmDdYyyy,
       page,
+      options.restrictCampaign ?? "0",
     );
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort("page-timeout"), 30_000);
@@ -374,6 +380,7 @@ function buildUpdateUrl(
   fromMmDdYyyy: string,
   toMmDdYyyy: string,
   page: number,
+  restrictCampaign: string,
 ): string {
   const params = new URLSearchParams();
   params.set("update", "1");
@@ -385,7 +392,7 @@ function buildUpdateUrl(
   params.set("report[time_to_d]", toMmDdYyyy);
   params.set("report[time_to_dateonly]", "1");
   params.set("report[restrict_uid]", "0");
-  params.set("report[restrict_campaign]", "0");
+  params.set("report[restrict_campaign]", restrictCampaign);
   params.set("report[restrict_batch]", "0");
   params.set("report[sourceFilter]", "-1");
   params.set("report[durationFilter]", "-1");
@@ -416,16 +423,39 @@ function parseCallLogRow(
   const recId = typeof r.RecId === "string" ? r.RecId : null;
   const timeStr = typeof r.Time === "string" ? r.Time : "";
   const callTime = parseEtTimeToIso(timeStr, fromMmDdYyyy);
+  const durationSecs = parseDurationSeconds(
+    typeof r.Calltime === "string" ? r.Calltime : "",
+  );
   return {
     phone10,
     agentName,
     disposition,
     callType,
     callTime,
+    durationSecs,
     recId,
     callLogId,
     domain,
   };
+}
+
+// Parse RM's Calltime cell ("<small>21 min</small>", "<small ...><30s</small>",
+// "< 1m", "2:05") into seconds. A leading "<" (e.g. "<30s", "< 1m") is an upper
+// bound BELOW the bucket → 0 (under any real-conversation threshold). Exported
+// for reuse by the import + backfill paths.
+export function parseDurationSeconds(raw: string): number {
+  const text = raw.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+  if (!text || text.startsWith("<")) return 0;
+  const colon = text.match(/^(\d+):(\d{2})$/);
+  if (colon) return parseInt(colon[1], 10) * 60 + parseInt(colon[2], 10);
+  let secs = 0;
+  const hr = text.match(/(\d+)\s*(?:hr|hour)/i);
+  if (hr) secs += parseInt(hr[1], 10) * 3600;
+  const min = text.match(/(\d+)\s*min/i);
+  if (min) secs += parseInt(min[1], 10) * 60;
+  const sec = text.match(/(\d+)\s*s(?:ec)?\b/i);
+  if (sec) secs += parseInt(sec[1], 10);
+  return secs;
 }
 
 // Extracts the FIRST (XXX) XXX-XXXX phone from a `File` field text. Returns
@@ -455,7 +485,7 @@ const MONTHS: Record<string, number> = {
   Dec: 11,
 };
 
-function parseEtTimeToIso(
+export function parseEtTimeToIso(
   timeStr: string,
   fallbackMmDdYyyy: string,
 ): string {

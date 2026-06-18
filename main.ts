@@ -235,8 +235,10 @@ if (
     }
   });
 
-  // Once a day at 09:30 UTC = 5:30 AM EST. Pulls yesterday's full call
-  // log from the ReadyMode portal.
+  // Once a day at 09:30 UTC = 5:30 AM EST. Pulls yesterday's call log for the
+  // Appointments campaign (our leads) from the ReadyMode portal — ~1 page, and
+  // the answered metric is gated to that campaign + duration (see
+  // scrape-orchestrator.ts / import-dispositions.ts).
 
   Deno.cron("readymode-daily-pull", "30 9 * * *", async () => {
     console.log(

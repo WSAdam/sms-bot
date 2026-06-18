@@ -37,6 +37,7 @@ function row(
   callLogId: string,
   callTime: string,
   disposition = "Appointment",
+  durationSecs = 120, // default: a real conversation (>= ANSWERED_MIN_SECONDS)
 ): DialerCallRow {
   return {
     phone10,
@@ -44,6 +45,7 @@ function row(
     disposition,
     callType: null,
     callTime,
+    durationSecs,
     recId: null,
     callLogId,
     domain: "monsterodr",
@@ -150,4 +152,42 @@ Deno.test("answered counter: a no-answer disposition does not count", async () =
   assertEquals(s.answeredUpserted, 0);
   assertEquals(dailyAnswered(db, D1), 0);
   assertEquals(lifetimeAnswered(db), 0);
+});
+
+Deno.test("answered counter: a sub-60s call does NOT count (duration gate)", async () => {
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  // Non-No-Answer disposition but only 45s of talk time → not a real answer.
+  const s = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "Not interested", 45),
+  ]);
+  assertEquals(s.answeredUpserted, 0);
+  assertEquals(dailyAnswered(db, D1), 0);
+  assertEquals(lifetimeAnswered(db), 0);
+});
+
+Deno.test("answered counter: a long-duration 'No Answer' row does NOT count", async () => {
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  // RM sometimes logs a long Calltime on a No-Answer row — disposition gate
+  // must still reject it even though duration >= 60s.
+  const s = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "No Answer", 1260),
+  ]);
+  assertEquals(s.answeredUpserted, 0);
+  assertEquals(lifetimeAnswered(db), 0);
+});
+
+Deno.test("answered counter: requireInFunnel=false counts a phone NOT in the funnel", async () => {
+  const db = setup();
+  // PHONE deliberately NOT seeded — a campaign-restricted pull guarantees the
+  // row is one of our leads, so the funnel gate is bypassed.
+  const s = await importDailyDispositions(
+    [row(PHONE, "c1", T_D1, "Not interested", 200)],
+    { requireInFunnel: false },
+  );
+  assertEquals(s.answeredOutOfSystemSkipped, 0);
+  assertEquals(s.answeredUpserted, 1);
+  assertEquals(dailyAnswered(db, D1), 1);
+  assertEquals(lifetimeAnswered(db), 1);
 });

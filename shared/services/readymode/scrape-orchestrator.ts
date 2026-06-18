@@ -3,6 +3,7 @@
 // point used by both the daily cron (yesterday only) and the admin
 // endpoint (custom date range).
 
+import { APPOINTMENTS_CAMPAIGN_REPORT_ID } from "@shared/config/constants.ts";
 import {
   configSettingsCollection,
   readymodeCampaignsDocPath,
@@ -26,6 +27,13 @@ export interface ScrapeOptions {
   domains?: DialerDomain[];
   /** Hard cap on pages per domain (testing). */
   maxPagesPerDomain?: number;
+  /**
+   * Call-log REPORT campaign id to restrict to. Default = Appointments (81),
+   * the campaign all our leads are dialed in — so the pull is ~1 page and the
+   * answered metric is gated to our leads without the injectionhistory funnel.
+   * Pass "0" to pull ALL campaigns (keeps the answered⊆booked funnel gate on).
+   */
+  restrictCampaign?: string;
   /**
    * On an "already logged in" rejection, kick the stale session via
    * logout_other_sessions=on and retry (mirrors RM's "Continue"). Default off:
@@ -63,6 +71,8 @@ export async function scrapeReadymode(
   const fromDate = options.fromDate ?? yesterdayMmDdYyyyEt();
   const toDate = options.toDate ?? fromDate;
   const domains = options.domains ?? DEFAULT_DOMAINS;
+  const restrictCampaign = options.restrictCampaign ??
+    APPOINTMENTS_CAMPAIGN_REPORT_ID;
 
   const result: ScrapeResult = {
     fromDate,
@@ -86,11 +96,15 @@ export async function scrapeReadymode(
         domain,
         fromDate,
         toDate,
-        { maxPages: options.maxPagesPerDomain },
+        { maxPages: options.maxPagesPerDomain, restrictCampaign },
       );
       Object.assign(mergedCampaigns, fetchResult.campaignList);
 
-      const importSummary = await importDailyDispositions(fetchResult.rows);
+      // Campaign-restricted pull → every row is our lead, so drop the funnel
+      // gate; all-campaigns pull ("0") keeps it (answered ⊆ booked).
+      const importSummary = await importDailyDispositions(fetchResult.rows, {
+        requireInFunnel: restrictCampaign === "0",
+      });
       result.perDomain.push({
         domain,
         rowsFetched: importSummary.rowsFetched,

@@ -891,18 +891,39 @@ of 41 days 05-07→06-16 captured), so the report's "calls answered" silently re
   JSON + a red banner in the email. Reliability is inferred from the single
   global marker, not verified per-day.
 
-- **What "Calls answered" actually means.** It counts leads WE put into the ODR
-  dialer that later answered. All our leads live in the **`ODR - Appointments`**
-  campaign (`cuCyA6Xoeu88`) — that campaign IS our entire ODR call volume — so
-  the canonical "answered" set is the distinct phones in that campaign with a
-  non-No-Answer disposition (`answered ⊆ our-leads`; do NOT count other dialer
-  traffic). CAVEAT: `injectionhistory` (~206) only records the SMS-bot's
-  _programmatic_ injections and badly undercounts the leads loaded directly into
-  ODR. The live `import-dispositions.ts` still gates `guestanswered` to that
-  injectionhistory set, so it UNDERCOUNTS forward — widening that gate to the
-  campaign is tracked in `TODO.md`. The campaign-filtered call log is the truth
-  (a single day, 06-16, already yields ~225 answered vs the 153 lifetime that
-  the narrow gate had recorded).
+- **What "Calls answered" actually means.** A distinct phone in the
+  **Appointments** campaign that had a real conversation: a call lasting **≥
+  60s** (`ANSWERED_MIN_SECONDS`) whose disposition is **not** a No-Answer/ test.
+  BOTH gates apply — RM logs sub-minute blips ("<30s", "<1m") AND long-duration
+  "No Answer" rows that never connected, so duration-alone and disposition-alone
+  are each insufficient. `answered ⊆ our-leads`.
+  - **Campaign id = `81`** — the call-log REPORT id
+    (`APPOINTMENTS_CAMPAIGN_REPORT_ID`). This is NOT the lead-inject channel
+    code (`campaigns.ts` `"ODR - Appointments"` → `cuCyA6Xoeu88`). They are
+    different ID namespaces: the call_log report's `restrict_campaign` filter
+    **silently ignores** the inject code and returns ALL campaigns. The integer
+    id lives in the `campaignlist` map of the call_log JSON.
+  - **The campaign is small** — ~1–2 answered leads/week, ~74 distinct Feb→Jun;
+    lifetime answered ≈ **157** (2026-06-18). NOT thousands.
+  - ⚠️ **Correction (2026-06-18).** An earlier draft of this section claimed
+    "Appointments IS our entire ODR volume → answered is in the thousands" and
+    that 06-16 yielded ~225 answered. BOTH were artifacts of the
+    inject-code-vs-report-id bug above: the filter was ignored, so the pull
+    returned all ~24 campaigns (~2000 calls/day) and the old disposition-only
+    rule mislabeled ~11% as "answered". With the correct id 81 + duration gate,
+    06-16 = 0 new answers and the true history added just **4** missed answers.
+- **Forward import (fixed 2026-06-18).** `scrapeReadymode` now defaults to
+  `restrictCampaign:"81"`, so the daily pull is **~1 page (not 79)** and every
+  row is one of our leads. Because the rows are campaign-restricted, the
+  injectionhistory funnel gate is dropped
+  (`importDailyDispositions(rows,
+  {requireInFunnel:false})`); an explicit
+  all-campaigns pull (`restrictCampaign:"0"`, e.g. via
+  `/api/admin/pull-readymode`) keeps the gate on (`answered ⊆ booked`). Per-row
+  duration is captured in `DialerCallRow.durationSecs` (parsed from RM's
+  `Calltime`). Trade-off: `calldispositions` is now Appointments-scoped going
+  forward, so the dashboard "activated" drill-in shows only Appointments calls
+  for a lead.
 
 - **Ops scripts** (run by hand with `--env-file=env/local`, NOT crons):
   - `scripts/triage-readymode.ts` — read-only dump of the cron markers +
@@ -910,11 +931,14 @@ of 41 days 05-07→06-16 captured), so the report's "calls answered" silently re
     runs a live pull (surfaces the real error, backfills that day, uses the
     takeover).
   - `scripts/backfill-answered-by-campaign.ts` — hand-walk historical "answered"
-    backfill via a campaign-filtered call-log pull. Paced at **≤1 day of call
-    data per minute**, weekdays only, **ADDITIVE** into `guestanswered` (only
+    backfill via a campaign-filtered call-log pull. Defaults to campaign
+    **`81`** (Appointments, the REPORT id — pass `--campaign` to override) and
+    the corrected rule (duration ≥ 60s AND not No-Answer). Writes a real
+    `answeredAt` from the call time. **ADDITIVE** into `guestanswered` (only
     adds phones not already present — never overwrites the ~34 manually-verified
-    date-only answers). `--from`/`--to`, `--apply` to write. RM's call_log
-    endpoint is slow (~2.5s/page, ~79 pages/day) so a full Feb→Jun pass is ~5h.
+    answers). `--from`/`--to`, `--apply` to write. Day-by-day at ≤1 day/min,
+    weekends skipped; for campaign 81 each day is ~1 page so the whole history
+    is cheap.
   - `scripts/backfill-daily-answered.ts` — recompute `metrics/daily.answered` +
     lifetime from `guestanswered` afterward (zero RM load).
 

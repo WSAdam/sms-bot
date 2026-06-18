@@ -39,6 +39,20 @@ export const CAL_MONSTER_APPOINTMENTS_EVENT_TYPE_ID = 4650992;
 export const CAL_DEFAULT_TIMEZONE = "America/New_York";
 export const CAL_HOLDING_CAMPAIGN_ID = "ODR_APPT_HOLDING";
 
+// ReadyMode "answered" accuracy.
+// The "Appointments" campaign is where all our leads are dialed, so the answered
+// metric is gated to it. This is the call-log REPORT id (an integer RM assigns
+// to the report's restrict_campaign filter) — NOT the lead-inject channel code
+// ("ODR - Appointments" → "cuCyA6Xoeu88" in campaigns.ts). The two are different
+// ID namespaces; the report endpoint silently ignores the inject code and
+// returns ALL campaigns. Verified via the campaignlist map in the call_log JSON.
+export const APPOINTMENTS_CAMPAIGN_REPORT_ID = "81";
+// A call counts as "answered" (a real conversation) only if it lasted at least
+// this long AND its disposition isn't a No-Answer/test. RM logs short blips
+// ("<30s", "<1m") and even long-duration "No Answer" rows that aren't contact,
+// so duration alone and disposition alone are each insufficient — both gate.
+export const ANSWERED_MIN_SECONDS = 60;
+
 // Postmark
 export const POSTMARK_FROM_ADDRESS = "notifications@monsterrg.com";
 export const POSTMARK_DEFAULT_TO = "adamp@monsterrg.com";

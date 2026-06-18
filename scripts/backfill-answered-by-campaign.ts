@@ -1,6 +1,13 @@
 // Hand-walk backfill of "answered" for our leads, via a CAMPAIGN-FILTERED ODR
-// call-log pull. "ODR - Appointments" (cuCyA6Xoeu88) == ALL our leads, so every
-// answered (non-No-Answer) call in that campaign is one of ours → write it.
+// call-log pull. Our leads live in the "Appointments" campaign — its call-log
+// REPORT id is the integer 81 (NOT the inject-channel code "cuCyA6Xoeu88" from
+// campaigns.ts; that code is for the lead-add API and the call_log report
+// silently IGNORES it, returning ALL campaigns ≈ 79 pages/day). Pass the integer
+// report id via --campaign (default 81).
+//
+// ANSWERED = a real conversation: call duration >= 60s AND disposition is not
+// "No Answer"/"test". Duration alone isn't enough (a "No Answer" row can carry a
+// long Calltime) and disposition alone isn't enough either — both gates apply.
 //
 // Rate cap = ONE DAY of call data per minute (NOT per page). So: pull a full day
 // at normal page speed (50ms between pages, same as the live cron), then wait
@@ -18,7 +25,10 @@
 //   deno run -A --env-file=env/local scripts/backfill-answered-by-campaign.ts \
 //     --from=02/10/2026 --to=06/16/2026 --apply
 
-import { login } from "@shared/services/readymode/portal-client.ts";
+import {
+  login,
+  parseEtTimeToIso,
+} from "@shared/services/readymode/portal-client.ts";
 import { getRmCreds } from "@shared/services/readymode/auth.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
@@ -38,7 +48,7 @@ for (const a of Deno.args) {
 }
 const FROM = flags.get("from"); // YYYY-MM-DD or MM/DD/YYYY
 const TO = flags.get("to") ?? FROM;
-const CAMPAIGN = flags.get("campaign") ?? "cuCyA6Xoeu88"; // ODR - Appointments
+const CAMPAIGN = flags.get("campaign") ?? "81"; // Appointments — call-log REPORT id (integer), NOT the inject channel code
 const DAY_SPACING_MS = flags.has("day-spacing-ms")
   ? Number(flags.get("day-spacing-ms"))
   : 60_000;
@@ -75,6 +85,27 @@ const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function isNonAnswered(d: string): boolean {
   const n = d.toLowerCase().trim();
   return n === "test" || n.includes("no answer");
+}
+
+// Parse RM's Calltime cell ("<small>21 min</small>", "<small ...><30s</small>",
+// "< 1m", "2:05") into seconds. A leading "<" (e.g. "<30s", "< 1m") is an
+// upper bound BELOW the bucket → treat as 0 (under any real threshold).
+const ANSWERED_MIN_SECONDS = 60;
+function parseDurationSeconds(raw: string): number {
+  const text = raw.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+  if (!text) return 0;
+  if (text.startsWith("<")) return 0; // "<30s", "< 1m" → below threshold
+  // "M:SS"
+  const colon = text.match(/^(\d+):(\d{2})$/);
+  if (colon) return parseInt(colon[1], 10) * 60 + parseInt(colon[2], 10);
+  let secs = 0;
+  const hr = text.match(/(\d+)\s*(?:hr|hour)/i);
+  if (hr) secs += parseInt(hr[1], 10) * 3600;
+  const min = text.match(/(\d+)\s*min/i);
+  if (min) secs += parseInt(min[1], 10) * 60;
+  const sec = text.match(/(\d+)\s*s(?:ec)?\b/i);
+  if (sec) secs += parseInt(sec[1], 10);
+  return secs;
 }
 // Normalize FROM/TO to a UTC-midnight Date for iteration.
 function toDate(s: string): Date {
@@ -134,6 +165,7 @@ async function pullDay(dayMdy: string) {
     callLogId: string;
     disposition: string;
     rmTime: string;
+    durationSecs: number;
   }[] = [];
   let pagesTotal = 0, page = 0;
   while (true) {
@@ -151,8 +183,10 @@ async function pullDay(dayMdy: string) {
     const results = (json.results ?? {}) as Record<string, unknown>;
     for (const v of Object.values(results)) {
       const r = v as Record<string, unknown>;
-      const phone10 =
-        (String(r.File ?? "").replace(/\D/g, "").match(/\d{10}$/) ?? [""])[0];
+      // File is "<name...> (XXX) XXX-XXXX" — match the formatted phone, don't
+      // strip-all-digits (names can contain digits).
+      const m = String(r.File ?? "").match(/\((\d{3})\)\s*(\d{3})-(\d{4})/);
+      const phone10 = m ? `${m[1]}${m[2]}${m[3]}` : "";
       const callLogId = String(r.id ?? "");
       if (!phone10 || !callLogId) continue;
       rows.push({
@@ -160,6 +194,7 @@ async function pullDay(dayMdy: string) {
         callLogId,
         disposition: String(r.Type ?? ""),
         rmTime: String(r.Time ?? ""),
+        durationSecs: parseDurationSeconds(String(r.Calltime ?? "")),
       });
     }
     page++;
@@ -198,14 +233,30 @@ for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
     );
     continue;
   }
-  // answered (non-No-Answer, non-excluded) — campaign already gates to our leads
-  const answeredToday = new Set<string>();
+  // answered (non-No-Answer, non-excluded) — campaign already gates to our
+  // leads. Track the EARLIEST answered call per phone (by ISO call time) so the
+  // guestanswered doc carries a real `answeredAt` — the same field + shape the
+  // live import writes, and the bucketing key backfill-daily-answered.ts needs
+  // to attribute the answer to its ET day (a doc without answeredAt is silently
+  // dropped from the daily + lifetime recompute).
+  const earliestAnswered = new Map<string, { iso: string; dispo: string }>();
   for (const r of day.rows) {
-    if (!isExcludedFromReporting(r.phone10) && !isNonAnswered(r.disposition)) {
-      answeredToday.add(r.phone10);
+    // ANSWERED = real conversation: duration >= 60s AND not a No-Answer/test
+    // disposition. Both gates apply (a "No Answer" row can still carry a long
+    // Calltime; a short call isn't a real answer regardless of label).
+    if (
+      isExcludedFromReporting(r.phone10) || isNonAnswered(r.disposition) ||
+      r.durationSecs < ANSWERED_MIN_SECONDS
+    ) {
+      continue;
+    }
+    const iso = parseEtTimeToIso(r.rmTime, mdy);
+    const cur = earliestAnswered.get(r.phone10);
+    if (!cur || iso < cur.iso) {
+      earliestAnswered.set(r.phone10, { iso, dispo: r.disposition });
     }
   }
-  const freshToday = [...answeredToday].filter((p) => !have.has(p));
+  const freshToday = [...earliestAnswered.keys()].filter((p) => !have.has(p));
   totalRows += day.rows.length;
   if (APPLY) {
     // ADDITIVE: write ONLY the new answered guestanswered docs (no bulk
@@ -213,17 +264,16 @@ for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
     const ops = [];
     for (const p of freshToday) {
       have.add(p);
-      const dispo = day.rows.find((r) =>
-        r.phone10 === p && !isNonAnswered(r.disposition)
-      )?.disposition ?? "";
+      const a = earliestAnswered.get(p)!;
       ops.push({
         type: "set" as const,
         path: guestAnsweredDocPath(p),
         data: {
           phone10: p,
           answered: true,
+          answeredAt: a.iso,
           source: "campaign-backfill",
-          lastDisposition: dispo,
+          lastDisposition: a.dispo,
           backfillDay: mdy,
         },
       });
@@ -234,7 +284,7 @@ for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
   console.log(
     `  ${mdy} (${
       DOW[dow]
-    }): ${day.rows.length} calls/${day.pagesTotal}pg, answered=${answeredToday.size}, NEW=${freshToday.length}  [running new: ${totalNew}]`,
+    }): ${day.rows.length} calls/${day.pagesTotal}pg, answered=${earliestAnswered.size}, NEW=${freshToday.length}  [running new: ${totalNew}]`,
   );
   await sleep(DAY_SPACING_MS); // ≤ 1 day of data per minute
 }
