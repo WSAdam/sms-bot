@@ -225,8 +225,18 @@ async function httpGetJson(
         }),
     );
     if (!res.ok) {
-      // Drain body so the connection releases — don't care about content.
-      await res.text().catch(() => "");
+      // Surface the REAL RM error instead of burying it as a bare status that
+      // the caller folds into "circuit-open". The 2026-06-18 outage was a 403
+      // "API_user/API_pass does not exist" (a per-subdomain password mismatch)
+      // that took a manual probe to find because the body was discarded here.
+      // Log the PATH only — the URL query carries API_pass.
+      const body = (await res.text().catch(() => "")).replace(/\s+/g, " ")
+        .trim();
+      console.warn(
+        `[tpi] ❌ http-${res.status} ${new URL(url).pathname}${
+          body ? ` — ${body.slice(0, 160)}` : ""
+        }`,
+      );
       return { ok: false, reason: `http-${res.status}` };
     }
     const json = (await res.json()) as Record<string, unknown>;
