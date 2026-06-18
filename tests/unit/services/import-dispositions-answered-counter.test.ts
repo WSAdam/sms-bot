@@ -166,6 +166,26 @@ Deno.test("answered counter: a sub-60s call does NOT count (duration gate)", asy
   assertEquals(lifetimeAnswered(db), 0);
 });
 
+Deno.test("answered counter: duration boundary is inclusive — 60s counts, 59s does not", async () => {
+  const db1 = setup();
+  seedInFunnel(db1, PHONE);
+  const at60 = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "Appointment", 60),
+  ]);
+  assertEquals(at60.answeredUpserted, 1);
+  assertEquals(dailyAnswered(db1, D1), 1);
+  assertEquals(lifetimeAnswered(db1), 1);
+
+  const db2 = setup();
+  seedInFunnel(db2, PHONE);
+  const at59 = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "Appointment", 59),
+  ]);
+  assertEquals(at59.answeredUpserted, 0);
+  assertEquals(dailyAnswered(db2, D1), 0);
+  assertEquals(lifetimeAnswered(db2), 0);
+});
+
 Deno.test("answered counter: a long-duration 'No Answer' row does NOT count", async () => {
   const db = setup();
   seedInFunnel(db, PHONE);

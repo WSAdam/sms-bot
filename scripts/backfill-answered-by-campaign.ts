@@ -27,6 +27,7 @@
 
 import {
   login,
+  parseDurationSeconds,
   parseEtTimeToIso,
 } from "@shared/services/readymode/portal-client.ts";
 import { getRmCreds } from "@shared/services/readymode/auth.ts";
@@ -36,7 +37,10 @@ import {
   guestAnsweredCollection,
   guestAnsweredDocPath,
 } from "@shared/firestore/paths.ts";
-import { isExcludedFromReporting } from "@shared/config/constants.ts";
+import {
+  ANSWERED_MIN_SECONDS,
+  isExcludedFromReporting,
+} from "@shared/config/constants.ts";
 
 const flags = new Map<string, string>();
 const bools = new Set<string>();
@@ -86,27 +90,9 @@ function isNonAnswered(d: string): boolean {
   const n = d.toLowerCase().trim();
   return n === "test" || n.includes("no answer");
 }
-
-// Parse RM's Calltime cell ("<small>21 min</small>", "<small ...><30s</small>",
-// "< 1m", "2:05") into seconds. A leading "<" (e.g. "<30s", "< 1m") is an
-// upper bound BELOW the bucket → treat as 0 (under any real threshold).
-const ANSWERED_MIN_SECONDS = 60;
-function parseDurationSeconds(raw: string): number {
-  const text = raw.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
-  if (!text) return 0;
-  if (text.startsWith("<")) return 0; // "<30s", "< 1m" → below threshold
-  // "M:SS"
-  const colon = text.match(/^(\d+):(\d{2})$/);
-  if (colon) return parseInt(colon[1], 10) * 60 + parseInt(colon[2], 10);
-  let secs = 0;
-  const hr = text.match(/(\d+)\s*(?:hr|hour)/i);
-  if (hr) secs += parseInt(hr[1], 10) * 3600;
-  const min = text.match(/(\d+)\s*min/i);
-  if (min) secs += parseInt(min[1], 10) * 60;
-  const sec = text.match(/(\d+)\s*s(?:ec)?\b/i);
-  if (sec) secs += parseInt(sec[1], 10);
-  return secs;
-}
+// parseDurationSeconds + ANSWERED_MIN_SECONDS are imported (single-sourced from
+// portal-client.ts / constants.ts) so this backfill can't drift from the live
+// import path.
 // Normalize FROM/TO to a UTC-midnight Date for iteration.
 function toDate(s: string): Date {
   if (s.includes("/")) {

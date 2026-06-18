@@ -446,6 +446,13 @@ function parseCallLogRow(
 export function parseDurationSeconds(raw: string): number {
   const text = raw.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
   if (!text || text.startsWith("<")) return 0;
+  // "H:MM:SS" (>= 1hr calls) — must be tried before the "M:SS" branch, which
+  // anchors exactly one colon and would otherwise drop these to 0.
+  const hms = text.match(/^(\d+):(\d{2}):(\d{2})$/);
+  if (hms) {
+    return parseInt(hms[1], 10) * 3600 + parseInt(hms[2], 10) * 60 +
+      parseInt(hms[3], 10);
+  }
   const colon = text.match(/^(\d+):(\d{2})$/);
   if (colon) return parseInt(colon[1], 10) * 60 + parseInt(colon[2], 10);
   let secs = 0;
