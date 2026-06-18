@@ -261,9 +261,20 @@ if (
           // the cron-health marker's lastError captures the actual cause
           // (login rejected / missing creds / portal error) instead of a
           // useless "see logs" that vanishes with the ephemeral console.
+          // Redact the submitted RM credentials + cap length first: this
+          // string persists to the marker AND renders in the report email, so
+          // if RM ever echoes the login back in an error page it must not leak.
+          const rmUser = Deno.env.get("RM_USER") ?? "";
+          const rmPass = Deno.env.get("RM_PASS") ?? "";
+          const safe = (s: string) => {
+            let out = s;
+            if (rmUser) out = out.replaceAll(rmUser, "[user]");
+            if (rmPass) out = out.replaceAll(rmPass, "[pass]");
+            return out.slice(0, 250);
+          };
           const detail = r.perDomain
             .filter((d) => d.error)
-            .map((d) => `${d.domain}: ${d.error}`)
+            .map((d) => `${d.domain}: ${safe(String(d.error))}`)
             .join(" | ");
           throw new Error(`${errored} domain(s) errored — ${detail}`);
         }

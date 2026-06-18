@@ -177,8 +177,13 @@ async function build(reportDate: string): Promise<{
   // A failed / missing / stale marker means the counter was never populated
   // for yesterday, so its 0 is "no data pulled", not "measured zero". (This
   // is exactly the readymode-daily-pull failure that silently produced
-  // ydCallsAnswered=0.) For a historical ?date= backfill the marker is newer
-  // than reportDate, so lastRunAt >= reportDate holds and we don't cry wolf.
+  // ydCallsAnswered=0.) NOTE: this is INFERRED from the single global marker,
+  // not verified per-day — `lastRunAt` is "the latest pull ran/ok at some point
+  // >= reportDate", not "this exact day was pulled". So a historical ?date=
+  // backfill won't cry wolf (any newer ok run clears it), but it also can't
+  // prove that specific old day's data was collected. Fine because we only
+  // regenerate a report after triage --pull backfills that day; if that
+  // changes, switch to a per-date pull record.
   const cronFreshFor = (marker: Record<string, unknown> | null): boolean => {
     if (!marker || marker.lastStatus !== "ok") return false;
     const et = etDateOfInstant(marker.lastRunAt);
@@ -221,17 +226,24 @@ async function build(reportDate: string): Promise<{
   // bookings. These count distinct event clocks (sends/bookings/calls/sales
   // all on different days), so "answered" can exceed "scheduled" on a given
   // day — that's expected, don't read it as a same-cohort funnel.
-  const ydRows: Array<[string, number]> = [
-    ["SMS sent", counts.ydSmsSent],
-    ["Calls scheduled", counts.ydCallsScheduled],
-    ["Calls answered", counts.ydCallsAnswered],
-    ["Bookings", counts.ydBookings],
+  // Each row carries a stable `id` so the ⚠-unreliable mapping below is keyed
+  // off the id, NOT the display label — relabeling a row can't silently break
+  // the marker.
+  const ydRows: Array<{ id: string; label: string; value: number }> = [
+    { id: "smsSent", label: "SMS sent", value: counts.ydSmsSent },
+    {
+      id: "scheduled",
+      label: "Calls scheduled",
+      value: counts.ydCallsScheduled,
+    },
+    { id: "answered", label: "Calls answered", value: counts.ydCallsAnswered },
+    { id: "bookings", label: "Bookings", value: counts.ydBookings },
   ];
 
   // Rows whose value is "not collected" because the feeding pull failed.
   const ydUnreliable: Record<string, boolean> = {
-    "Calls answered": !ydAnsweredReliable,
-    "Bookings": !ydBookingsReliable,
+    answered: !ydAnsweredReliable,
+    bookings: !ydBookingsReliable,
   };
   const warnings: string[] = [];
   if (!ydAnsweredReliable) {
@@ -266,12 +278,12 @@ async function build(reportDate: string): Promise<{
       <tbody>
         ${
     ydRows
-      .map(([label, v]) => {
-        const cell = ydUnreliable[label]
+      .map(({ id, label, value }) => {
+        const cell = ydUnreliable[id]
           ? `<b>${
-            fmt(v)
+            fmt(value)
           }</b> <span style="color:#c00;font-size:.8rem">⚠ unverified</span>`
-          : `<b>${fmt(v)}</b>`;
+          : `<b>${fmt(value)}</b>`;
         return `<tr>${td(label)}${td(cell, ";text-align:right")}</tr>`;
       })
       .join("")
@@ -317,9 +329,9 @@ async function build(reportDate: string): Promise<{
     `Dashboard: ${DASHBOARD_URL}`,
     ``,
     `Yesterday — ${counts.yesterdayDate} ET`,
-    ...ydRows.map(([label, v]) =>
-      `${label.padEnd(20)}${String(fmt(v)).padStart(8)}${
-        ydUnreliable[label] ? "  ⚠ unverified" : ""
+    ...ydRows.map(({ id, label, value }) =>
+      `${label.padEnd(20)}${String(fmt(value)).padStart(8)}${
+        ydUnreliable[id] ? "  ⚠ unverified" : ""
       }`
     ),
     ...(warnings.length ? ["", ...warnings.map((w) => `⚠ ${w}`)] : []),

@@ -52,9 +52,9 @@ answered → (booked within X days = sale).
 
 ## Phase 0 — Deploy the forward data-collection fix _(Adam's push; no extra dialer load)_
 
-- [ ] Deploy `fix/readymode-pull-reliability` (cron `logout_other_sessions`
-      takeover + real-error capture + report ⚠ "unverified" flag). Committed
-      `3662c77`, 145/145 tests.
+- [x] Deployed to `main` 2026-06-18 (`a7cd709`): cron `logout_other_sessions`
+      takeover + real-error capture + report ⚠ "unverified" flag. Pushed → Deno
+      Deploy auto-deploys. 145/145 tests.
 - [ ] Confirm next 5:30 AM ET cron runs clean
       (`metrics/cronruns/readymode-daily-pull` lastStatus=ok, new day pulled).
 - **Why first:** nothing downstream is trustworthy until the daily ODR pull

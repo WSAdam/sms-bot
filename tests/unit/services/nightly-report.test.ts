@@ -188,6 +188,45 @@ Deno.test("report treats a stale-but-ok pull (ran yesterday, not today) as unver
   assert(sent[0].HtmlBody.includes("⚠ unverified"));
 });
 
+Deno.test("answered reliability: a 23:30-ET-prior-day pull is NOT reliable for today (no UTC-date off-by-one)", async () => {
+  const { db } = setup();
+  const REPORT_DATE = "2026-06-15";
+  seedDaily(db, "2026-06-14", {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 0,
+    activations: 0,
+  });
+  // 03:30 UTC on 06-15 == 23:30 EDT on 06-14 → the PRIOR ET day. Must be
+  // unreliable for reportDate 06-15. (Guards against a switch to UTC-date
+  // comparison, which would wrongly read this as "today".)
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T03:30:00.000Z",
+  });
+  const r = await runNightlyReport(REPORT_DATE);
+  assertEquals(r.counts.ydAnsweredReliable, false);
+});
+
+Deno.test("answered reliability: a marker NEWER than a historical ?date= report is NOT flagged unverified", async () => {
+  const { db } = setup();
+  const REPORT_DATE = "2026-06-10"; // regenerating an old day after a backfill
+  seedDaily(db, "2026-06-09", {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 5,
+    activations: 1,
+  });
+  // A later ok run (06-15) is >= the old reportDate, so it clears the flag —
+  // reliability here is inferred (latest-marker), not per-day verified.
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:30:00.000Z",
+  });
+  const r = await runNightlyReport(REPORT_DATE);
+  assertEquals(r.counts.ydAnsweredReliable, true);
+});
+
 Deno.test("report skips (no email) when report.enabled=false and not forced", async () => {
   const { db, sent } = setup();
   db.docs.set(cronConfigDocPath(), { report: { enabled: false } });

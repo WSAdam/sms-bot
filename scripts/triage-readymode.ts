@@ -91,7 +91,7 @@ const dailyDocs = await Promise.all(
   days.map((d) => db.get(metricsDailyDocPath(d))),
 );
 console.log(
-  "📅 metrics/daily (last 8 ET days) — ⚠ marks a day whose `answered` field is MISSING\n" +
+  `📅 metrics/daily (last ${scanDays} ET days) — ⚠ marks a day whose \`answered\` field is MISSING\n` +
     "   (a missing field = the report shows 0, but it's 'not collected', not a real zero):",
 );
 for (let i = 0; i < days.length; i++) {
