@@ -358,8 +358,11 @@ surfaces stale crons within hours rather than days.
   `calldispositions`, upserts `guestanswered` for non-No-Answer calls, and
   increments the per-ET-day `metrics/daily.answered` counter (bucketed by the
   answered call's day, delta-applied so re-imports don't double-count). RM
-  enforces single-session-per-user, so this kicks Adam's own RM session if he's
-  logged in at the time.
+  enforces single-session-per-user; as of 2026-06-18 the login does a reactive
+  `logout_other_sessions=on` takeover (see §0.19) so the pull self-heals instead
+  of dying when a session is already active, and on failure the real per-domain
+  error (creds-redacted) is folded into the cron-health marker's `lastError`
+  instead of a useless "see logs".
 
 All six are callable via `/api/cron/trigger*` routes for manual firing.
 Cron-health endpoint at `/api/admin/cron-health` returns last-run-status +
@@ -859,6 +862,65 @@ actually settled when it fires.
 - **Log noise:** the every-minute `⏰ sweep: scanned=0 …` no-op line is now
   suppressed (only logs when the sweep did work or errored); the per-minute
   `[cron-tick]` heartbeat is deliberately kept as the liveness signal.
+
+### 0.19 ReadyMode pull reliability + "answered" accuracy (June 2026)
+
+The `readymode-daily-pull` cron had failed intermittently for ~a month (only ~9
+of 41 days 05-07→06-16 captured), so the report's "calls answered" silently read
+`0` for most days. Two root causes — both fixed + deployed 2026-06-18 (commit
+`825bba7` on top of `a7cd709`):
+
+- **Creds** — RM rejected the `AlexA` service account ("Bad account
+  information"). Resolved by resetting the password. If it recurs, update
+  `RM_PASS` in BOTH `env/local` AND Deno Deploy settings.
+- **Single-session lockout** — back-to-back / mid-day logins hit "AlexA is
+  already logged in!". Fixed with a reactive takeover in `login()`
+  ([portal-client.ts](shared/services/readymode/portal-client.ts)): first POST =
+  creds only; on RM's 200 "already logged in" interstitial, re-POST the same
+  body + `logout_other_sessions=on` (NEVER on the first POST — that 500s with
+  "cURL malformed URL"). Opt-in via `takeoverIfLoggedIn`; the daily cron AND the
+  manual/triage pulls both pass it `true` (AlexA is a dedicated bot).
+  Unit-tested in
+  [readymode-login-takeover.test.ts](tests/unit/services/readymode-login-takeover.test.ts).
+
+- **Report reliability flags.** The report reads the `readymode-daily-pull` and
+  `daily-qb-sale-match` cron-health markers and flags "Calls answered" /
+  "Bookings" as **⚠ unverified** when the feeding pull didn't run+succeed on the
+  report's own ET morning — a missing counter field is "not collected", not a
+  measured zero. Exposed as `ydAnsweredReliable`/`ydBookingsReliable` on the API
+  JSON + a red banner in the email. Reliability is inferred from the single
+  global marker, not verified per-day.
+
+- **What "Calls answered" actually means.** It counts leads WE put into the ODR
+  dialer that later answered. All our leads live in the **`ODR - Appointments`**
+  campaign (`cuCyA6Xoeu88`) — that campaign IS our entire ODR call volume — so
+  the canonical "answered" set is the distinct phones in that campaign with a
+  non-No-Answer disposition (`answered ⊆ our-leads`; do NOT count other dialer
+  traffic). CAVEAT: `injectionhistory` (~206) only records the SMS-bot's
+  _programmatic_ injections and badly undercounts the leads loaded directly into
+  ODR. The live `import-dispositions.ts` still gates `guestanswered` to that
+  injectionhistory set, so it UNDERCOUNTS forward — widening that gate to the
+  campaign is tracked in `TODO.md`. The campaign-filtered call log is the truth
+  (a single day, 06-16, already yields ~225 answered vs the 153 lifetime that
+  the narrow gate had recorded).
+
+- **Ops scripts** (run by hand with `--env-file=env/local`, NOT crons):
+  - `scripts/triage-readymode.ts` — read-only dump of the cron markers +
+    `metrics/daily` (`--days=N` window) + lifetime; `--pull --date=MM/DD/YYYY`
+    runs a live pull (surfaces the real error, backfills that day, uses the
+    takeover).
+  - `scripts/backfill-answered-by-campaign.ts` — hand-walk historical "answered"
+    backfill via a campaign-filtered call-log pull. Paced at **≤1 day of call
+    data per minute**, weekdays only, **ADDITIVE** into `guestanswered` (only
+    adds phones not already present — never overwrites the ~34 manually-verified
+    date-only answers). `--from`/`--to`, `--apply` to write. RM's call_log
+    endpoint is slow (~2.5s/page, ~79 pages/day) so a full Feb→Jun pass is ~5h.
+  - `scripts/backfill-daily-answered.ts` — recompute `metrics/daily.answered` +
+    lifetime from `guestanswered` afterward (zero RM load).
+
+`TODO.md` tracks the phased plan (forward cron fix = done; injected-universe
+reconciliation; the answered backfill; the forward-gate widening; a verification
+view).
 
 ---
 

@@ -14,10 +14,10 @@ answered → (booked within X days = sale).
 
 ## HARD CONSTRAINTS (do not violate)
 
-- 🛑 **ReadyMode API calls capped at ≤ 1 per minute.** No bursts. This rules out
-  full-day call-log pulls (~79 requests/day) for backfill — use the per-lead
-  lookup path instead. Every RM-touching script must throttle to 60s between
-  calls.
+- 🛑 **ReadyMode pull rate: ≤ 1 DAY of call data per minute** (Adam's clarified
+  cap — NOT 1 page/min). A day's pages run at normal speed (~50ms apart, like
+  the live cron); space ≥60s between DAYS. (The per-lead TPI lookup was ruled
+  out — `get/lead` returns only `times called`, no disposition.)
 - 🛑 **Nothing that touches the dialer runs without explicit per-step
   approval.** Read-only Firestore work is fine to run.
 - 🛑 **Preserve manually-verified answers** (the ~34 date-only / noon-UTC
@@ -80,12 +80,13 @@ answered → (booked within X days = sale).
       **best-effort/non-fatal** (`catch→warn`) — bland-talk-now.ts:103-107 and
       the scheduled sweep. A failed write = lead injected into ODR but
       unrecorded → undercount.
-- [ ] **DECISION NEEDED:** is ~206 the true injected count, or do you believe
-      it's higher? Definitive check = compare our records vs ODR's
-      actually-loaded leads (DIALER — needs approval, ≤1/min).
-- [ ] Fix the non-fatal injection writes → make recording reliable going
-      forward.
-- [ ] Output: the real injected set + count.
+- [x] **RESOLVED:** 206 is only the SMS-bot's _recorded_ injections. Adam loads
+      most leads into ODR directly, all into the `ODR - Appointments` campaign —
+      which IS our entire ODR call volume. So the true injected/loaded set is
+      thousands, and the canonical source is the campaign-filtered call log, not
+      `injectionhistory`. (Supersedes the "≈206-210, not thousands" line above.)
+- [ ] Fix the non-fatal injection writes → make recording reliable going forward
+      (still worth it for the records, even though the call log is the truth).
 
 ## Phase 2 — Verify ANSWERED from real ODR call logs _(DIALER — approval per run, ≤1/min)_
 
@@ -93,14 +94,28 @@ answered → (booked within X days = sale).
       returns only `times called` + `status_time` — NO disposition/answered
       field. TPI tells us a lead was _dialed_, not _answered_. So the light
       per-lead method can't drive the answered backfill.
-- [ ] **REVISED:** "answered" requires call-log dispositions = heavy full-day
-      pulls (~79 req/day). Under ≤1/min, 61 missing days is impractical (days of
-      runtime). DECISION: (a) forward-only (deploy + keep existing 153, preserve
-      manual-verified), or (b) relax the cap for a bounded one-time call-log
-      backfill.
-- [ ] (if backfill) Merge with manually-verified answers (never overwrite).
-- [ ] (if backfill) Rebuild `guestanswered` = injected ∩ answered. Firestore
-      writes only.
+- [x] **Pivot — campaign filter.** `ODR - Appointments` (`cuCyA6Xoeu88`) = ALL
+      our leads, so a campaign-filtered call-log pull IS our answered set. Built
+      `scripts/backfill-answered-by-campaign.ts` — paced ≤1 DAY of data/min (not
+      per page; corrected after Adam clarified), weekdays only, additive, never
+      overwrites manual-verified.
+- [x] **1-day dry-run (06/16):** 1968 calls / 79 pages → **225 answered, all 225
+      NEW** (vs 153 lifetime). Confirms the real count is in the thousands and
+      the tool works. Timing: **3m21s for ONE day** (RM call_log ~2.5s/page). →
+      full Feb→Jun (~90 weekdays) ≈ **~5 hours**. ≤1-day/min cap is satisfied
+      for free (each day already takes ~3.4 min).
+- [ ] **AWAITING GO:** run the full `--apply` (additive, ~5h, monitored; per-day
+      progress logged) — or chunk it (month-by-month, ~1h each), or a recent
+      window only.
+- [ ] After backfill: `backfill-daily-answered.ts` to recompute counters.
+
+## Phase 2b — Forward gate fix (so the LIVE cron stops undercounting)
+
+- [ ] The live `import-dispositions.ts` still gates `guestanswered` to
+      `injectionhistory` (~206), so forward it only counts answers from the
+      SMS-bot's recorded injections — NOT all leads loaded into ODR. Widen the
+      gate to the `ODR - Appointments` campaign (or drop it, since that campaign
+      == our leads) so new days match the backfill's definition. Add a test.
 
 ## Phase 3 — Recompute + verify _(Firestore-only)_
 
@@ -122,7 +137,7 @@ answered → (booked within X days = sale).
 - [ ] Lock the injection-recording fix with a test.
 - [ ] Repair placeholder timestamps where real call times exist (keep
       manual-verified).
-- [ ] Document the pathway→injected→answered definition in `context.md`.
+- [x] Document the pathway→injected→answered definition in `context.md` (§0.19).
 
 ---
 
