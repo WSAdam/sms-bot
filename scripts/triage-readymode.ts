@@ -85,7 +85,8 @@ console.log(
   `\n∑ metrics/lifetime/totals → ${JSON.stringify(lifetime ?? "(missing)")}\n`,
 );
 
-const days = etDaysBack(8);
+const scanDays = flags.has("days") ? Math.max(1, Number(flags.get("days"))) : 8;
+const days = etDaysBack(scanDays);
 const dailyDocs = await Promise.all(
   days.map((d) => db.get(metricsDailyDocPath(d))),
 );
