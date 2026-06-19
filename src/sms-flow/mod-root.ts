@@ -14,3 +14,13 @@ export {
   getContext,
   saveContext,
 } from "@sms-flow/domain/data/flow-context/mod.ts";
+export {
+  getEvents,
+  getPointer,
+  logEvent,
+  updatePointer,
+} from "@sms-flow/domain/data/orchestrator-store/mod.ts";
+export {
+  handleDelayedInjection,
+  type HandleDelayedInjectionResult,
+} from "@sms-flow/domain/business/delayed-injection/mod.ts";
