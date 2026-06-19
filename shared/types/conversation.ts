@@ -1,13 +1,3 @@
-export interface ConversationMessage {
-  phoneNumber: string;
-  callId: string;
-  timestamp: string;
-  sender: "Guest" | "AI Bot";
-  message: string;
-  nodeTag?: string;
-  doNotText?: boolean;
-}
-
-export interface CallIdLookup {
-  phone: string;
-}
+// MIGRATION SHIM → moved to src/core/dto/conversation.ts during the shape-checker
+// migration. Kept so existing @shared/types/conversation.ts importers keep working.
+export * from "@core/dto/conversation.ts";
