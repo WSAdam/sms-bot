@@ -1,9 +1,10 @@
 // Global daily SMS counter (Eastern Time). Stored under
 // sms-bot/globalsmscount/byDate/{YYYY-MM-DD}.
 //
-// PILOT (shape-checker migration Phase 0): still imports infra via @shared/*.
-// Those become @core/* once the core kernel is migrated — kept as-is for now so
-// this first pass tests only the canonical *structure*, not the import rules.
+// MIGRATION NOTE: still imports infra via @shared/* (paths, the firestore
+// client, time). Those become @core/* once the firestore kernel + time util are
+// migrated; @shared imports from src/ are accepted by shape-checker, so this
+// stays green in the meantime.
 
 import { globalSmsCountDocPath } from "@shared/firestore/paths.ts";
 import {
