@@ -226,3 +226,16 @@ Fresh→`frontend/` finale below, NOT part of this.
 - [ ] **Co-locate `tests/` into src features → drop `tests/` from `HIDE`.**
       Fiddly (24 real tests must merge with the per-feature smoke tests);
       deferred with the rest of the finale.
+- [ ] **Replace the ~26 co-located smoke stubs with real assertions** (they only
+      satisfy the per-feature test rule by existence —
+      `assertEquals(typeof X,
+      …)` — so the gate can't tell them from real
+      coverage). Do this as part of the co-location work above. Find them (don't
+      hand-maintain a list — it rots):
+      `grep -rln 'exposes adapter\|exposes helpers\|exposes config\|exposes loader\|exposes paths' src/`.
+      Priority targets (live paths): `dialer/lead-service`, `auth/middleware`,
+      `auth/firebase`. Pure-logic features are cheap real wins (done so far:
+      `legacy-key-map`; the `parseDialerDomain` guards are covered in
+      `tests/unit/dto/`). External HTTP/Firestore adapters (qb-_, tpi-client,
+      portal-client, rm-auth, firestore-_) defensibly stay smoke — no in-memory
+      double, and a round-trip vs the mock would test the mock, not the adapter.
