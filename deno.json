@@ -24,7 +24,8 @@
     "backfill-event-time-placeholder": "deno run -A --env-file=env/local scripts/backfill-event-time-placeholder.ts",
     "reclassify-talk-now": "deno run -A --env-file=env/local scripts/reclassify-talk-now.ts",
     "recover-bland-desired-time": "deno run -A --env-file=env/local scripts/recover-bland-desired-time.ts",
-    "shape-check": "deno run -A scripts/shape-check.ts"
+    "shape-check": "bash fixtures/scripts/shape-check.sh",
+    "shape-check:unscoped": "deno run -A scripts/shape-check.ts"
   },
   "lint": {
     "rules": {
@@ -48,6 +49,15 @@
     "@types/babel__core": "npm:@types/babel__core@^7.20.5",
     "@shared/": "./shared/",
     "@tests/": "./tests/",
+    "@core/": "./src/core/",
+    "@sms-flow/": "./src/sms-flow/",
+    "@dialer/": "./src/dialer/",
+    "@messaging/": "./src/messaging/",
+    "@crm/": "./src/crm/",
+    "@scheduling/": "./src/scheduling/",
+    "@reporting/": "./src/reporting/",
+    "@auth/": "./src/auth/",
+    "#assert": "jsr:@std/assert@^1.0.7",
     "firebase-admin": "npm:firebase-admin@^12.7.0",
     "firebase-admin/firestore": "npm:firebase-admin@^12.7.0/firestore",
     "firebase-admin/app": "npm:firebase-admin@^12.7.0/app",
