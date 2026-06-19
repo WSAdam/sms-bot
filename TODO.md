@@ -201,7 +201,16 @@ path from `fixtures/scripts/shape-check.sh` `HIDE`.
 
 **Milestone:** all backend logic is now in canonical `src/` shape (8 modules +
 full kernel). `shared/` holds only 66 re-export shims + `ui/pages.ts`. ~218
-tests; scoped shape-check 0; `deno check main.ts` clean. All commits local.
+tests; scoped shape-check 0; `deno check main.ts` clean.
+
+**Branch-deploy validation (in progress):** the refactor (20 commits) lives on
+branch **`shape-checker-migration`** (pushed); local `main` = `origin/main`
+(prod baseline, untouched). The refactor is deploy-transparent (file moves
+behind shims, same `main.ts` entrypoint + Fresh layout), so a Deno Deploy branch
+deployment should be identical to prod — verify every external path on it, then
+coordinate the `main` swap with Adam. The entrypoint flip is NOT in this branch
+(it stays on the current entrypoint; that flip is the later Fresh→`frontend/`
+finale).
 
 ## Remaining (the deploy-gated endgame — NOT done)
 

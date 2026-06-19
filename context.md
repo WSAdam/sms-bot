@@ -1010,8 +1010,20 @@ This supersedes the old "shape-checker abandoned / ignore it" note in §0.1.
   `ui/pages.ts` too), then delete the shims + rewrite ~157 `@shared` importers
   - co-locate `tests/` so `shared`/`tests` drop from the `HIDE` list. An
     autocheck Stop hook enforces shape-check + tests on every `src/`/`frontend/`
-    change (bypass file: `.claude/no-autocheck`). All commits local (not
-    pushed).
+    change (bypass file: `.claude/no-autocheck`).
+
+- **Branch-deploy validation (in progress).** The whole refactor (20 commits)
+  lives on branch **`shape-checker-migration`**, pushed to origin; local `main`
+  stays at the prod baseline (`origin/main`) untouched. The refactor is
+  **deploy-transparent** — pure file moves behind `@shared/*` re-export shims,
+  same `main.ts` entrypoint, same Fresh `routes/`/`islands/` layout — so a Deno
+  Deploy **branch deployment** should serve every path identically to prod. That
+  is exactly what we verify before swapping to `main`: stand up the branch
+  deployment, exercise `/healthz`, `/trigger/*`, `/sms-callback/*`, `/cal/*`,
+  `/dashboard`, `/canary/*`, then coordinate the `main` swap (fast-forward /
+  merge — method TBD with Adam). The deploy-entrypoint flip is NOT part of this
+  branch (that is the later Fresh→`frontend/` finale); this branch keeps the
+  current entrypoint so the only variable under test is the file restructure.
 
 ---
 
