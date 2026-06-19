@@ -4,7 +4,7 @@ import {
   storeMessage,
 } from "@shared/services/conversations/store.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
-import { FirestoreMock } from "../../mocks/firestore-mock.ts";
+import { FirestoreMock } from "@tests/mocks/firestore-mock.ts";
 
 function countMessages(mock: FirestoreMock): number {
   let n = 0;
