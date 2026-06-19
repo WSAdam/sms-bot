@@ -1,4 +1,4 @@
-import { EASTERN_TZ } from "@shared/config/constants.ts";
+import { EASTERN_TZ } from "@core/business/constants/mod.ts";
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: EASTERN_TZ,

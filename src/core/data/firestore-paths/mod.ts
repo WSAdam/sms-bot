@@ -8,7 +8,7 @@
 // collection of records. e.g.
 //   sms-bot/conversations/messages/{phone10}__{callId}__{timestamp}
 
-import { ROOT_COLLECTION as R } from "@shared/config/constants.ts";
+import { ROOT_COLLECTION as R } from "@core/business/constants/mod.ts";
 
 // Containers (docs holding subcollections)
 export const conversationsContainer = `${R}/conversations`;

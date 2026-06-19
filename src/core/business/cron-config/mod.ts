@@ -7,11 +7,11 @@
 // 4 AM EST schedule still requires a code change. The `scheduleNote`
 // fields here are display-only annotations for the dashboard.
 
-import { cronConfigDocPath } from "@shared/firestore/paths.ts";
+import { cronConfigDocPath } from "@core/data/firestore-paths/mod.ts";
 import {
   type FirestoreClient,
   getFirestoreClient,
-} from "@shared/firestore/wrapper.ts";
+} from "@core/data/firestore-wrapper/mod.ts";
 
 export interface ReportConfig {
   recipients: string; // comma-separated emails (Postmark accepts this format)

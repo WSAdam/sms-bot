@@ -6,7 +6,7 @@
 // under the root collection (`sms-bot/...`) so callers can at least round-trip
 // experimental data.
 
-import { ROOT_COLLECTION } from "@shared/config/constants.ts";
+import { ROOT_COLLECTION } from "@core/business/constants/mod.ts";
 import {
   abTestDocPath,
   auditDocPath,

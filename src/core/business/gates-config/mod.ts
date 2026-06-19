@@ -16,12 +16,12 @@ import {
   GLOBAL_DAILY_SMS_CAP,
   RATE_LIMIT_WINDOW_DAYS,
   SALE_MATCH_WINDOW_DAYS,
-} from "@shared/config/constants.ts";
-import { gatesConfigDocPath } from "@shared/firestore/paths.ts";
+} from "@core/business/constants/mod.ts";
+import { gatesConfigDocPath } from "@core/data/firestore-paths/mod.ts";
 import {
   type FirestoreClient,
   getFirestoreClient,
-} from "@shared/firestore/wrapper.ts";
+} from "@core/data/firestore-wrapper/mod.ts";
 
 export interface GatesConfig {
   attemptsThreshold: number; // min times_called before we'll text

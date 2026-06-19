@@ -6,12 +6,12 @@
 // migrated; @shared imports from src/ are accepted by shape-checker, so this
 // stays green in the meantime.
 
-import { globalSmsCountDocPath } from "@shared/firestore/paths.ts";
+import { globalSmsCountDocPath } from "@core/data/firestore-paths/mod.ts";
 import {
   type FirestoreClient,
   getFirestoreClient,
-} from "@shared/firestore/wrapper.ts";
-import { easternDateString } from "@shared/util/time.ts";
+} from "@core/data/firestore-wrapper/mod.ts";
+import { easternDateString } from "@core/business/time/mod.ts";
 
 export async function getCount(
   date: string = easternDateString(),

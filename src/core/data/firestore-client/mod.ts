@@ -13,7 +13,7 @@
 // entirely to Deno at request time, which uses the import map in deno.json
 // to load the package via npm:.
 
-import { loadEnv } from "@shared/config/env.ts";
+import { loadEnv } from "@core/business/env/mod.ts";
 
 // deno-lint-ignore no-explicit-any
 const dynamicImport: (specifier: string) => Promise<any> = new Function(

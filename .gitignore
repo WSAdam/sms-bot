@@ -13,10 +13,12 @@ vendor/
 
 # sms-bot project additions
 .DS_Store
-# Anchored to root so it ignores the root credentials dir only — NOT the
-# canonical src/<module>/domain/data/ folders (rune shape-checker layout).
+# Anchored to root so these ignore the root credentials/env dirs only — NOT
+# the canonical src/ folders (rune shape-checker layout): an unanchored `data/`
+# hid every src/<module>/domain/data/, and an unanchored `env/` hid
+# src/core/business/env/.
 /data/
 !/data/*.example
-env/
-!env/example
+/env/
+!/env/example
 *.local.json
