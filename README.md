@@ -70,11 +70,16 @@ reference snapshot) via the `exclude` list in `deno.json`.
 
 ## Module structure (`src/`) + shape-check
 
-The backend is being migrated, module by module, into the **rune canonical
-shape** under
+The backend has been migrated into the **rune canonical shape** under
 `src/<module>/{entrypoints,domain/business,domain/data}/<feature>/` so it passes
-the `shape-checker` linter (mirrors the `autobottom` project). The full plan +
-status live in
+the `shape-checker` linter (mirrors the `autobottom` project). **All backend
+logic now lives in `src/`** — 8 modules (core, sms-flow, crm, messaging,
+reporting, scheduling, auth, dialer) plus the full kernel (firestore →
+`core/data`, util/time+phone → `core/business`, types → `core/dto`, config →
+`core/business`). `shared/` holds only re-export shims + the Fresh dashboard
+HTML (`ui/pages.ts`). What remains is the deploy-gated finale: relocate Fresh →
+`frontend/`, flip the Deno Deploy entrypoint, then delete the shims and shrink
+the `HIDE` list. The full plan + status live in
 [docs/shape-checker-migration.md](docs/shape-checker-migration.md).
 
 ```bash

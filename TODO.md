@@ -153,7 +153,7 @@ explicit approval and run at ≤1 RM call/min._
 
 ---
 
-# Shape-checker migration — `src/` canonical shape (IN PROGRESS, started 2026-06-19)
+# Shape-checker migration — `src/` canonical shape (all modules + kernel DONE; deploy-gated endgame remains, started 2026-06-19)
 
 Migrate the backend into the rune canonical module shape so
 `deno task
@@ -184,17 +184,35 @@ path from `fixtures/scripts/shape-check.sh` `HIDE`.
 - [x] **reporting** (postmark · nightly, audit, canary)
 - [x] **scheduling** (cal, cron-marker, inj-schedule · inj-sweep, kv-breakdown)
 - [x] **auth** (firebase · session, bearer, auth-config, middleware)
+- [x] **config** → `core/business/{gates-config,cron-config}` (was
+      shared/services/config).
+- [x] **orchestrator** → `sms-flow` (`orchestrator-store` data ·
+      `delayed-injection` business); 13 importers kept working via shims.
+- [x] **dialer / readymode** (10 files) → new `src/dialer` module (3 data:
+      rm-auth, portal-client, tpi-client · 7 business: campaigns, domain-config,
+      mapping, validate-trigger, import-dispositions, scrape-orchestrator,
+      lead-service). The LIVE `/trigger`→Bland path; verified hard (every live
+      route + script + crm importer type-checks through the shims).
+- [x] **Kernel → `core`**: firestore/\* → `core/data` (firestore-client/wrapper/
+      paths/txn + legacy-key-map); `util/{time,phone}` → `core/business`;
+      `types/*` → `core/dto` (flat); `config/{constants,env}` → `core/business`.
+      All intra-core imports swept onto `@core`. `.gitignore` `env/` → `/env/`
+      fix (sibling of the `data/` bug).
 
-## Remaining
+**Milestone:** all backend logic is now in canonical `src/` shape (8 modules +
+full kernel). `shared/` holds only 66 re-export shims + `ui/pages.ts`. ~218
+tests; scoped shape-check 0; `deno check main.ts` clean. All commits local.
 
-- [ ] **config** (gates-config, cron-config) — cross-cutting, many importers →
-      likely folds into `core`.
-- [ ] **orchestrator** (queue, service) — 13 importers, coupled to readymode.
-- [ ] **dialer / readymode** (10 files) — the LIVE `/trigger`→Bland texting
-      path. **Highest risk** (just had an outage); do as a careful dedicated
-      pass, verify hard.
-- [ ] Finale (optional): move firestore kernel + `util/{time,phone}` + `types`
-      into `core`; relocate Fresh → `frontend/`; flip the Deno Deploy entrypoint
-      (preview-test first).
-- [ ] Once `tests/` co-located + `shared/` empty: shrink `HIDE`; update
-      context.md §0.1/§0.20.
+## Remaining (the deploy-gated endgame — NOT done)
+
+- [ ] **Relocate Fresh → `frontend/` + flip the Deno Deploy entrypoint** —
+      requires a Deploy preview + push/deploy (hard constraint: no deploy w/o
+      approval). Includes moving `shared/ui/pages.ts` (4963-line dashboard HTML)
+      into `frontend/`.
+- [ ] **Delete the 66 shims + rewrite ~157 `@shared` importers → `@core`/
+      `@module`, then drop `shared` from `HIDE`.** Blocked: `shared/` can't be
+      emptied until `ui/pages.ts` relocates (above). High-churn, lint-scope-only
+      benefit; the shims are the intended bridge and work fine.
+- [ ] **Co-locate `tests/` into src features → drop `tests/` from `HIDE`.**
+      Fiddly (24 real tests must merge with the per-feature smoke tests);
+      deferred with the rest of the finale.
