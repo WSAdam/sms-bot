@@ -35,10 +35,14 @@ Firebase service-account JSON at the path in `GOOGLE_APPLICATION_CREDENTIALS`.
 ## Tests
 
 ```bash
-deno task test
+deno task test                                         # tests/unit only
+deno test -A --no-check --ignore=frontend/,tests/e2e/  # + co-located src/ tests
 ```
 
-150 unit tests, all mocked Firestore + Bland. No emulator tests.
+~195 unit tests, all mocked Firestore + Bland. No emulator tests. As the backend
+migrates into `src/` (see below), each feature carries a co-located `test.ts`
+(business) or `smk.test.ts` (data); those run with the second command (and in
+the autocheck hook), while `deno task test` still covers `tests/unit/`.
 
 ## Type-check + build
 
@@ -63,6 +67,37 @@ git config core.hooksPath .githooks
 
 `deno fmt`/lint skip `_fresh/` and `_source-omnisource/` (archived NestJS
 reference snapshot) via the `exclude` list in `deno.json`.
+
+## Module structure (`src/`) + shape-check
+
+The backend is being migrated, module by module, into the **rune canonical
+shape** under
+`src/<module>/{entrypoints,domain/business,domain/data}/<feature>/` so it passes
+the `shape-checker` linter (mirrors the `autobottom` project). The full plan +
+status live in
+[docs/shape-checker-migration.md](docs/shape-checker-migration.md).
+
+```bash
+deno task shape-check          # scoped: scans ONLY src/ (must be 0 violations)
+```
+
+Key facts:
+
+- `deno task shape-check` runs `fixtures/scripts/shape-check.sh`, which
+  temporarily git-untracks everything that isn't `src/` (shape-checker discovers
+  files via git), runs the checker, and restores git on exit. As modules
+  migrate, their old paths drop off the wrapper's `HIDE` list.
+- Migrated code lives in `src/`; the old `shared/services/*` paths become
+  one-line **re-export shims** (in the untracked `shared/` tree, so they're not
+  shape-checked) — every existing `@shared/...` importer keeps working
+  untouched, so the app stays deployable throughout.
+- Import via `@module/` aliases (`@core/`, `@sms-flow/`, `@crm/`, …) defined in
+  `deno.json`. Business features = `mod.ts` + `test.ts`; data features (external
+  adapters) = `mod.ts` + `smk.test.ts`; normal modules need a `mod-root.ts`;
+  `core` is the exempt kernel.
+- An autocheck **Stop hook** runs `shape-check` + tests whenever `src/`/
+  `frontend/` change and blocks finishing on any violation (bypass:
+  `.claude/no-autocheck`).
 
 ## Deploy
 

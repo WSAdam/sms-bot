@@ -46,9 +46,14 @@ one Deno Deploy project:
   injection sweep and the daily QB sale-match. No `CRON_SHARED_SECRET`,
   `CRON_INTERNAL_TOKEN`, or `SMS_COUNT_TOKEN` env vars exist anymore. The
   endpoints are open (manual triggers via Test page).
-- **shape-checker abandoned** — fundamentally incompatible with Fresh's
-  `routes/` convention. The script is still wired to `deno task shape-check` for
-  completeness; ignore its output.
+- **shape-checker — being ADOPTED (was abandoned).** Originally shelved as
+  incompatible with Fresh's `routes/` convention. As of 2026-06-19 we're
+  migrating the backend into the rune canonical shape under `src/` so it passes,
+  via a git-untrack wrapper that scopes the checker to `src/` only.
+  `deno task
+  shape-check` now runs that scoped wrapper (must be 0 violations).
+  Full architecture + status: §0.20 and
+  [docs/shape-checker-migration.md](docs/shape-checker-migration.md).
 - **Reads always filter at the database; hot-path metrics use write-side
   aggregators.** After the 2026-05-19 quota incident and the follow-up cleanup,
   every code path that needs many docs uses one of: (a) a database-side `where`
@@ -945,6 +950,62 @@ of 41 days 05-07→06-16 captured), so the report's "calls answered" silently re
 `TODO.md` tracks the phased plan (forward cron fix = done; injected-universe
 reconciliation; the answered backfill; the forward-gate widening; a verification
 view).
+
+### 0.20 shape-checker adoption — `src/` canonical migration (June 2026, IN PROGRESS)
+
+Migrating the backend into the rune canonical module shape under `src/` so
+`deno task shape-check` passes (mirrors the `autobottom` project). Full plan +
+rationale: [docs/shape-checker-migration.md](docs/shape-checker-migration.md).
+This supersedes the old "shape-checker abandoned / ignore it" note in §0.1.
+
+- **The mechanism.** `shape-checker` discovers its file set from **git
+  tracking** (no include/exclude flag). `deno task shape-check` →
+  `fixtures/scripts/shape-check.sh` temporarily git-untracks everything that
+  isn't `src/` (appends to `.gitignore` + `git rm --cached`), runs the checker
+  so it sees ONLY `src/`, and restores git on `trap EXIT`. Invariants: no
+  `set -e`; `git add` without `-f` in cleanup; the `HIDE` list is used for both
+  untrack + restore (kept in sync). As a module migrates, its old path drops off
+  `HIDE`.
+
+- **Canonical shape (learned from the checker).** Module =
+  `src/<module>/{entrypoints,domain/business,domain/data}/<feature>/` + a
+  top-level `mod-root.ts` (the ONLY allowed barrel). Business feature = `mod.ts`
+  - `test.ts`; **data feature (external adapter) = `mod.ts` + `smk.test.ts`**
+    (NOT `test.ts`). A normal module needs `mod-root.ts` AND ≥2 layers; **`core`
+    is the exempt kernel** (no `mod-root.ts`; importers use full
+    `@core/<layer>/<feature>/mod.ts` paths). **Model A confirmed viable**: an
+    entrypoint-less module (only `domain/…`) passes — so HTTP stays in Fresh
+    routes/`main.ts` as thin adapters; we did NOT rewrite webhooks into a
+    router.
+
+- **Incremental + non-breaking via shims.** A module's files are `git mv`'d into
+  `src/`; intra-module imports rewritten to `@module/` aliases (in `deno.json`:
+  `@core/ @sms-flow/ @dialer/ @messaging/ @crm/ @scheduling/ @reporting/
+  @auth/`,
+  plus `#assert`); the old `shared/services/*` paths become one-line `export *`
+  **re-export shims**. Shims live in the untracked `shared/` tree (never
+  shape-checked), so every existing `@shared/...` importer keeps working and the
+  app stays deployable at every step. `@shared/*` imports FROM `src/` do not
+  violate `import-aliases`, so the firestore kernel can stay in `shared/` for
+  now.
+
+- **Gotcha fixed:** `.gitignore` had an unanchored `data/` that ignored EVERY
+  `src/<module>/domain/data/` folder; anchored to `/data/` (root credentials dir
+  only). `git mv`'d files slipped through but fresh files (smk tests) were
+  silently ignored until this fix.
+
+- **Status (2026-06-19).** Migrated + green (scoped shape-check 0,
+  `deno check
+  main.ts` clean, ~195 tests): **core, sms-flow, crm, messaging,
+  reporting, scheduling, auth** (7 modules). Remaining: **config**
+  (gates-config/cron-config, cross-cutting), **orchestrator** (queue/service, 13
+  importers, readymode-coupled), **dialer/readymode** (10 files — the LIVE
+  `/trigger`→Bland texting path; highest risk, do as a careful dedicated pass).
+  Then optional finale: move the firestore kernel + `util/{time,phone}` +
+  `types` into `core`, relocate Fresh → `frontend/`, flip the Deno Deploy
+  entrypoint. An autocheck Stop hook enforces shape-check + tests on every
+  `src/`/`frontend/` change (bypass file: `.claude/no-autocheck`). All commits
+  local (not pushed).
 
 ---
 

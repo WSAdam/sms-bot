@@ -150,3 +150,51 @@ answered → (booked within X days = sale).
 
 _Started Phase 1 (Firestore-only) on 2026-06-18. Dialer steps (Phase 2) await
 explicit approval and run at ≤1 RM call/min._
+
+---
+
+# Shape-checker migration — `src/` canonical shape (IN PROGRESS, started 2026-06-19)
+
+Migrate the backend into the rune canonical module shape so
+`deno task
+shape-check` passes. Full plan:
+[docs/shape-checker-migration.md](docs/shape-checker-migration.md); architecture
+summary: context.md §0.20.
+
+**Invariants (enforced by the autocheck Stop hook):** scoped shape-check = 0,
+`deno check main.ts` clean, tests green — at every step. App stays deployable
+via `@shared/services/*` re-export shims. All commits local (not pushed).
+
+**Per-module recipe:** `git mv` files →
+`src/<module>/domain/{business,data}/<feature>/mod.ts` · rewrite intra-module
+imports to `@module/` · write `export *` shim at old `shared/services/*` path ·
+add co-located `test.ts` (business) / `smk.test.ts` (data) · `mod-root.ts`
+(normal modules; not `core`) · `deno fmt` · verify · commit. Drop the migrated
+path from `fixtures/scripts/shape-check.sh` `HIDE`.
+
+## Done (green + committed)
+
+- [x] Phase 0 pilot + wrapper + `@module/` aliases + `.gitignore` `/data/` fix.
+- [x] **core** (timing, id, sms-count — business)
+- [x] **sms-flow** (ab-test, rate-limiter, dnc · flow-context)
+- [x] **crm** (qb-api/client/report/reservations · crm-lookup, sale-match,
+      sale-match-cron)
+- [x] **messaging** (bland, conv-store, conv-lookup · conv-dedupe, booking-scan,
+      reseed)
+- [x] **reporting** (postmark · nightly, audit, canary)
+- [x] **scheduling** (cal, cron-marker, inj-schedule · inj-sweep, kv-breakdown)
+- [x] **auth** (firebase · session, bearer, auth-config, middleware)
+
+## Remaining
+
+- [ ] **config** (gates-config, cron-config) — cross-cutting, many importers →
+      likely folds into `core`.
+- [ ] **orchestrator** (queue, service) — 13 importers, coupled to readymode.
+- [ ] **dialer / readymode** (10 files) — the LIVE `/trigger`→Bland texting
+      path. **Highest risk** (just had an outage); do as a careful dedicated
+      pass, verify hard.
+- [ ] Finale (optional): move firestore kernel + `util/{time,phone}` + `types`
+      into `core`; relocate Fresh → `frontend/`; flip the Deno Deploy entrypoint
+      (preview-test first).
+- [ ] Once `tests/` co-located + `shared/` empty: shrink `HIDE`; update
+      context.md §0.1/§0.20.
