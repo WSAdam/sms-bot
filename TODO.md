@@ -203,14 +203,15 @@ path from `fixtures/scripts/shape-check.sh` `HIDE`.
 full kernel). `shared/` holds only 66 re-export shims + `ui/pages.ts`. ~218
 tests; scoped shape-check 0; `deno check main.ts` clean.
 
-**Branch-deploy validation (in progress):** the refactor (20 commits) lives on
-branch **`shape-checker-migration`** (pushed); local `main` = `origin/main`
-(prod baseline, untouched). The refactor is deploy-transparent (file moves
-behind shims, same `main.ts` entrypoint + Fresh layout), so a Deno Deploy branch
-deployment should be identical to prod — verify every external path on it, then
-coordinate the `main` swap with Adam. The entrypoint flip is NOT in this branch
-(it stays on the current entrypoint; that flip is the later Fresh→`frontend/`
-finale).
+**MERGED + LIVE on prod (2026-06-19):** validated on a Deno Deploy branch
+deployment of `shape-checker-migration` (all external paths identical to prod;
+paranoia audit confirmed the rate-limit/throttle code is byte-identical to prod
+and the ReadyMode guards fail closed), then **fast-forwarded into `main` and
+pushed** (`origin/main` 546bed7 → 5abd52e, build `success`). `main.ts` was
+byte-identical pre-merge, so the entrypoint + 8 `Deno.cron` registrations are
+unchanged; post-deploy prod verification green. The refactor is
+deploy-transparent (file moves behind shims). The entrypoint flip is the later
+Fresh→`frontend/` finale below, NOT part of this.
 
 ## Remaining (the deploy-gated endgame — NOT done)
 

@@ -1012,18 +1012,20 @@ This supersedes the old "shape-checker abandoned / ignore it" note in §0.1.
     autocheck Stop hook enforces shape-check + tests on every `src/`/`frontend/`
     change (bypass file: `.claude/no-autocheck`).
 
-- **Branch-deploy validation (in progress).** The whole refactor (20 commits)
-  lives on branch **`shape-checker-migration`**, pushed to origin; local `main`
-  stays at the prod baseline (`origin/main`) untouched. The refactor is
-  **deploy-transparent** — pure file moves behind `@shared/*` re-export shims,
-  same `main.ts` entrypoint, same Fresh `routes/`/`islands/` layout — so a Deno
-  Deploy **branch deployment** should serve every path identically to prod. That
-  is exactly what we verify before swapping to `main`: stand up the branch
-  deployment, exercise `/healthz`, `/trigger/*`, `/sms-callback/*`, `/cal/*`,
-  `/dashboard`, `/canary/*`, then coordinate the `main` swap (fast-forward /
-  merge — method TBD with Adam). The deploy-entrypoint flip is NOT part of this
-  branch (that is the later Fresh→`frontend/` finale); this branch keeps the
-  current entrypoint so the only variable under test is the file restructure.
+- **MERGED + LIVE on prod (2026-06-19).** The refactor was validated on a Deno
+  Deploy **branch deployment** of `shape-checker-migration` (every external path
+  identical to prod; a paranoia audit confirmed the rate-limit/throttle code is
+  byte-identical to prod and the ReadyMode guards fail closed), then
+  fast-forwarded into `main` and pushed. `main.ts` was byte-identical to prod
+  before the merge, so the entrypoint + all 8 `Deno.cron` registrations are
+  unchanged — the deploy only moved module files behind the shims. Post-deploy
+  prod verification green (`/healthz`, `/login`, auth 401s, `/canary` fail-
+  closed, the migrated orchestrator-store read all identical); GitHub reported
+  the build `success`. The refactor is **deploy-transparent**: same entrypoint,
+  same Fresh `routes/`/`islands/` layout, logic behind `@shared/*` re-export
+  shims. **Still pending (the later finale):** relocate Fresh → `frontend/` +
+  flip the Deno Deploy entrypoint, then delete the shims + co-locate `tests/` so
+  `shared`/`tests` drop from the `HIDE` list.
 
 ---
 
