@@ -7,7 +7,10 @@ import {
 } from "./mod.ts";
 
 Deno.test("doc-id builders compose parts with __", () => {
-  assertEquals(conversationDocId("5551230001", "c1", "t1"), "5551230001__c1__t1");
+  assertEquals(
+    conversationDocId("5551230001", "c1", "t1"),
+    "5551230001__c1__t1",
+  );
   assertEquals(injectionHistoryDocId("5551230001", "t1"), "5551230001__t1");
   assertEquals(orchestratorEventDocId("5551230001", "t1"), "5551230001__t1");
 });
