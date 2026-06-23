@@ -309,6 +309,46 @@ export interface IngestTranscriptDeps {
   client: FirestoreClient;
 }
 
+// Validate + map one Bland message to an additive conversation BatchOp, or null
+// to skip it (placeholder/empty/oversized body, or a non-ISO timestamp we can't
+// key safely/sortably). The doc id carries the per-message `idx` so two lines
+// sharing a `created_at` (same-second, or both `.000Z`) don't collide on one id
+// and silently drop one — read-time dedupeMessages keys on content, not id, so
+// it never recovers a storage-level overwrite. Stable across re-pulls when
+// Bland returns messages in the same order; if the order shifts, re-ingest
+// writes new ids that dedupeMessages (callId+sender+message) then collapses.
+function buildMsgOp(
+  m: BlandMsg,
+  phone10: string,
+  cid: string,
+  idx: number,
+): BatchOp | null {
+  const text = m?.message;
+  const ts = m?.created_at;
+  if (
+    typeof text !== "string" || !text || text === "<Call Connected>" ||
+    text.length > MAX_MESSAGE_LEN
+  ) {
+    return null;
+  }
+  if (typeof ts !== "string" || !ISO_TIMESTAMP.test(ts)) return null;
+  // Mirror the per-call webhook's mapping exactly (USER|GUEST → Guest) so an
+  // ingest copy and a webhook copy of the same line share a dedupe key.
+  const su = String(m.sender ?? "").toUpperCase();
+  const sender = su === "USER" || su === "GUEST" ? "Guest" : "AI Bot";
+  return {
+    type: "set",
+    path: `${conversationsCollection}/${phone10}__${cid}__${ts}__${idx}`,
+    data: {
+      phoneNumber: phone10,
+      callId: cid,
+      sender,
+      message: text,
+      timestamp: ts,
+    },
+  };
+}
+
 export async function ingestBlandTranscript(
   phone10: string,
   conversationId?: string,
@@ -391,41 +431,11 @@ export async function ingestBlandTranscript(
         summary.skipped += allMsgs.length - MAX_MESSAGES_PER_CONVERSATION;
       }
       const ops: BatchOp[] = [];
-      for (const m of allMsgs.slice(0, MAX_MESSAGES_PER_CONVERSATION)) {
-        const text = m?.message;
-        const ts = m?.created_at;
-        // Drop placeholders, empties, oversized bodies, and anything we can't
-        // key safely/sortably (the timestamp becomes part of the doc id; it
-        // must be a real ISO-8601 value — see ISO_TIMESTAMP — so it is stable,
-        // idempotent across runs, and a legal Firestore id).
-        if (
-          typeof text !== "string" || !text || text === "<Call Connected>" ||
-          text.length > MAX_MESSAGE_LEN
-        ) {
-          summary.skipped++;
-          continue;
-        }
-        if (typeof ts !== "string" || !ISO_TIMESTAMP.test(ts)) {
-          summary.skipped++;
-          continue;
-        }
-        // Mirror the per-call webhook's mapping exactly (USER|GUEST → Guest)
-        // so ingest + webhook copies of the same line share a dedupe key
-        // (callId__sender__message) and collapse at read.
-        const su = String(m.sender ?? "").toUpperCase();
-        const sender = su === "USER" || su === "GUEST" ? "Guest" : "AI Bot";
-        ops.push({
-          type: "set",
-          path: `${conversationsCollection}/${phone10}__${cid}__${ts}`,
-          data: {
-            phoneNumber: phone10,
-            callId: cid,
-            sender,
-            message: text,
-            timestamp: ts,
-          },
-        });
-      }
+      allMsgs.slice(0, MAX_MESSAGES_PER_CONVERSATION).forEach((m, idx) => {
+        const op = buildMsgOp(m, phone10, cid, idx);
+        if (op) ops.push(op);
+        else summary.skipped++;
+      });
       for (let i = 0; i < ops.length; i += BATCH_CHUNK) {
         await client.batch(ops.slice(i, i + BATCH_CHUNK));
       }

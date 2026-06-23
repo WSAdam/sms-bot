@@ -67,6 +67,12 @@ function storedDocs(client: FirestoreMock) {
   );
 }
 
+// Path-agnostic lookup by stored timestamp — the doc id now carries a
+// per-message index suffix, so assert on the message data, not the exact path.
+function docByTs(client: FirestoreMock, ts: string) {
+  return [...client.docs.values()].find((d) => d.timestamp === ts);
+}
+
 Deno.test("happy path: stores each message by conversationId with correct mapping", async () => {
   const t = deps({
     conversations: {
@@ -84,17 +90,30 @@ Deno.test("happy path: stores each message by conversationId with correct mappin
   assertEquals(t.searchCalls, []);
   const docs = storedDocs(t.client);
   assertEquals(docs.length, 2);
-  const guest = t.client.docs.get(
-    `${conversationsCollection}/${PHONE}__conv1__2026-06-22T10:00:00.000Z`,
-  );
+  const guest = docByTs(t.client, "2026-06-22T10:00:00.000Z");
   assertEquals(guest?.sender, "Guest");
   assertEquals(guest?.message, "I want to talk now");
   assertEquals(guest?.phoneNumber, PHONE);
   assertEquals(guest?.callId, "conv1");
-  const bot = t.client.docs.get(
-    `${conversationsCollection}/${PHONE}__conv1__2026-06-22T10:01:00.000Z`,
-  );
+  const bot = docByTs(t.client, "2026-06-22T10:01:00.000Z");
   assertEquals(bot?.sender, "AI Bot");
+});
+
+Deno.test("co-timestamped messages do NOT collide — both stored (index suffix)", async () => {
+  const ts = "2026-06-22T10:00:00.000Z"; // identical created_at on both lines
+  const t = deps({
+    conversations: {
+      conv1: convo([
+        msg("USER", "first line", ts),
+        msg("ASSISTANT", "second line, same second", ts),
+      ]),
+    },
+  });
+  const s = await ingestBlandTranscript(PHONE, "conv1", t.deps);
+  assertEquals(s.stored, 2);
+  assertEquals(storedDocs(t.client).length, 2); // neither overwrote the other
+  const msgs = storedDocs(t.client).map(([, d]) => d.message).sort();
+  assertEquals(msgs, ["first line", "second line, same second"]);
 });
 
 Deno.test("phone fallback when no conversationId; fuzzy-mismatch filtered out", async () => {
@@ -214,11 +233,7 @@ Deno.test("skips placeholders, empty/non-string messages, and non-ISO timestamps
   const s = await ingestBlandTranscript(PHONE, "conv1", t.deps);
   assertEquals(s.stored, 2); // only the two valid ISO timestamps
   assertEquals(s.skipped, 9);
-  assert(
-    t.client.docs.has(
-      `${conversationsCollection}/${PHONE}__conv1__2026-06-22T10:00:09.000Z`,
-    ),
-  );
+  assert(docByTs(t.client, "2026-06-22T10:00:09.000Z"));
 });
 
 Deno.test("sender mapping matches the per-call webhook (USER|GUEST → Guest)", async () => {
@@ -235,9 +250,7 @@ Deno.test("sender mapping matches the per-call webhook (USER|GUEST → Guest)", 
     },
   });
   await ingestBlandTranscript(PHONE, "conv1", t.deps);
-  const senderOf = (ts: string) =>
-    t.client.docs.get(`${conversationsCollection}/${PHONE}__conv1__${ts}`)
-      ?.sender;
+  const senderOf = (ts: string) => docByTs(t.client, ts)?.sender;
   assertEquals(senderOf("2026-06-22T10:00:00.000Z"), "Guest"); // USER
   assertEquals(senderOf("2026-06-22T10:00:01.000Z"), "Guest"); // user
   assertEquals(senderOf("2026-06-22T10:00:02.000Z"), "Guest"); // GUEST
@@ -351,9 +364,7 @@ Deno.test("message content is stored verbatim (escaping is a render concern, not
     },
   });
   await ingestBlandTranscript(PHONE, "conv1", t.deps);
-  const doc = t.client.docs.get(
-    `${conversationsCollection}/${PHONE}__conv1__2026-06-22T10:00:00.000Z`,
-  );
+  const doc = docByTs(t.client, "2026-06-22T10:00:00.000Z");
   assertEquals(doc?.message, evil);
 });
 

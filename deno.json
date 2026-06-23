@@ -24,6 +24,7 @@
     "backfill-event-time-placeholder": "deno run -A --env-file=env/local scripts/backfill-event-time-placeholder.ts",
     "reclassify-talk-now": "deno run -A --env-file=env/local scripts/reclassify-talk-now.ts",
     "recover-bland-desired-time": "deno run -A --env-file=env/local scripts/recover-bland-desired-time.ts",
+    "backfill-talk-now-transcripts": "deno run -A --env-file=env/local scripts/backfill-talk-now-transcripts.ts",
     "shape-check": "bash fixtures/scripts/shape-check.sh",
     "shape-check:unscoped": "deno run -A scripts/shape-check.ts"
   },
