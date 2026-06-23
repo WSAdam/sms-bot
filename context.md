@@ -1029,6 +1029,56 @@ This supersedes the old "shape-checker abandoned / ignore it" note in §0.1.
 
 ---
 
+### 0.21 Conversation transcript completeness + booking-path integrity (June 2026)
+
+Auditing the dashboard (appts booked / answered / sales) surfaced two
+data-completeness gaps on the **direct-injection** booking paths. The headline
+counts are NOT affected (appts come from
+`injectionhistory`/`scheduledinjections`, answered from `guestanswered`, sales
+from `guestactivated` — none depend on the stored SMS transcript); the gaps are
+in the **conversation review view**.
+
+- **Talk-now stores only the signal, not the transcript.**
+  `POST /sms-callback/bland/talk-now` injects + writes an `injectionhistory` doc
+  (`firedBy:"talk-now"`) but **never calls `storeMessage`**. The "I want to talk
+  now" exchange happens inside Bland; we receive only the talk-now webhook (the
+  phone), not the messages. Our `conversations` collection gets Bland messages
+  only via the per-call webhook `/sms-callback/conversation/[phone]/[callId]`,
+  the seed scripts, and the **nightly reseed cron**
+  (`reseedConversationsByDateRange`). So a talk-now lead's appointment is
+  captured while its transcript may live only in Bland (e.g. `8508306131`:
+  appointment Jun 22, conversation in our store ends Mar 28).
+
+- **Cal.com booking failures are fail-safe but only loudly logged.**
+  `routes/cal/schedule.ts` defaults
+  `bookingUid="CAL_FAILED_BUT_INJECTION_SCHEDULED"`; on a `createBooking` throw
+  it logs
+  **`[cal/schedule] ⚠️ Cal.com booking
+  failed: <reason> — proceeding with SMS injection (fail-safe)`**
+  and still schedules the injection (the guest is dialed; only the Cal _calendar
+  event_ is missing). The synthetic sentinel callId only surfaces when Bland
+  sends no `conversationId`, so searching the conversation store for it
+  **undercounts** — the log line is the true signal (but Deploy logs are
+  ephemeral). Durable fix (planned): write a `calBookingFailed`/`calError` flag
+  on the scheduledinjection so failures are queryable from data, not just logs.
+
+- **Fix — on-booking additive transcript ingestion.** After a successful inject,
+  both direct-injection endpoints (`/cal/schedule`,
+  `/sms-callback/bland/talk-now`) pull the Bland transcript and store it,
+  best-effort (non-blocking). Uses a **purely additive**
+  `ingestBlandTranscript(phone10, conversationId?)` (in `messaging` reseed):
+  resolve by `getConversation(id)` if the webhook carries a Bland conversation
+  id, else `searchConversationsByPhone(phone10)` (phone alone suffices — no
+  Bland-side change required); write each message with its Bland `created_at`
+  timestamp; **never deletes** (unlike `reseedOne`'s delete-replace, which
+  strips nodeTags and would clobber the "appointment scheduled" marker).
+  Storage-level duplicates are collapsed at read by `dedupeMessages`
+  (`callId__sender__message`, earliest wins), so this is safe. The nightly
+  reseed remains the completeness backstop (the on-booking pull may miss the
+  final wrap-up message still in flight when the webhook fires).
+
+---
+
 ## 1. Project goals
 
 - **Single Deno Deploy app** at `~/Programming/sms-bot/` serving every endpoint

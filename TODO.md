@@ -239,3 +239,29 @@ Fresh→`frontend/` finale below, NOT part of this.
       `tests/unit/dto/`). External HTTP/Firestore adapters (qb-_, tpi-client,
       portal-client, rm-auth, firestore-_) defensibly stay smoke — no in-memory
       double, and a round-trip vs the mock would test the mock, not the adapter.
+
+---
+
+# Booking-path data integrity (IN PROGRESS, started 2026-06-23)
+
+Findings + plan in context.md §0.21. The dashboard counts are correct (appts ←
+`injectionhistory`, answered ← `guestanswered`, sales ← `guestactivated`); these
+items close **conversation-review** gaps on the direct-injection paths.
+
+- [ ] **On-booking Bland transcript ingestion** (this round). New
+      purely-additive `ingestBlandTranscript(phone10, conversationId?)` in
+      `messaging` reseed; called best-effort (non-blocking) after a successful
+      inject in `/sms-callback/bland/talk-now` and `/cal/schedule`. Resolves by
+      `getConversation(id)` if the webhook carries a Bland conversation id, else
+      `searchConversationsByPhone(phone)`. Never deletes (preserves the
+      "appointment scheduled" marker + nodeTags); `dedupeMessages` collapses
+      storage dups at read. Thoroughly + adversarially tested.
+- [ ] **Durable Cal-failure flag.** Write `calBookingFailed:true` + `calError`
+      on the scheduledinjection when `cal.createBooking` throws, so failures are
+      queryable from data (the `[cal/schedule] ⚠️ Cal.com booking failed` log is
+      ephemeral on Deploy + the sentinel callId undercounts). Surface on the
+      dashboard ("booked in our system, not on the real calendar").
+- [ ] **One-shot backfill** of historical talk-now transcripts (run
+      `reseedConversationsForPhone` / the additive ingest over talk-now-fired
+      phones whose `conversations` have nothing near the fire time) — additive,
+      read-then-write, never delete.
