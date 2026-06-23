@@ -857,7 +857,7 @@ ${sharedThemeCss}
           <thead>
             <tr>
               <th>Phone</th>
-              <th>Appointment</th>
+              <th id="apptApptHeader" style="cursor:pointer; user-select:none" onclick="window.apptSortByAppointment()" title="Click to sort this page by appointment time">Appointment<span id="apptSortArrow" class="muted"></span></th>
               <th>Status</th>
               <th>Booked At</th>
               <th>Source</th>
@@ -1129,6 +1129,8 @@ const apptCountChip = document.getElementById("apptCountChip");
 let apptPage = 1;
 let apptPageSize = 50;
 let apptTotal = 0;
+let apptRows = [];     // current page's deduped rows (for client-side sort)
+let apptSortDir = 0;   // 0 = as returned, 1 = appointment asc, -1 = appointment desc
 
 function openOverlay(){
   overlay.classList.add("open");
@@ -1229,37 +1231,10 @@ async function loadAppointments(page){
     }
 
     apptTable.style.display = "table";
-    for(const it of uniqueItems){
-      const row = document.createElement("tr");
-      // Appointment time from the canonical injection record's eventTime.
-      const apptHtml = it.eventTime
-        ? '<span style="color:var(--accentHi);font-weight:900">' + escapeHtml(formatTimestamp(it.eventTime)) + '</span>'
-        : '<span class="muted">-</span>';
-      // Status badge derived from pipeline state: scheduled (pending),
-      // fired (sweep injected to dialer), errored (sweep failed).
-      var statusHtml;
-      if(it.status === "scheduled"){
-        statusHtml = '<span class="badge">scheduled</span>';
-      } else if(it.status === "fired"){
-        statusHtml = '<span class="badge ok">fired' + (it.firedBy ? ' (' + escapeHtml(it.firedBy) + ')' : '') + '</span>';
-      } else if(it.status === "errored"){
-        statusHtml = '<span class="badge err">' + escapeHtml(it.injectionStatus || "errored") + '</span>';
-      } else {
-        statusHtml = '<span class="muted">' + escapeHtml(it.status || "?") + '</span>';
-      }
-      // Source distinguishes Cal.com path (scheduledinjections) from a
-      // historical fire (injectionhistory) or a backfill from booking-scan.
-      var sourceLabel = it.source === "scheduledinjections" ? "scheduled" :
-                        it.source === "injectionhistory" ? "history" :
-                        (it.source || "-");
-      row.innerHTML =
-        '<td>' + phoneLink(it.phoneNumber) + '</td>' +
-        '<td>' + apptHtml + '</td>' +
-        '<td>' + statusHtml + '</td>' +
-        '<td class="muted">' + escapeHtml(it.bookedAt ? formatTimestamp(it.bookedAt) : "-") + '</td>' +
-        '<td class="muted">' + escapeHtml(sourceLabel) + '</td>';
-      apptTbody.appendChild(row);
-    }
+    apptRows = uniqueItems;
+    apptSortDir = 0;          // new page load → show in server (booked-at) order
+    updateApptSortArrow();
+    renderApptRows();
 
     renderAppointmentsPager(data.page || page, data.pageSize || apptPageSize, data.total || 0);
   } catch(err){
@@ -1268,6 +1243,67 @@ async function loadAppointments(page){
     apptError.style.display = "block";
   }
 }
+
+// Render the current page's rows (apptRows) into the table body. Split out
+// of loadAppointments so the appointment-column sort can re-render without
+// re-fetching.
+function renderApptRows(){
+  apptTbody.innerHTML = "";
+  for(const it of apptRows){
+    const row = document.createElement("tr");
+    // Appointment time from the canonical injection record's eventTime.
+    const apptHtml = it.eventTime
+      ? '<span style="color:var(--accentHi);font-weight:900">' + escapeHtml(formatTimestamp(it.eventTime)) + '</span>'
+      : '<span class="muted">-</span>';
+    // Status badge derived from pipeline state: scheduled (pending),
+    // fired (sweep injected to dialer), errored (sweep failed).
+    var statusHtml;
+    if(it.status === "scheduled"){
+      statusHtml = '<span class="badge">scheduled</span>';
+    } else if(it.status === "fired"){
+      statusHtml = '<span class="badge ok">fired' + (it.firedBy ? ' (' + escapeHtml(it.firedBy) + ')' : '') + '</span>';
+    } else if(it.status === "errored"){
+      statusHtml = '<span class="badge err">' + escapeHtml(it.injectionStatus || "errored") + '</span>';
+    } else {
+      statusHtml = '<span class="muted">' + escapeHtml(it.status || "?") + '</span>';
+    }
+    // Source distinguishes Cal.com path (scheduledinjections) from a
+    // historical fire (injectionhistory) or a backfill from booking-scan.
+    var sourceLabel = it.source === "scheduledinjections" ? "scheduled" :
+                      it.source === "injectionhistory" ? "history" :
+                      (it.source || "-");
+    row.innerHTML =
+      '<td>' + phoneLink(it.phoneNumber) + '</td>' +
+      '<td>' + apptHtml + '</td>' +
+      '<td>' + statusHtml + '</td>' +
+      '<td class="muted">' + escapeHtml(it.bookedAt ? formatTimestamp(it.bookedAt) : "-") + '</td>' +
+      '<td class="muted">' + escapeHtml(sourceLabel) + '</td>';
+    apptTbody.appendChild(row);
+  }
+}
+
+function updateApptSortArrow(){
+  const el = document.getElementById("apptSortArrow");
+  if(el) el.textContent = apptSortDir === 1 ? " ▲" : (apptSortDir === -1 ? " ▼" : "");
+}
+
+// Client-side sort of the CURRENT PAGE by appointment time. First click
+// sorts descending; toggles thereafter. Null appointment times sort last.
+// (Cross-page sort would need server-side ordering in /api/appointments.)
+window.apptSortByAppointment = function(){
+  apptSortDir = apptSortDir === -1 ? 1 : -1;
+  const t = function(it){ return (it && it.eventTime) ? new Date(it.eventTime).getTime() : NaN; };
+  apptRows.sort(function(a, b){
+    const av = t(a), bv = t(b);
+    const an = isNaN(av), bn = isNaN(bv);
+    if(an && bn) return 0;
+    if(an) return 1;
+    if(bn) return -1;
+    return apptSortDir === 1 ? (av - bv) : (bv - av);
+  });
+  updateApptSortArrow();
+  renderApptRows();
+};
 
 function renderAppointmentsPager(page, pageSize, total){
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
