@@ -3,6 +3,7 @@
 
 import { define } from "@/utils.ts";
 import { getAllConversations } from "@shared/services/conversations/store.ts";
+import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 
 export const handler = define.handlers({
   async GET(ctx) {
@@ -18,7 +19,9 @@ export const handler = define.handlers({
       return Response.json({ error: "Missing phone" }, { status: 400 });
     }
 
-    const all = await getAllConversations(phone);
+    // Dedupe at read (callId+sender+message, earliest wins) before filtering so
+    // storage-level dups (webhook + nightly reseed + on-booking ingest) collapse.
+    const all = dedupeMessages(await getAllConversations(phone));
     const filtered = all.filter((m) => {
       if (callId && m.callId !== callId) return false;
       if (sender && m.sender.toLowerCase() !== sender.toLowerCase()) {

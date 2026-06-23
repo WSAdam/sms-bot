@@ -9,7 +9,11 @@
 
 import * as bland from "@messaging/domain/data/bland/mod.ts";
 import { conversationsCollection } from "@shared/firestore/paths.ts";
-import { type BatchOp, getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import {
+  type BatchOp,
+  type FirestoreClient,
+  getFirestoreClient,
+} from "@shared/firestore/wrapper.ts";
 
 const PARALLEL = 4;
 
@@ -256,4 +260,184 @@ export function yesterdayEasternRange(): { fromIso: string; toIso: string } {
   const toIso = new Date(new Date(fromIso).getTime() + 24 * 60 * 60 * 1000)
     .toISOString();
   return { fromIso, toIso };
+}
+
+// ---------------------------------------------------------------------------
+// On-booking transcript ingestion (PURELY ADDITIVE — never deletes).
+//
+// Called best-effort after a successful inject on the direct-injection booking
+// paths (/sms-callback/bland/talk-now, /cal/schedule) so the Bland transcript
+// lands in `conversations` immediately, instead of waiting for the nightly
+// reseed (which talk-now never reaches — it only writes the inject signal).
+//
+// Unlike reseedOne, this NEVER deletes: it only `set`s each Bland message at
+// the deterministic id `phone10__callId__created_at` (same scheme reseedOne
+// uses, so it's idempotent across runs and de-duplicates against
+// webhook/reseed-stored copies via the read-time dedupeMessages). That
+// preserves the cal/schedule "appointment scheduled" marker and any operator
+// nodeTags that a delete-replace would strip. See context.md §0.21.
+// ---------------------------------------------------------------------------
+
+// cal/schedule is a PUBLIC webhook, so a caller-supplied conversationId flows
+// into getConversation's URL (`${BLAND_API_BASE}/${id}`). Restrict it to a
+// plain id token so it can't traverse to another Bland endpoint or inject
+// query params. The same guard rejects junk ids returned by the phone search.
+const SAFE_CONVERSATION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// The doc-id timestamp must be a real ISO-8601 datetime: keeps docs sortable
+// AND rejects Firestore-illegal ids ("." / ".." / anything with "/").
+const ISO_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+// Bound the work a single (public, unauthenticated) booking webhook can drive.
+// SMS conversations are tiny — these limits are generous, not operational.
+const MAX_CONVERSATIONS = 12;
+const MAX_MESSAGES_PER_CONVERSATION = 500;
+const MAX_MESSAGE_LEN = 8000; // SMS bodies are ≤1600; blocks oversized abuse.
+const BATCH_CHUNK = 400; // Firestore batch op cap is 500 — stay safely under.
+
+export interface IngestTranscriptSummary {
+  phone10: string;
+  conversations: number;
+  stored: number;
+  skipped: number;
+  errored: number;
+  errors: string[];
+}
+
+export interface IngestTranscriptDeps {
+  getConversation: typeof bland.getConversation;
+  searchConversationsByPhone: typeof bland.searchConversationsByPhone;
+  client: FirestoreClient;
+}
+
+export async function ingestBlandTranscript(
+  phone10: string,
+  conversationId?: string,
+  deps?: Partial<IngestTranscriptDeps>,
+): Promise<IngestTranscriptSummary> {
+  const getConversation = deps?.getConversation ?? bland.getConversation;
+  const searchByPhone = deps?.searchConversationsByPhone ??
+    bland.searchConversationsByPhone;
+  const client = deps?.client ?? getFirestoreClient();
+
+  const summary: IngestTranscriptSummary = {
+    phone10,
+    conversations: 0,
+    stored: 0,
+    skipped: 0,
+    errored: 0,
+    errors: [],
+  };
+
+  if (!/^\d{10}$/.test(phone10)) {
+    summary.errors.push(`invalid phone "${phone10}"`);
+    summary.errored++;
+    return summary;
+  }
+
+  // Resolve the Bland conversation ids to pull — a vetted single id when the
+  // webhook carries one, else every conversation Bland has for this phone.
+  let convIds: string[] = [];
+  try {
+    if (conversationId && SAFE_CONVERSATION_ID.test(conversationId)) {
+      convIds = [conversationId];
+    } else {
+      if (conversationId) {
+        console.warn(
+          `[ingest] ${phone10}: ignoring unsafe conversationId, using phone search`,
+        );
+      }
+      const list = await searchByPhone(phone10);
+      convIds = (Array.isArray(list) ? list : [])
+        .filter((c) => {
+          const digits = String(c?.user_number ?? "").replace(/\D/g, "");
+          const p10 = digits.length >= 10 ? digits.slice(-10) : digits;
+          return p10 === phone10; // Bland's `contains` filter is fuzzy.
+        })
+        .map((c) => c?.id)
+        .filter((id): id is string =>
+          typeof id === "string" && SAFE_CONVERSATION_ID.test(id)
+        );
+    }
+  } catch (e) {
+    summary.errored++;
+    summary.errors.push(`resolve: ${(e as Error).message}`);
+    return summary;
+  }
+
+  if (convIds.length > MAX_CONVERSATIONS) {
+    summary.errors.push(
+      `capped: ${convIds.length} conversations → ${MAX_CONVERSATIONS}`,
+    );
+    convIds = convIds.slice(0, MAX_CONVERSATIONS);
+  }
+  summary.conversations = convIds.length;
+
+  for (const cid of convIds) {
+    try {
+      const r = await getConversation(cid);
+      if (!r?.ok || !r.json?.data) {
+        summary.errored++;
+        summary.errors.push(
+          `${cid}: Bland ${r?.status}: ${
+            JSON.stringify(r?.json?.errors ?? r?.json ?? {}).slice(0, 100)
+          }`,
+        );
+        continue;
+      }
+      const allMsgs = Array.isArray(r.json.data.messages)
+        ? r.json.data.messages as BlandMsg[]
+        : [];
+      if (allMsgs.length > MAX_MESSAGES_PER_CONVERSATION) {
+        summary.skipped += allMsgs.length - MAX_MESSAGES_PER_CONVERSATION;
+      }
+      const ops: BatchOp[] = [];
+      for (const m of allMsgs.slice(0, MAX_MESSAGES_PER_CONVERSATION)) {
+        const text = m?.message;
+        const ts = m?.created_at;
+        // Drop placeholders, empties, oversized bodies, and anything we can't
+        // key safely/sortably (the timestamp becomes part of the doc id; it
+        // must be a real ISO-8601 value — see ISO_TIMESTAMP — so it is stable,
+        // idempotent across runs, and a legal Firestore id).
+        if (
+          typeof text !== "string" || !text || text === "<Call Connected>" ||
+          text.length > MAX_MESSAGE_LEN
+        ) {
+          summary.skipped++;
+          continue;
+        }
+        if (typeof ts !== "string" || !ISO_TIMESTAMP.test(ts)) {
+          summary.skipped++;
+          continue;
+        }
+        // Mirror the per-call webhook's mapping exactly (USER|GUEST → Guest)
+        // so ingest + webhook copies of the same line share a dedupe key
+        // (callId__sender__message) and collapse at read.
+        const su = String(m.sender ?? "").toUpperCase();
+        const sender = su === "USER" || su === "GUEST" ? "Guest" : "AI Bot";
+        ops.push({
+          type: "set",
+          path: `${conversationsCollection}/${phone10}__${cid}__${ts}`,
+          data: {
+            phoneNumber: phone10,
+            callId: cid,
+            sender,
+            message: text,
+            timestamp: ts,
+          },
+        });
+      }
+      for (let i = 0; i < ops.length; i += BATCH_CHUNK) {
+        await client.batch(ops.slice(i, i + BATCH_CHUNK));
+      }
+      summary.stored += ops.length;
+    } catch (e) {
+      summary.errored++;
+      summary.errors.push(`${cid}: ${(e as Error).message}`);
+    }
+  }
+
+  console.log(
+    `[ingest] ${phone10}: conversations=${summary.conversations} stored=${summary.stored} skipped=${summary.skipped} errored=${summary.errored}`,
+  );
+  return summary;
 }

@@ -12,6 +12,7 @@ import {
   scheduledInjectionDocPath,
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { ingestBlandTranscript } from "@shared/services/conversations/reseed.ts";
 import {
   CAMPAIGN_MASTER_MAP,
   getCampaignConfig,
@@ -120,6 +121,23 @@ export const handler = define.handlers({
           (e as Error).message
         }`,
       );
+    }
+
+    // Now that the inject succeeded, pull the full Bland transcript into
+    // `conversations` so the review view isn't empty for talk-now leads (the
+    // talk-now exchange lives in Bland — we only got the signal). Additive +
+    // best-effort: never blocks the response. No conversationId in the
+    // talk-now payload, so resolve by phone. See context.md §0.21.
+    if (result.status === "success") {
+      try {
+        await ingestBlandTranscript(phone);
+      } catch (e) {
+        console.warn(
+          `[talk-now] transcript ingest failed (non-fatal): ${
+            (e as Error).message
+          }`,
+        );
+      }
     }
 
     return Response.json({

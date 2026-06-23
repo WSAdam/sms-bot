@@ -18,6 +18,7 @@ import { define } from "@/utils.ts";
 import { CAL_HOLDING_CAMPAIGN_ID } from "@shared/config/constants.ts";
 import * as cal from "@shared/services/cal/service.ts";
 import { storeMessage } from "@shared/services/conversations/store.ts";
+import { ingestBlandTranscript } from "@shared/services/conversations/reseed.ts";
 import { scheduleInjection } from "@shared/services/injections/schedule.ts";
 import * as orchestrator from "@shared/services/orchestrator/service.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
@@ -129,6 +130,21 @@ export const handler = define.handlers({
         timestamp: Date.now(),
       },
     });
+
+    // Pull the full Bland transcript into `conversations` now that the
+    // injection is scheduled. Additive (never deletes the "appointment
+    // scheduled" marker above) + best-effort. Prefer the webhook's
+    // conversationId (vetted inside) for a direct fetch; falls back to a phone
+    // search. See context.md §0.21.
+    try {
+      await ingestBlandTranscript(phone10, body.conversationId);
+    } catch (e) {
+      console.warn(
+        `[cal/schedule] ⚠️ transcript ingest failed (non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
 
     return Response.json({
       success: true,

@@ -32,6 +32,8 @@ export {
   yesterdayEasternRange,
 } from "@messaging/domain/business/booking-scan/mod.ts";
 export {
+  ingestBlandTranscript,
+  type IngestTranscriptSummary,
   type PerPhonePullSummary,
   reseedConversationsByDateRange,
   reseedConversationsForPhone,
