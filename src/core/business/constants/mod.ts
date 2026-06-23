@@ -49,9 +49,18 @@ export const CAL_HOLDING_CAMPAIGN_ID = "ODR_APPT_HOLDING";
 export const APPOINTMENTS_CAMPAIGN_REPORT_ID = "81";
 // A call counts as "answered" (a real conversation) only if it lasted at least
 // this long AND its disposition isn't a No-Answer/test. RM logs short blips
-// ("<30s", "<1m") and even long-duration "No Answer" rows that aren't contact,
-// so duration alone and disposition alone are each insufficient — both gate.
+// ("<30s", "<1m"), so duration alone and disposition alone are each
+// insufficient — both gate.
 export const ANSWERED_MIN_SECONDS = 60;
+// A "No Answer" disposition that nonetheless ran at least this long is treated
+// as an answered CONNECT (overriding the disposition). A No-Answer call lasting
+// minutes is almost always a mis-disposition — the agent held a real
+// conversation and fat-fingered the outcome. The bar is higher than
+// ANSWERED_MIN_SECONDS because the disposition is actively asserting "no
+// contact", so we demand stronger duration evidence (and stay clear of
+// voicemail drops). Only the answered flag flips — the agent's original
+// disposition string is preserved verbatim in calldispositions.
+export const NO_ANSWER_ANSWERED_MIN_SECONDS = 180;
 
 // Postmark
 export const POSTMARK_FROM_ADDRESS = "notifications@monsterrg.com";

@@ -12,7 +12,10 @@ import {
   scheduledInjectionDocPath,
 } from "@shared/firestore/paths.ts";
 import { setFirestoreClientForTests } from "@shared/firestore/wrapper.ts";
-import { importDailyDispositions } from "@shared/services/readymode/import-dispositions.ts";
+import {
+  importDailyDispositions,
+  isAnsweredCall,
+} from "@shared/services/readymode/import-dispositions.ts";
 import type { DialerCallRow } from "@shared/services/readymode/portal-client.ts";
 import { easternDateString } from "@shared/util/time.ts";
 import { FirestoreMock } from "@tests/mocks/firestore-mock.ts";
@@ -186,16 +189,66 @@ Deno.test("answered counter: duration boundary is inclusive — 60s counts, 59s 
   assertEquals(lifetimeAnswered(db2), 0);
 });
 
-Deno.test("answered counter: a long-duration 'No Answer' row does NOT count", async () => {
+Deno.test("answered counter: a long (>= 180s) 'No Answer' now counts (mis-disposition override)", async () => {
   const db = setup();
   seedInFunnel(db, PHONE);
-  // RM sometimes logs a long Calltime on a No-Answer row — disposition gate
-  // must still reject it even though duration >= 60s.
+  // A No-Answer that ran 21 minutes is almost always a mis-disposition — the
+  // agent held a real conversation and fat-fingered the outcome. The override
+  // reclassifies the CONNECT as answered (the disposition string is preserved).
   const s = await importDailyDispositions([
     row(PHONE, "c1", T_D1, "No Answer", 1260),
   ]);
+  assertEquals(s.answeredUpserted, 1);
+  assertEquals(dailyAnswered(db, D1), 1);
+  assertEquals(lifetimeAnswered(db), 1);
+});
+
+Deno.test("answered counter: a short (< 180s) 'No Answer' still does NOT count", async () => {
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  // 120s clears the 60s normal floor but NOT the 180s No-Answer override — a
+  // No-Answer this short stays a no-answer (the normal floor must not leak in).
+  const s = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "ODR No Answer", 120),
+  ]);
   assertEquals(s.answeredUpserted, 0);
+  assertEquals(dailyAnswered(db, D1), 0);
   assertEquals(lifetimeAnswered(db), 0);
+});
+
+Deno.test("answered counter: No-Answer override boundary is inclusive — 180s counts, 179s does not", async () => {
+  const db1 = setup();
+  seedInFunnel(db1, PHONE);
+  const at180 = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "No Answer", 180),
+  ]);
+  assertEquals(at180.answeredUpserted, 1);
+  assertEquals(lifetimeAnswered(db1), 1);
+
+  const db2 = setup();
+  seedInFunnel(db2, PHONE);
+  const at179 = await importDailyDispositions([
+    row(PHONE, "c1", T_D1, "No Answer", 179),
+  ]);
+  assertEquals(at179.answeredUpserted, 0);
+  assertEquals(lifetimeAnswered(db2), 0);
+});
+
+Deno.test("isAnsweredCall: gate contract (normal 60s floor, No-Answer 180s override, test never)", () => {
+  // Normal disposition: 60s floor, inclusive.
+  assertEquals(isAnsweredCall("Not interested", 60), true);
+  assertEquals(isAnsweredCall("Not interested", 59), false);
+  assertEquals(isAnsweredCall("Sale (MCC)", 3600), true);
+  // No-Answer (and team-prefixed variants): 180s override, inclusive.
+  assertEquals(isAnsweredCall("No Answer", 180), true);
+  assertEquals(isAnsweredCall("No Answer", 179), false);
+  assertEquals(isAnsweredCall("ODR No Answer", 1260), true);
+  assertEquals(isAnsweredCall("2ND No Answer", 120), false);
+  // Case/whitespace-insensitive.
+  assertEquals(isAnsweredCall("  no answer  ", 200), true);
+  // TEST never counts, regardless of duration.
+  assertEquals(isAnsweredCall("TEST", 100000), false);
+  assertEquals(isAnsweredCall("test", 100000), false);
 });
 
 Deno.test("answered counter: requireInFunnel=false counts a phone NOT in the funnel", async () => {

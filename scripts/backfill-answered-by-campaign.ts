@@ -5,9 +5,12 @@
 // silently IGNORES it, returning ALL campaigns ≈ 79 pages/day). Pass the integer
 // report id via --campaign (default 81).
 //
-// ANSWERED = a real conversation: call duration >= 60s AND disposition is not
-// "No Answer"/"test". Duration alone isn't enough (a "No Answer" row can carry a
-// long Calltime) and disposition alone isn't enough either — both gates apply.
+// ANSWERED is decided by the SHARED isAnsweredCall gate (single-sourced from the
+// live import so this backfill can't drift): a non-No-Answer disposition with
+// >= 60s of talk, OR a "No Answer" that nonetheless ran >= 180s (a long
+// No-Answer is almost always a mis-disposition — a real conversation the agent
+// fat-fingered). Re-run this after the 3-min No-Answer rule lands to pick up the
+// long No-Answer calls we previously dropped.
 //
 // Rate cap = ONE DAY of call data per minute (NOT per page). So: pull a full day
 // at normal page speed (50ms between pages, same as the live cron), then wait
@@ -30,6 +33,7 @@ import {
   parseDurationSeconds,
   parseEtTimeToIso,
 } from "@shared/services/readymode/portal-client.ts";
+import { isAnsweredCall } from "@shared/services/readymode/import-dispositions.ts";
 import { getRmCreds } from "@shared/services/readymode/auth.ts";
 import { DialerDomain } from "@shared/types/readymode.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
@@ -37,10 +41,7 @@ import {
   guestAnsweredCollection,
   guestAnsweredDocPath,
 } from "@shared/firestore/paths.ts";
-import {
-  ANSWERED_MIN_SECONDS,
-  isExcludedFromReporting,
-} from "@shared/config/constants.ts";
+import { isExcludedFromReporting } from "@shared/config/constants.ts";
 
 const flags = new Map<string, string>();
 const bools = new Set<string>();
@@ -86,13 +87,9 @@ const REPORT_TYPES = [
 ];
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function isNonAnswered(d: string): boolean {
-  const n = d.toLowerCase().trim();
-  return n === "test" || n.includes("no answer");
-}
-// parseDurationSeconds + ANSWERED_MIN_SECONDS are imported (single-sourced from
-// portal-client.ts / constants.ts) so this backfill can't drift from the live
-// import path.
+// parseDurationSeconds + isAnsweredCall are imported (single-sourced from
+// portal-client.ts / import-dispositions.ts) so this backfill can't drift from
+// the live import path.
 // Normalize FROM/TO to a UTC-midnight Date for iteration.
 function toDate(s: string): Date {
   if (s.includes("/")) {
@@ -227,12 +224,12 @@ for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
   // dropped from the daily + lifetime recompute).
   const earliestAnswered = new Map<string, { iso: string; dispo: string }>();
   for (const r of day.rows) {
-    // ANSWERED = real conversation: duration >= 60s AND not a No-Answer/test
-    // disposition. Both gates apply (a "No Answer" row can still carry a long
-    // Calltime; a short call isn't a real answer regardless of label).
+    // ANSWERED is decided by the shared isAnsweredCall gate (60s for normal
+    // dispositions, 180s for a "No Answer" mis-disposition). Excluded test
+    // phones never count.
     if (
-      isExcludedFromReporting(r.phone10) || isNonAnswered(r.disposition) ||
-      r.durationSecs < ANSWERED_MIN_SECONDS
+      isExcludedFromReporting(r.phone10) ||
+      !isAnsweredCall(r.disposition, r.durationSecs)
     ) {
       continue;
     }

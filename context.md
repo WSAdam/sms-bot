@@ -360,7 +360,8 @@ surfaces stale crons within hours rather than days.
   matching QB sale.
 - **`readymode-daily-pull`** — `30 9 * * *` UTC = 5:30 AM EDT. Logs into the
   ReadyMode portal, pages through yesterday's full call log, writes
-  `calldispositions`, upserts `guestanswered` for non-No-Answer calls, and
+  `calldispositions` (incl. per-call `durationSecs`), upserts `guestanswered`
+  for answered calls (the shared `isAnsweredCall` gate — see §0.19), and
   increments the per-ET-day `metrics/daily.answered` counter (bucketed by the
   answered call's day, delta-applied so re-imports don't double-count). RM
   enforces single-session-per-user; as of 2026-06-18 the login does a reactive
@@ -897,11 +898,20 @@ of 41 days 05-07→06-16 captured), so the report's "calls answered" silently re
   global marker, not verified per-day.
 
 - **What "Calls answered" actually means.** A distinct phone in the
-  **Appointments** campaign that had a real conversation: a call lasting **≥
-  60s** (`ANSWERED_MIN_SECONDS`) whose disposition is **not** a No-Answer/ test.
-  BOTH gates apply — RM logs sub-minute blips ("<30s", "<1m") AND long-duration
-  "No Answer" rows that never connected, so duration-alone and disposition-alone
-  are each insufficient. `answered ⊆ our-leads`.
+  **Appointments** campaign that had a real conversation, decided by the shared
+  `isAnsweredCall` gate (`import-dispositions/mod.ts`, single-sourced so the
+  live import + the backfill can't drift):
+  - a non-No-Answer disposition lasting **≥ 60s** (`ANSWERED_MIN_SECONDS`), OR
+  - a **"No Answer" disposition that nonetheless ran ≥ 180s**
+    (`NO_ANSWER_ANSWERED_MIN_SECONDS`, added 2026-06-23) — a No-Answer that long
+    is almost always a mis-disposition (the agent held a real conversation and
+    fat-fingered the outcome), so we count the CONNECT while preserving the
+    agent's disposition string verbatim in `calldispositions`.
+
+  `test` rows never count, and RM logs sub-minute blips ("<30s", "<1m") so
+  duration still gates the normal path. `answered ⊆ our-leads`. (Earlier drafts
+  rejected ALL "No Answer" rows regardless of length; the ≥180s override
+  reverses that for genuinely long calls only.)
   - **Campaign id = `81`** — the call-log REPORT id
     (`APPOINTMENTS_CAMPAIGN_REPORT_ID`). This is NOT the lead-inject channel
     code (`campaigns.ts` `"ODR - Appointments"` → `cuCyA6Xoeu88`). They are
@@ -926,9 +936,18 @@ of 41 days 05-07→06-16 captured), so the report's "calls answered" silently re
   all-campaigns pull (`restrictCampaign:"0"`, e.g. via
   `/api/admin/pull-readymode`) keeps the gate on (`answered ⊆ booked`). Per-row
   duration is captured in `DialerCallRow.durationSecs` (parsed from RM's
-  `Calltime`). Trade-off: `calldispositions` is now Appointments-scoped going
-  forward, so the dashboard "activated" drill-in shows only Appointments calls
-  for a lead.
+  `Calltime`) and, as of 2026-06-23, **persisted on the `calldispositions` doc**
+  so the answered rule stays auditable after the fact. Trade-off:
+  `calldispositions` is now Appointments-scoped going forward, so the dashboard
+  "activated" drill-in shows only Appointments calls for a lead.
+- **No-Answer override + backfill (2026-06-23).** Added the **≥180s "No Answer"
+  → answered** reclassification (`NO_ANSWER_ANSWERED_MIN_SECONDS`, see the
+  "Calls answered" bullet above) plus `durationSecs` persistence. A campaign-81
+  re-pull of 05/24→06/23 via `backfill-answered-by-campaign.ts` recovered **1**
+  previously-missed answer — a 25-min No-Answer mis-disposition (`8508306131`).
+  Skipped the `backfill-daily-answered.ts` counter recompute for a single-phone
+  delta, so `metrics/daily.answered` + lifetime trail `guestanswered` by 1 until
+  the next recompute.
 
 - **Ops scripts** (run by hand with `--env-file=env/local`, NOT crons):
   - `scripts/triage-readymode.ts` — read-only dump of the cron markers +

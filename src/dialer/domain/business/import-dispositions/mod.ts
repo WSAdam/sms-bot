@@ -1,7 +1,7 @@
 // Persists scraped ReadyMode call dispositions to Firestore + upserts
-// guestanswered for any non-No-Answer call. Subsumes the recurring case
-// of scripts/import-call-dispositions.ts (which stays for one-off CSV
-// imports).
+// guestanswered for any answered call (per the isAnsweredCall gate below).
+// Subsumes the recurring case of scripts/import-call-dispositions.ts (which
+// stays for one-off CSV imports).
 //
 // Idempotent: each call is keyed by RM's `callLogId` (server-side primary
 // key). A re-run over the same date range never double-writes.
@@ -9,6 +9,7 @@
 import {
   ANSWERED_MIN_SECONDS,
   isExcludedFromReporting,
+  NO_ANSWER_ANSWERED_MIN_SECONDS,
 } from "@shared/config/constants.ts";
 import {
   callDispositionDocPath,
@@ -23,14 +24,31 @@ import { type BatchOp, getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import type { DialerCallRow } from "@dialer/domain/data/portal-client/mod.ts";
 import { easternDateString } from "@shared/util/time.ts";
 
-// "Did this call connect with a human?" — substring match catches the
-// literal "No Answer" plus team-prefixed variants RM uses ("ODR No Answer",
-// "2ND No Answer", etc). TEST is administrative, not a real call.
-function isNonAnswered(disposition: string): boolean {
+// "Did this call connect with a human?" — the single source of truth for the
+// answered gate, shared by the live import AND the campaign backfill so the two
+// can't drift (see scripts/backfill-answered-by-campaign.ts).
+//
+// A scraped call counts as answered when EITHER:
+//   • a non-No-Answer disposition AND >= ANSWERED_MIN_SECONDS (60s) of talk, OR
+//   • a "No Answer" disposition that nonetheless ran >= NO_ANSWER_ANSWERED_MIN_SECONDS
+//     (180s) — a No-Answer that long is almost always a mis-disposition (the
+//     agent had a real conversation and fat-fingered the outcome), so we count
+//     the CONNECT here. The agent's original disposition string is left
+//     untouched in calldispositions; only the answered flag flips.
+//
+// The No-Answer substring match catches the literal "No Answer" plus
+// team-prefixed variants RM uses ("ODR No Answer", "2ND No Answer", etc). TEST
+// rows are administrative and never count.
+export function isAnsweredCall(
+  disposition: string,
+  durationSecs: number,
+): boolean {
   const norm = disposition.toLowerCase().trim();
-  if (norm === "test") return true;
-  if (norm.includes("no answer")) return true;
-  return false;
+  if (norm === "test") return false;
+  if (norm.includes("no answer")) {
+    return durationSecs >= NO_ANSWER_ANSWERED_MIN_SECONDS;
+  }
+  return durationSecs >= ANSWERED_MIN_SECONDS;
 }
 
 // RM serves disposition strings with HTML entities baked in (e.g. transfer
@@ -115,6 +133,7 @@ export async function importDailyDispositions(
         agentName: r.agentName,
         disposition,
         callType: r.callType,
+        durationSecs: r.durationSecs,
         domain: r.domain,
         recId: r.recId,
         recordedAt: new Date().toISOString(),
@@ -122,12 +141,11 @@ export async function importDailyDispositions(
     });
     summary.dispositionsWritten++;
 
-    // Track earliest answered call per phone for the upsert. ANSWERED = a real
-    // conversation: not a No-Answer/test disposition AND at least
-    // ANSWERED_MIN_SECONDS of talk time. Duration alone isn't enough (RM logs
-    // long-duration "No Answer" rows) and disposition alone isn't either (short
-    // blips that never connected) — both gates apply.
-    if (!isNonAnswered(disposition) && r.durationSecs >= ANSWERED_MIN_SECONDS) {
+    // Track earliest answered call per phone for the upsert. The gate
+    // (isAnsweredCall) folds in both the duration floor and the No-Answer
+    // override — short blips never count, and a "No Answer" only counts when it
+    // ran long enough to be a mis-disposition. See isAnsweredCall above.
+    if (isAnsweredCall(disposition, r.durationSecs)) {
       const cur = earliestAnsweredInBatch.get(r.phone10);
       if (!cur || r.callTime < cur) {
         earliestAnsweredInBatch.set(r.phone10, r.callTime);
