@@ -30,7 +30,9 @@ import { findGuestByResId } from "@shared/services/crm/reservations.ts";
 import { isDnc } from "@shared/services/dnc/service.ts";
 import * as orchestrator from "@shared/services/orchestrator/service.ts";
 import {
+  checkAndReserve as rateLimitCheckAndReserve,
   checkOnly as rateLimitCheck,
+  release as rateLimitRelease,
   reserve as rateLimitReserve,
   schedule as rateLimitSchedule,
 } from "@shared/services/rate-limiter/service.ts";
@@ -95,11 +97,74 @@ async function incrementGlobalDailyCount(
 ): Promise<void> {
   // Atomic FieldValue.increment — concurrent calls are race-free.
   // updatedAt is a separate non-atomic merge; benign if it races.
+  // Only the override path uses this now; the normal send path reserves a
+  // slot atomically before the send (reserveGlobalDailySlot).
   const today = easternDateString();
   const path = globalSmsCountDocPath(today);
   await client.incrementField(path, { count: 1 });
   await client.setMerge(path, { updatedAt: new Date().toISOString() });
 }
+
+// Atomically reserve one slot against the global daily cap. Reads the current
+// count and increments it ONLY when still under `cap`, all inside a single
+// Firestore transaction — so N concurrent requests can't all read the same
+// sub-cap count, all pass, and collectively overshoot the cap. Returns true
+// when this caller got a slot, false when the cap is already reached.
+// Fail-open (returns true) on a transaction error, matching the read-only
+// gate's behavior, so Firestore being unreachable never hard-blocks sends.
+async function reserveGlobalDailySlot(
+  client: FirestoreClient,
+  cap: number,
+): Promise<boolean> {
+  const today = easternDateString();
+  const path = globalSmsCountDocPath(today);
+  try {
+    let reserved = false;
+    await client.transactionalUpdate(path, (existing) => {
+      const count = typeof existing?.count === "number" ? existing.count : 0;
+      if (count >= cap) {
+        reserved = false;
+        return existing ?? { count };
+      }
+      reserved = true;
+      return {
+        ...(existing ?? {}),
+        count: count + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    return reserved;
+  } catch (e) {
+    console.error("[trigger] reserveGlobalDailySlot failed, fail-open:", e);
+    return true;
+  }
+}
+
+// Release a slot reserved by reserveGlobalDailySlot (used when the send fails
+// after the slot was claimed). Best-effort; never lets count go negative.
+async function releaseGlobalDailySlot(
+  client: FirestoreClient,
+): Promise<void> {
+  const today = easternDateString();
+  const path = globalSmsCountDocPath(today);
+  try {
+    await client.transactionalUpdate(path, (existing) => {
+      const count = typeof existing?.count === "number" ? existing.count : 0;
+      return {
+        ...(existing ?? {}),
+        count: Math.max(0, count - 1),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  } catch (e) {
+    console.error("[trigger] releaseGlobalDailySlot failed (non-fatal):", e);
+  }
+}
+
+// Exported for tests — the atomic cap reservation is a race-fix site, so it's
+// covered directly rather than only via the full Bland-dependent trigger flow.
+export const _reserveGlobalDailySlotForTest = reserveGlobalDailySlot;
+export const _releaseGlobalDailySlotForTest = releaseGlobalDailySlot;
 
 interface ProcessLeadResult {
   status: "success" | "skipped" | "error";
@@ -171,15 +236,19 @@ export async function processInboundLead(
   // Gatekeeper 2: global daily cap. Precedence: env var > gatesConfig >
   // hardcoded default. The env override stays so Deno Deploy's existing
   // GLOBAL_DAILY_SMS_CAP setting still works for staged rollout testing.
+  // The read-only check here is a cheap fail-fast; the AUTHORITATIVE,
+  // race-free reservation happens atomically right before the send below
+  // (reserveGlobalDailySlot) so concurrent requests can't collectively
+  // overshoot the cap.
+  const envCap = loadEnv().globalDailySmsCap;
+  const globalDailyCap = envCap !== GLOBAL_DAILY_SMS_CAP
+    ? envCap
+    : gates.globalDailySmsCap;
   if (!isOverride) {
-    const envCap = loadEnv().globalDailySmsCap;
-    const cap = envCap !== GLOBAL_DAILY_SMS_CAP
-      ? envCap
-      : gates.globalDailySmsCap;
     const dailyCount = await getGlobalDailyCount(client);
-    if (dailyCount >= cap) {
+    if (dailyCount >= globalDailyCap) {
       console.log(
-        `[trigger] ⛔ daily cap reached: ${dailyCount}/${cap} — skipped`,
+        `[trigger] ⛔ daily cap reached: ${dailyCount}/${globalDailyCap} — skipped`,
       );
       return { status: "skipped", reason: "Global Daily Limit Reached" };
     }
@@ -254,7 +323,12 @@ export async function processInboundLead(
     }
   }
 
-  // Save context
+  // Build the context payload now (cheap), but DON'T persist it or flip the
+  // orchestrator pointer to ACTIVE until the Bland send actually succeeds.
+  // Persisting before the send left a phantom smsFlowContext + an ACTIVE
+  // pointer when sendSms threw (Bland down / non-2xx / auth) — the system
+  // looked like an SMS was queued when none went out. Both writes now live in
+  // the success branch after sendSms returns.
   const contextData = {
     domain,
     campaignId: (rawData.campaign as string) ?? "unknown",
@@ -265,17 +339,6 @@ export async function processInboundLead(
     phone,
     timestamp: Date.now(),
   };
-  await client.set(smsFlowContextDocPath(phone), contextData);
-
-  // Orchestrator pointer
-  await orchestrator.updatePointer(phone, {
-    originalSource: {
-      domain,
-      campaignId: (rawData.campaign as string) ?? "unknown",
-      timestamp: Date.now(),
-    },
-    status: "ACTIVE",
-  });
 
   // A/B variant
   const variant = await getAndToggleVariant(client);
@@ -290,6 +353,36 @@ export async function processInboundLead(
     msgCount = history.count;
   } catch (e) {
     console.warn(`[trigger] history fetch failed: ${(e as Error).message}`);
+  }
+
+  // Atomic check-and-reserve immediately before the send. The early gate-4
+  // (line ~230) is a cheap fail-fast read; this is the authoritative
+  // mutual-exclusion step. Two concurrent requests for the same phone both
+  // passed the gate, but only ONE wins this transaction — the loser stands
+  // down instead of firing a duplicate SMS. (Override skips it, same as the
+  // gate.) Reserving BEFORE the send means a same-window retry can't slip in
+  // during the Bland round trip.
+  if (!isOverride) {
+    const reserved = await rateLimitCheckAndReserve(phone);
+    if (!reserved) {
+      return { status: "skipped", reason: "Rate Limited" };
+    }
+    // Atomically claim a global-daily-cap slot. This is the race-free
+    // counterpart to the read-only gate-2 check above: read-and-increment
+    // happens inside one transaction, so concurrent requests can't all read a
+    // sub-cap count and collectively overshoot. If the cap is now reached,
+    // release the rate-limit reservation we just took (no SMS will go out) and
+    // skip.
+    const slot = await reserveGlobalDailySlot(client, globalDailyCap);
+    if (!slot) {
+      await rateLimitRelease(phone);
+      console.log(`[trigger] ⛔ daily cap reached at reserve — skipped`);
+      return { status: "skipped", reason: "Global Daily Limit Reached" };
+    }
+  } else {
+    // Override bypasses the gate but still records the send so back-to-back
+    // QA triggers don't read each other as "never sent".
+    await rateLimitReserve(phone);
   }
 
   const env = loadEnv();
@@ -331,6 +424,35 @@ export async function processInboundLead(
       },
     });
 
+    // Bland accepted the send — NOW it's safe to persist the flow context and
+    // flip the pointer to ACTIVE. Doing this only on success means a Bland
+    // failure (handled in the catch below) leaves no phantom "SMS was sent"
+    // state behind.
+    //
+    // These metadata writes live in their OWN try-catch, NOT the Bland
+    // try-catch: the SMS has already gone out, so a Firestore failure here must
+    // never flip the return to "Bland API Failed" (which would make an upstream
+    // retry resend the SMS) nor release the rate-limit/cap reservations for a
+    // phone we just messaged. Treat them as fire-and-forget with a warning,
+    // exactly like recordOutboundRecipientMarkers below.
+    try {
+      await client.set(smsFlowContextDocPath(phone), contextData);
+      await orchestrator.updatePointer(phone, {
+        originalSource: {
+          domain,
+          campaignId: (rawData.campaign as string) ?? "unknown",
+          timestamp: Date.now(),
+        },
+        status: "ACTIVE",
+      });
+    } catch (e) {
+      console.warn(
+        `[trigger] ⚠️ post-send metadata write failed (SMS already sent, non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
+
     const conversationId =
       (blandResult.json as { data?: { conversation_id?: string } } | null)
         ?.data?.conversation_id;
@@ -345,8 +467,12 @@ export async function processInboundLead(
       storeInitialBlandMessage(phone, conversationId).catch(() => {});
     }
 
-    await incrementGlobalDailyCount(client);
-    await rateLimitReserve(phone);
+    // NOTE: both the global-daily-cap slot and the per-phone rate-limit
+    // reservation were already claimed atomically BEFORE the send
+    // (reserveGlobalDailySlot + rateLimitCheckAndReserve), so we don't
+    // increment/reserve again here. On the override path neither was claimed,
+    // so bump the global counter to keep the daily total honest.
+    if (isOverride) await incrementGlobalDailyCount(client);
     // Fire-and-forget write-side index for the nightly report's
     // "unique recipients" metric. Two idempotent atomicCreates so
     // repeat sends to the same phone short-circuit; failure here must
@@ -362,6 +488,16 @@ export async function processInboundLead(
     return { status: "success", variant };
   } catch (e) {
     console.error(`[trigger] Bland API failed: ${(e as Error).message}`);
+    // The SMS never went out, so roll back the pre-send reservations —
+    // otherwise a transient Bland failure would lock this phone out of the
+    // funnel for the full window AND permanently consume a global-cap slot.
+    // (No smsFlowContext / ACTIVE pointer were written on this path — they're
+    // now only persisted after sendSms succeeds — so there's nothing else to
+    // roll back.)
+    if (!isOverride) {
+      await rateLimitRelease(phone);
+      await releaseGlobalDailySlot(client);
+    }
     return { status: "error", message: "Bland API Failed" };
   }
 }
@@ -440,7 +576,13 @@ function buildLeadUrl(
     params.append(`lead[0][${field}]`, String(value));
   };
 
-  append("phone", (lead.phone as string) || (lead.primaryPhone as string));
+  // Normalize the injected phone to the same 10-digit form scrubLead targets,
+  // so a later scrub addresses the exact record we created. Fall back to the
+  // raw value only when normalizePhone can't parse it (better to inject with
+  // the caller's string than drop the phone entirely and create a useless
+  // lead).
+  const rawPhone = (lead.phone as string) || (lead.primaryPhone as string);
+  append("phone", normalizePhone(rawPhone) ?? rawPhone);
 
   // RM's lead-api REJECTS the entire lead if it sees a field name it doesn't
   // recognize (HTTP 200 + {"Accepted":false,"Error":"Field not recognized"}).
@@ -460,9 +602,13 @@ function buildLeadUrl(
         );
         continue;
       }
-      // Explicit domain field (e.g. Custom_52) already present → it wins; don't
-      // also emit the translated `notes` and double-send the field.
-      if (notesField in lead) continue;
+      // Explicit domain field (e.g. Custom_52) already present with a real
+      // value → it wins; don't also emit the translated `notes` and
+      // double-send the field. Gate on the VALUE, not key existence: a lead
+      // carrying `{ notes: "real", Custom_52: undefined|"" }` must still emit
+      // the real note (append() already drops ""/null/undefined, so an empty
+      // explicit field correctly yields to the translated note).
+      if (lead[notesField]) continue;
       append(notesField, v);
       continue;
     }
@@ -507,7 +653,31 @@ export function injectBodyExplicitlyRejected(
   if (row?.Accepted === false || row?.Success === false) return true;
   // Text fallback for when JSON.parse failed or the shape differs. Whitespace-
   // tolerant so "Accepted":false / "Accepted" : false / newlines all match.
-  return /"Accepted"\s*:\s*false/.test(text);
+  // Symmetric with the JSON path above (which checks BOTH Accepted:false AND
+  // Success:false): a malformed body carrying only "Success":false — no
+  // Accepted field — is still an explicit rejection, so never let it slip
+  // through as a phantom inject.
+  return /"Accepted"\s*:\s*false|"Success"\s*:\s*false/.test(text);
+}
+
+// Does the raw RM body assert Success:true? Whitespace-tolerant text fallback
+// for when JSON.parse failed or the shape differs (mirrors the regex tolerance
+// in injectBodyExplicitlyRejected).
+function bodyAssertsSuccessTrue(text: string): boolean {
+  return /"Success"\s*:\s*true/.test(text);
+}
+
+// The authoritative "was the lead actually created" verdict, combining the
+// positive Success:true signal with the explicit-rejection guard. RM returns
+// HTTP 200 even on rejection AND can return a contradictory
+// {"Success":true,"Accepted":false}, so a lead counts as injected ONLY when it
+// asserts success AND is not explicitly rejected. Pure + exported so the verdict
+// combo is unit-tested without a fetch mock.
+export function injectVerdictIsSuccess(
+  isSuccess: boolean,
+  explicitlyRejected: boolean,
+): boolean {
+  return isSuccess && !explicitlyRejected;
 }
 
 export async function injectLead(
@@ -595,7 +765,7 @@ export async function injectLead(
       // isSuccess already requires Success:true (mutually exclusive with a
       // rejection), but gate on the verdict too so a contradictory body can
       // never slip through as a phantom success.
-      success = !explicitlyRejected;
+      success = injectVerdictIsSuccess(isSuccess, explicitlyRejected);
       outcome = `${
         success ? "ok" : "rejected"
       } http=${res.status} body="${bodySlice}"`;
@@ -633,20 +803,36 @@ export async function injectLead(
     }
 
     if (success) {
-      await orchestrator.logEvent(lead.phone, {
-        action: "INJECT",
-        domain,
-        campaignId: campaignId ?? "API",
-        details: `Injected to ${domain}`,
-      });
-      await orchestrator.updatePointer(lead.phone, {
-        currentLocation: {
+      // The lead is already created in RM — these are post-inject AUDIT writes
+      // (event log + pointer). They live in their OWN try-catch, NOT the outer
+      // fetch try-catch (whose catch re-throws as "Injection Failed"): a
+      // Firestore failure here must never make injectLead throw, because callers
+      // (return-to-source.ts, bland-talk-now.ts) don't wrap injectLead and rely
+      // on result.status — a thrown error would crash their handlers and, in
+      // talk-now, misreport a real inject as failed. Mirrors the non-fatal
+      // post-send metadata pattern in processInboundLead.
+      try {
+        await orchestrator.logEvent(lead.phone, {
+          action: "INJECT",
           domain,
           campaignId: campaignId ?? "API",
-          timestamp: Date.now(),
-        },
-        status: domain === DialerDomain.ODR ? "IN_ODR" : "ACTIVE",
-      });
+          details: `Injected to ${domain}`,
+        });
+        await orchestrator.updatePointer(lead.phone, {
+          currentLocation: {
+            domain,
+            campaignId: campaignId ?? "API",
+            timestamp: Date.now(),
+          },
+          status: domain === DialerDomain.ODR ? "IN_ODR" : "ACTIVE",
+        });
+      } catch (e) {
+        console.warn(
+          `[inject] ⚠️ ${domain} phone=${lead.phone} post-inject metadata write failed (lead already injected, non-fatal): ${
+            (e as Error).message
+          }`,
+        );
+      }
       return { status: "success", message: "Injected" };
     }
 
@@ -704,10 +890,22 @@ async function handleDuplicate(
   );
   const retryText = await retryRes.text();
   const retryBody = retryText.slice(0, 300).replace(/\s+/g, " ");
-  if (
-    retryText.includes("Success") || retryText.includes("success") ||
-    retryText.includes('"Success": true')
-  ) {
+  // Apply the SAME explicit verdict the main flow uses — a loose
+  // includes("Success") matched {"Success":false} / {"Accepted":false} and
+  // recorded RM rejections as phantom injects. RM returns HTTP 200 on
+  // rejection, so trust the body's verdict, not the substring.
+  let retryJson: unknown = null;
+  try {
+    retryJson = JSON.parse(retryText);
+  } catch { /* ignore */ }
+  const retrySuccess = injectVerdictIsSuccess(
+    bodyAssertsSuccessTrue(retryText) ||
+      ((retryJson as Record<string, unknown> | null)?.Success === true) ||
+      ((retryJson as Record<string, Record<string, unknown>> | null)?.["0"]
+        ?.Success === true),
+    injectBodyExplicitlyRejected(retryText, retryJson),
+  );
+  if (retrySuccess) {
     console.log(
       `[inject] ✅ duplicate-handler ${domain} phone=${lead.phone} leadId=${leadId} → retry ok http=${retryRes.status}`,
     );
@@ -734,7 +932,32 @@ export async function scrubLead(
   const params = new URLSearchParams();
   params.append("API_user", user);
   params.append("API_pass", pass);
-  if (phone) params.append("lead[phone]", phone.replace(/\D/g, "").slice(-10));
+  // Normalize+VALIDATE via normalizePhone (not a blind slice(-10)). A blind
+  // slice would turn an 11+ digit lead (e.g. an override-path lead RM stored
+  // as-is) into a DIFFERENT 10-digit number and scrub the wrong record,
+  // leaving the real duplicate in RM to re-trigger phantom "Duplicate"
+  // handling. normalizePhone returns null on anything that isn't a real
+  // 10-digit US number, so we never scrub by a guessed phone.
+  const normalizedPhone = phone ? normalizePhone(phone) : null;
+  // Bail ONLY when there's no usable identifier at all. When the phone is
+  // unparseable but a leadId was supplied (handleDuplicate passes BOTH), degrade
+  // to scrub-by-leadId instead of failing the whole cleanup — bailing here is
+  // what surfaced "Scrub Failed" in the duplicate-handler retry flow even though
+  // the leadId scrub would have succeeded.
+  if (!normalizedPhone && !leadId) {
+    if (phone) {
+      console.warn(
+        `[scrub] ⚠️ ${domain} unparseable phone="${phone}" and no leadId — skipping scrub`,
+      );
+    }
+    return false;
+  }
+  if (normalizedPhone) params.append("lead[phone]", normalizedPhone);
+  else if (phone) {
+    console.warn(
+      `[scrub] ⚠️ ${domain} unparseable phone="${phone}" — scrubbing by leadId=${leadId} only`,
+    );
+  }
   if (leadId) params.append("lead[leadId]", leadId);
   params.append("result", "false");
 
@@ -748,7 +971,22 @@ export async function scrubLead(
     );
     const text = await res.text();
     const bodySlice = text.slice(0, 200).replace(/\s+/g, " ");
-    const success = text.includes("Success") || res.ok;
+    // Explicit verdict, NOT a loose substring. `text.includes("Success")`
+    // matched {"Success":false} too, and res.ok is true for any HTTP 200 —
+    // which RM returns on rejection. Require an affirmative Success:true and
+    // no explicit rejection, so a failed scrub never logs a phantom SCRUB
+    // event (the same verdict pattern injectLead applies).
+    let json: unknown = null;
+    try {
+      json = JSON.parse(text);
+    } catch { /* ignore */ }
+    const success = injectVerdictIsSuccess(
+      bodyAssertsSuccessTrue(text) ||
+        ((json as Record<string, unknown> | null)?.Success === true) ||
+        ((json as Record<string, Record<string, unknown>> | null)?.["0"]
+          ?.Success === true),
+      injectBodyExplicitlyRejected(text, json),
+    );
     if (success) {
       await orchestrator.logEvent(phone, {
         action: "SCRUB",
@@ -796,7 +1034,24 @@ async function dncLead(
         body: params.toString(),
       })
     );
-    return (await res.text()).includes("Success") || res.ok;
+    // Strict verdict, NOT `includes("Success") || res.ok`. The loose substring
+    // matched {"Success":false}, and res.ok is true for any HTTP 200 — which RM
+    // returns even on rejection. So a rejected DNC was reported as success and
+    // dncGlobal recorded the domain as 'Success' while the lead stayed in active
+    // campaigns. Require an affirmative Success:true with no explicit rejection
+    // (same verdict pattern scrubLead/injectLead use).
+    const text = await res.text();
+    let json: unknown = null;
+    try {
+      json = JSON.parse(text);
+    } catch { /* ignore */ }
+    return injectVerdictIsSuccess(
+      bodyAssertsSuccessTrue(text) ||
+        ((json as Record<string, unknown> | null)?.Success === true) ||
+        ((json as Record<string, Record<string, unknown>> | null)?.["0"]
+          ?.Success === true),
+      injectBodyExplicitlyRejected(text, json),
+    );
   } catch {
     return false;
   }

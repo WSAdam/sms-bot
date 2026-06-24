@@ -37,6 +37,11 @@ export async function handleDelayedInjection(
     const cutoffMs = Date.now() - windowHours * 3_600_000;
     const recent = await getFirestoreClient().list(injectionHistoryCollection, {
       where: { field: "phone", op: "==", value: phone },
+      // Most-recent first. Without this, Firestore returns 5 entries in
+      // document-ID order, so a phone with 6+ history docs could have its
+      // latest fire fall outside the slice — the guard would then read an
+      // older firedAt and permit a duplicate dial.
+      orderBy: { field: "firedAt", dir: "desc" },
       limit: 5,
     });
     let lastFiredMs = 0;
@@ -84,19 +89,34 @@ export async function handleDelayedInjection(
   );
 
   if (result.status === "success") {
-    await orchestrator.logEvent(phone, {
-      action: "INJECT",
-      domain: target.domain,
-      details: "Queue Worker: Scheduled Appointment Injection",
-    });
-    await orchestrator.updatePointer(phone, {
-      status: "IN_ODR",
-      currentLocation: {
+    // ReadyMode already accepted the injection. The orchestrator writes below
+    // are metadata only — wrap them in their OWN try-catch so a Firestore
+    // failure (quota/network) can't propagate to the sweep's catch, which
+    // would record the injectionhistory entry as status='error' even though
+    // RM received the injection (and the scheduledinjection is already gone).
+    // Log a warning but always return success — the inject is the source of
+    // truth, not the metadata write.
+    try {
+      await orchestrator.logEvent(phone, {
+        action: "INJECT",
         domain: target.domain,
-        campaignId: target.id,
-        timestamp: Date.now(),
-      },
-    });
+        details: "Queue Worker: Scheduled Appointment Injection",
+      });
+      await orchestrator.updatePointer(phone, {
+        status: "IN_ODR",
+        currentLocation: {
+          domain: target.domain,
+          campaignId: target.id,
+          timestamp: Date.now(),
+        },
+      });
+    } catch (e) {
+      console.warn(
+        `[queue] ⚠️ post-inject orchestrator write failed for ${phone} (inject already succeeded, non-fatal): ${
+          (e as Error).message
+        }`,
+      );
+    }
     return { skipped: false };
   } else {
     throw new Error(`ODR injection failed: ${result.message}`);

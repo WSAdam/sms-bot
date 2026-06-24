@@ -6,6 +6,7 @@
 
 import { assertEquals } from "@std/assert";
 import {
+  callDispositionDocPath,
   guestAnsweredDocPath,
   metricsDailyDocPath,
   metricsLifetimeDocPath,
@@ -263,4 +264,43 @@ Deno.test("answered counter: requireInFunnel=false counts a phone NOT in the fun
   assertEquals(s.answeredUpserted, 1);
   assertEquals(dailyAnswered(db, D1), 1);
   assertEquals(lifetimeAnswered(db), 1);
+});
+
+Deno.test("answered counter: a successful increment CLEARS a stale answeredCounterFailedAt flag", async () => {
+  // A PRIOR run's counter write failed and stamped answeredCounterFailedAt on
+  // the day's metrics doc; nightly reads that flag and forces
+  // ydAnsweredReliable=false. A LATER run that increments the counter correctly
+  // must clear the flag — otherwise the answered stat is permanently (and
+  // wrongly) reported "unreliable".
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  // Simulate the prior failure: the day doc carries the failure flag as a string.
+  db.docs.set(metricsDailyDocPath(D1), {
+    answeredCounterFailedAt: "2026-06-09T00:00:00.000Z",
+  });
+  await importDailyDispositions([row(PHONE, "c1", T_D1)]);
+  // The counter incremented...
+  assertEquals(dailyAnswered(db, D1), 1);
+  // ...and the stale flag is no longer a string (nightly's `typeof === "string"`
+  // demotion check now reads it as cleared).
+  const day = db.docs.get(metricsDailyDocPath(D1));
+  assertEquals(typeof day?.answeredCounterFailedAt === "string", false);
+});
+
+Deno.test("disposition encoding: guestanswered stores the SAME decoded disposition as calldisposition", async () => {
+  // Pre-fix, calldisposition stored the HTML-DECODED disposition while
+  // guestanswered stored the RAW entity string — the same call carried two
+  // different disposition strings ("⇒ Agent" vs "&rArr; Agent") across the two
+  // docs, breaking audits/exports/comparisons. Both must now be decoded.
+  const db = setup();
+  seedInFunnel(db, PHONE);
+  await importDailyDispositions([
+    row(PHONE, "cEnc", T_D1, "&rArr; Andrew Torsiello", 200),
+  ]);
+  const callDispo = db.docs.get(callDispositionDocPath(PHONE, "cEnc"));
+  const guestAnswered = db.docs.get(guestAnsweredDocPath(PHONE));
+  assertEquals(callDispo?.disposition, "⇒ Andrew Torsiello");
+  assertEquals(guestAnswered?.lastDisposition, "⇒ Andrew Torsiello");
+  // And critically — they MATCH (no raw-vs-decoded drift).
+  assertEquals(guestAnswered?.lastDisposition, callDispo?.disposition);
 });

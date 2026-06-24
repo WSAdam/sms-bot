@@ -25,7 +25,10 @@ import {
   type ReadymodeLeadDto,
   type StandardLead,
 } from "@shared/types/readymode.ts";
-import { injectionHistoryDocId } from "@shared/util/id.ts";
+import {
+  injectionDiscriminator,
+  injectionHistoryDocId,
+} from "@shared/util/id.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
 export const handler = define.handlers({
@@ -85,16 +88,28 @@ export const handler = define.handlers({
     // placeholder). Best-effort: failures here don't block the call,
     // they just mean we fall back to the answered-backfill path later.
     const firedAt = new Date().toISOString();
+    // Discriminate the doc id with a per-request nonce. Two concurrent talk-now
+    // injections for the SAME phone can produce the SAME firedAt ISO millisecond;
+    // without a discriminator their doc ids collide and set(merge:false) silently
+    // overwrites the first, losing one injection's audit trail. (conversationDocId
+    // got the same treatment — this is the injectionhistory twin.)
+    const firedDiscriminator = injectionDiscriminator();
     try {
       await getFirestoreClient().set(
-        injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
+        injectionHistoryDocPath(
+          injectionHistoryDocId(phone, firedAt, firedDiscriminator),
+        ),
         {
           phone,
           eventTime: firedAt,
           scheduledAt: new Date(firedAt).getTime(),
           firedAt,
           firedBy: "talk-now",
-          status: "success",
+          // Record the ACTUAL inject verdict, not a hardcoded "success".
+          // injectLead returns {status:"error"} without throwing (e.g.
+          // duplicate lead / RM rejection); writing "success" regardless
+          // logged phantom injects into the audit trail.
+          status: result.status === "success" ? "success" : "error",
           // Explicitly NOT eventTimePlaceholder. The appointment really
           // is "now" — the guest just consented to be called immediately.
           campaignId: target.id,
@@ -108,19 +123,23 @@ export const handler = define.handlers({
     }
 
     // Clean up the companion scheduledinjection doc so the sweep doesn't
-    // re-fire later. The 2026-05-25 near-miss was caused by this exact
-    // race: talk-now wrote an injectionhistory entry but left the
-    // pending doc in place, and when the sweep came back online it
-    // dialed the same customer again. Idempotent — db.delete on a
-    // missing doc is a no-op. Best-effort: failure here doesn't block.
-    try {
-      await getFirestoreClient().delete(scheduledInjectionDocPath(phone));
-    } catch (e) {
-      console.warn(
-        `[talk-now] scheduledinjection delete failed (non-fatal): ${
-          (e as Error).message
-        }`,
-      );
+    // re-fire later — but ONLY when the inject actually succeeded. The
+    // 2026-05-25 near-miss was caused by this exact race: talk-now wrote an
+    // injectionhistory entry but left the pending doc in place, and when the
+    // sweep came back online it dialed the same customer again. If the inject
+    // FAILED, deleting the pending marker would orphan the lead (no inject, no
+    // pending doc) — leave it so the sweep can retry. Idempotent — db.delete on
+    // a missing doc is a no-op. Best-effort: failure here doesn't block.
+    if (result.status === "success") {
+      try {
+        await getFirestoreClient().delete(scheduledInjectionDocPath(phone));
+      } catch (e) {
+        console.warn(
+          `[talk-now] scheduledinjection delete failed (non-fatal): ${
+            (e as Error).message
+          }`,
+        );
+      }
     }
 
     // Now that the inject succeeded, pull the full Bland transcript into
@@ -138,6 +157,19 @@ export const handler = define.handlers({
           }`,
         );
       }
+    }
+
+    // Reflect the real inject verdict in the response too — a failed inject
+    // must not report 200/"success".
+    if (result.status !== "success") {
+      return Response.json(
+        {
+          status: "error",
+          message: `Inject to ${target.name} failed`,
+          result,
+        },
+        { status: 502 },
+      );
     }
 
     return Response.json({

@@ -1,12 +1,37 @@
 // Replaces the Phase 0 placeholder with real time-helper tests.
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   daysBetween,
   easternDateString,
   isWithinWindowAfter,
+  normalizeAppointmentTime,
   parseDateishToMs,
 } from "@shared/util/time.ts";
+
+Deno.test("normalizeAppointmentTime canonicalizes a valid TZ-marked time to UTC ISO", () => {
+  assertEquals(
+    normalizeAppointmentTime("2026-05-19T12:00:00Z", undefined),
+    "2026-05-19T12:00:00.000Z",
+  );
+});
+
+Deno.test("normalizeAppointmentTime THROWS on a syntactically-invalid TZ-marked time (no silent passthrough)", () => {
+  // Previously returned the bad string unchanged; scheduleInjection's regex
+  // (sees the trailing Z) would accept it, the sweep's eventTime<=now string
+  // compare would never match, and the injection would silently never fire —
+  // losing the lead. It must reject loudly instead.
+  assertThrows(
+    () => normalizeAppointmentTime("2026-99-99T12:00:00Z", undefined),
+    Error,
+    "Invalid appointment time",
+  );
+  assertThrows(
+    () => normalizeAppointmentTime("2026-13-40T99:99:99-04:00", undefined),
+    Error,
+    "Invalid appointment time",
+  );
+});
 
 Deno.test("easternDateString returns YYYY-MM-DD", () => {
   // 2026-04-28 12:00 UTC is still 2026-04-28 in Eastern (EDT = UTC-4 → 8am ET)

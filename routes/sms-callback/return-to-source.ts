@@ -67,6 +67,22 @@ async function handle(ctx: { req: Request }) {
     targetCampaignId,
   );
 
+  // injectLead returns {status:"error"} WITHOUT throwing on most RM failures
+  // (e.g. HTTP 200 + Accepted:false). If we don't check it, we'd flip the
+  // pointer to RETURNED_TO_SOURCE and report success while the lead was
+  // actually lost. Only update the pointer on a confirmed inject.
+  if (injectResult.status !== "success") {
+    return Response.json(
+      {
+        status: "error",
+        message: "Return to source failed — lead not injected",
+        source,
+        injectResult,
+      },
+      { status: 502 },
+    );
+  }
+
   await orchestrator.updatePointer(phone, {
     status: "RETURNED_TO_SOURCE",
     currentLocation: {

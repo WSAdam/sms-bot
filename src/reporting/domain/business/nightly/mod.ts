@@ -63,6 +63,13 @@ export interface DailyReportCounts {
   // failed pull can never again masquerade as a real zero.
   ydAnsweredReliable?: boolean; // readymode-daily-pull cron fresh + ok
   ydBookingsReliable?: boolean; // daily-qb-sale-match cron fresh + ok
+  // WTD completeness flag. false = at least one past day in the WTD window
+  // (today excluded — it's still settling) had NO metrics/daily doc, so its
+  // apptsBooked/activations contributed 0 that may be "doc missing" rather
+  // than "measured zero". A missing past-day doc is usually a legitimate
+  // zero-activity day, so this is observability, not an error — but it
+  // surfaces silent daily-metrics data loss instead of hiding it.
+  wtdComplete?: boolean;
 }
 
 export interface NightlyReportResult {
@@ -124,7 +131,16 @@ async function build(reportDate: string): Promise<{
   counts: DailyReportCounts;
 }> {
   const db = getFirestoreClient();
-  const currentWeekKey = easternMondayDateString();
+  // Derive the week key from reportDate, NOT the wall clock. A backfill run
+  // (runNightlyReport(date) / ?date=) for a PAST date must query the WTD
+  // text-recipient count for THAT date's week — using today's Monday pulled
+  // the wrong week's count for any historical report.
+  // Noon UTC keeps the ET wall-clock date equal to reportDate (the function
+  // shifts back 4h to approximate ET; midnight-UTC would land on the previous
+  // ET day at the boundary).
+  const currentWeekKey = easternMondayDateString(
+    new Date(`${reportDate}T12:00:00Z`),
+  );
   const wtdDays = weekToDateEtDays(reportDate);
   const yesterdayDate = etDayBefore(reportDate);
 
@@ -164,12 +180,28 @@ async function build(reportDate: string): Promise<{
 
   const ydData = (yesterdayDoc ?? {}) as Record<string, unknown>;
 
-  // WTD sums from daily docs.
+  // WTD sums from daily docs. Track completeness: a MISSING past-day doc
+  // (today excluded — it's still settling at fire time) means that day
+  // contributed 0 to the sums that might be "doc missing" rather than
+  // "measured zero". We warn so silent daily-metrics data loss is visible
+  // from the run logs instead of vanishing into the totals.
+  const todayEt = easternDateString();
   let apptsBookedWtd = 0;
   let activationsWtd = 0;
-  for (const doc of dailyDocs) {
+  const missingWtdDays: string[] = [];
+  dailyDocs.forEach((doc, i) => {
+    const day = wtdDays[i];
+    if (doc == null && day !== todayEt) missingWtdDays.push(day);
     apptsBookedWtd += num((doc as Record<string, unknown> | null)?.apptsBooked);
     activationsWtd += num((doc as Record<string, unknown> | null)?.activations);
+  });
+  const wtdComplete = missingWtdDays.length === 0;
+  if (!wtdComplete) {
+    console.warn(
+      `[nightly] ⚠️ WTD aggregation missing metrics/daily docs for ${
+        missingWtdDays.join(", ")
+      } — those days contributed 0 (may be a real zero-activity day, or silent data loss)`,
+    );
   }
 
   // A yesterday stat fed by a morning cron is trustworthy only if that cron
@@ -184,17 +216,37 @@ async function build(reportDate: string): Promise<{
   // prove that specific old day's data was collected. Fine because we only
   // regenerate a report after triage --pull backfills that day; if that
   // changes, switch to a per-date pull record.
+  // The real current ET day. A marker dated AFTER today can only come from
+  // clock skew or a manual Firestore write — it must never satisfy freshness
+  // (it would falsely mark yesterday's stats reliable before the cron ran).
+  const currentEtDay = etDateOfInstant(new Date().toISOString());
   const cronFreshFor = (marker: Record<string, unknown> | null): boolean => {
     if (!marker || marker.lastStatus !== "ok") return false;
     const et = etDateOfInstant(marker.lastRunAt);
-    return et !== null && et >= reportDate;
+    if (et === null) return false;
+    // Reject future-dated markers; keep the documented `>= reportDate`
+    // tolerance (a newer ok run clears a stale marker for backfills) bounded
+    // by "not after today".
+    if (currentEtDay !== null && et > currentEtDay) return false;
+    return et >= reportDate;
   };
+  // A counter increment can fail (Firestore quota/network) AFTER the cron's
+  // batch commit succeeded — the cron marker still reads "ok", but the
+  // answered/activations number on the daily doc was never incremented. The
+  // counter-write catch in import-dispositions / sale-match stamps a per-day
+  // *CounterFailedAt flag on exactly that situation, so a fresh cron marker is
+  // NOT sufficient to call the number reliable: the per-day flag must also be
+  // absent.
+  const answeredCounterFailed = typeof ydData.answeredCounterFailedAt ===
+    "string";
+  const activationsCounterFailed =
+    typeof ydData.activationsCounterFailedAt === "string";
   const ydAnsweredReliable = cronFreshFor(
     pullMarker as Record<string, unknown> | null,
-  );
+  ) && !answeredCounterFailed;
   const ydBookingsReliable = cronFreshFor(
     saleMatchMarker as Record<string, unknown> | null,
-  );
+  ) && !activationsCounterFailed;
 
   const counts: DailyReportCounts = {
     textsSentWtd: wtdRecipientDocs.length,
@@ -210,6 +262,7 @@ async function build(reportDate: string): Promise<{
     ydBookings: num(ydData.activations),
     ydAnsweredReliable,
     ydBookingsReliable,
+    wtdComplete,
   };
 
   const rows: Array<[string, number, number]> = [

@@ -335,7 +335,11 @@ export async function fetchCallLog(
       );
     }
     if (page === 0) {
-      pagesTotal = Number(json.pages ?? 0);
+      // Default to at least 1 page. A response that omits `pages` (or sends 0)
+      // would otherwise set pagesTotal=0, and the `page >= pagesTotal` exit
+      // (1 >= 0) would fire immediately after page 0 — silently truncating the
+      // pull to a single page even when more results exist.
+      pagesTotal = Math.max(Number(json.pages ?? 0), 1);
       const cl = json.campaignlist;
       if (cl && typeof cl === "object") {
         campaignList = { ...cl };

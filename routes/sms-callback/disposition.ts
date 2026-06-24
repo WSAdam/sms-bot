@@ -76,8 +76,9 @@ export const handler = define.handlers({
         source.domain as DialerDomain,
         standardLead,
       );
+      let injectResult;
       try {
-        await injectLead(
+        injectResult = await injectLead(
           dialerPayload as ReadymodeLeadDto,
           source.domain as DialerDomain,
           targetCampaignId,
@@ -87,6 +88,19 @@ export const handler = define.handlers({
           {
             status: "error",
             message: `Inject failed: ${(e as Error).message}`,
+          },
+          { status: 502 },
+        );
+      }
+      // injectLead returns {status:"error"} WITHOUT throwing on RM rejection
+      // (HTTP 200 + Accepted:false). The catch above only handles thrown
+      // exceptions, so check the returned status too — otherwise we'd flip the
+      // pointer to RETURNED_TO_SOURCE on a failed injection and lose the lead.
+      if (injectResult.status !== "success") {
+        return Response.json(
+          {
+            status: "error",
+            message: "Inject failed — lead not returned to source",
           },
           { status: 502 },
         );
@@ -141,8 +155,22 @@ export const handler = define.handlers({
           targetConfig.domain,
           targetConfig.id,
         );
+        // injectLead returns {status:"error"} WITHOUT throwing on RM rejection
+        // (HTTP 200 + Accepted:false). Returning HTTP 200 with that error body
+        // made the Bland webhook treat the recycle as done and never retry, so
+        // the lead was silently lost from recycling. Surface a 502 on failure,
+        // mirroring the ODR-return branch above.
+        if (result.status !== "success") {
+          return Response.json(
+            {
+              status: "error",
+              message: `Recycle to ${targetConfig.name} failed`,
+            },
+            { status: 502 },
+          );
+        }
         return Response.json({
-          status: result.status,
+          status: "success",
           message: `Recycled to ${targetConfig.name}`,
         });
       }

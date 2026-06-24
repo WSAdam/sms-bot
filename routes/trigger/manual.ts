@@ -13,6 +13,10 @@ export const handler = define.handlers({
     >;
     const override = body.override === undefined ? true : !!body.override;
     const r = await processInboundLead({ ...body, override });
-    return Response.json(r);
+    // Mirror readymode.ts: an error verdict (missing phone, Bland failure even
+    // with override=true) must surface as HTTP 400, not 200 — otherwise callers
+    // and the test UI can't tell success from failure by status code.
+    const status = r.status === "error" ? 400 : 200;
+    return Response.json(r, { status });
   },
 });

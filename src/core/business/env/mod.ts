@@ -121,10 +121,13 @@ function parseInboundMode(
   return "none";
 }
 
-function parseHhMmOr(v: string | null, fallback: string): string {
+// Exported for tests — the HH:MM validation is a fix site (it must reject
+// invalid hours 24-29) and is awkward to exercise via loadEnv() (which needs
+// firebase + bland creds present), so it's covered directly.
+export function parseHhMmOr(v: string | null, fallback: string): string {
   if (v == null) return fallback;
   const s = v.trim();
-  if (/^[0-2][0-9]:[0-5][0-9]$/.test(s)) return s;
+  if (/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(s)) return s;
   console.warn(
     `[env] ⚠️ "${v}" is not a valid HH:MM 24h string — falling back to ${fallback}`,
   );

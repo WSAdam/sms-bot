@@ -35,6 +35,21 @@ interface BlandMsg {
   created_at?: string;
 }
 
+// Deterministic conversation-message doc ID for reseed. Includes the
+// per-message INDEX so two Bland messages sharing a `created_at` (Bland uses
+// 1-second timestamp granularity) don't collide on one doc ID — without the
+// `__${idx}` suffix the second batch-write overwrites the first, silently
+// losing a message. Mirrors ingestBlandTranscript (commit 42d457e). Exported
+// so the collision-avoidance is unit-tested directly (no Bland mock needed).
+export function reseedMessageDocId(
+  phone10: string,
+  callId: string,
+  ts: string,
+  idx: number,
+): string {
+  return `${phone10}__${callId}__${ts}__${idx}`;
+}
+
 async function getCurrentMessagesForCall(
   phone10: string,
   callId: string,
@@ -54,7 +69,18 @@ async function getCurrentMessagesForCall(
     const m = e.data as { phoneNumber?: string };
     return m.phoneNumber === phone10;
   });
-  return { count: matching.length, docIds: matching.map((e) => e.id) };
+  // Count ONLY real messages, applying the SAME '<Call Connected>' filter the
+  // Bland side uses. The webhook write path stores '<Call Connected>' filler
+  // unfiltered, so an unfiltered Firestore count would be inflated relative to
+  // the filtered Bland count and reseedOne would wrongly skip a conversation
+  // that actually has new real messages to sync (see reseedOne's comparison).
+  // docIds still cover ALL matching docs so a reseed delete-replace removes the
+  // filler too.
+  const realCount = matching.filter((e) => {
+    const m = e.data as { message?: string };
+    return m.message && m.message !== "<Call Connected>";
+  }).length;
+  return { count: realCount, docIds: matching.map((e) => e.id) };
 }
 
 async function reseedOne(
@@ -84,12 +110,21 @@ async function reseedOne(
     type: "delete" as const,
     path: `${conversationsCollection}/${id}`,
   }));
-  for (const m of blandMsgs as BlandMsg[]) {
+  blandMsgs.forEach((m: BlandMsg, idx: number) => {
     const ts = m.created_at ?? new Date().toISOString();
-    const sender = m.sender === "USER" ? "Guest" : "AI Bot";
+    // Match ingestBlandTranscript/buildMsgOp exactly: BOTH "USER" and "GUEST"
+    // map to "Guest" (case-insensitive). The old case-sensitive single-value
+    // check sent a "GUEST" sender to "AI Bot", diverging from the webhook copy
+    // and defeating content+sender dedupe.
+    const su = String(m.sender ?? "").toUpperCase();
+    const sender = su === "USER" || su === "GUEST" ? "Guest" : "AI Bot";
+    // Per-message index in the doc ID prevents same-timestamp collisions —
+    // see reseedMessageDocId.
     ops.push({
       type: "set",
-      path: `${conversationsCollection}/${phone10}__${callId}__${ts}`,
+      path: `${conversationsCollection}/${
+        reseedMessageDocId(phone10, callId, ts, idx)
+      }`,
       data: {
         phoneNumber: phone10,
         callId,
@@ -98,7 +133,7 @@ async function reseedOne(
         timestamp: ts,
       },
     });
-  }
+  });
   await getFirestoreClient().batch(ops);
   return { status: "reseeded", delta: blandMsgs.length - current.count };
 }

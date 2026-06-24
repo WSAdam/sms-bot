@@ -129,6 +129,30 @@ export const handler = define.handlers({
       }
     }
 
+    // The local opt-out (storeMessage + markDnc) is already recorded above, so
+    // the guest's STOP intent is honored regardless. But if EVERY ReadyMode
+    // domain failed to DNC, returning HTTP 200 success would let the caller
+    // believe the lead was removed from active RM campaigns when it wasn't.
+    // Surface a 502 in that case (the unfixed twin of /stop's all-failed check),
+    // while a partial success still returns 200.
+    if (dncResults) {
+      const dncValues = Object.values(dncResults);
+      const allFailed = dncValues.length > 0 &&
+        dncValues.every((v) => v === "Failed" || v === "Error");
+      if (allFailed) {
+        return Response.json(
+          {
+            status: "error",
+            phoneNumber: phone10,
+            callId,
+            timestamp: stored.timestamp,
+            dnc: dncResults,
+          },
+          { status: 502 },
+        );
+      }
+    }
+
     return Response.json({
       status: "success",
       phoneNumber: phone10,

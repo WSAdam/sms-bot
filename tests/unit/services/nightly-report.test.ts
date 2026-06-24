@@ -8,6 +8,7 @@ import {
   cronConfigDocPath,
   metricsCronRunDocPath,
   metricsDailyDocPath,
+  weeklyRecipientByPhoneWeekDocPath,
 } from "@shared/firestore/paths.ts";
 import { setFirestoreClientForTests } from "@shared/firestore/wrapper.ts";
 import { runNightlyReport } from "@shared/services/report/nightly.ts";
@@ -225,6 +226,116 @@ Deno.test("answered reliability: a marker NEWER than a historical ?date= report 
   });
   const r = await runNightlyReport(REPORT_DATE);
   assertEquals(r.counts.ydAnsweredReliable, true);
+});
+
+Deno.test("answered reliability: a FUTURE-dated marker (clock skew / manual write) is NOT treated as fresh", async () => {
+  const { db } = setup();
+  const REPORT_DATE = "2026-06-15";
+  seedDaily(db, "2026-06-14", {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 7,
+    activations: 1,
+  });
+  // A marker dated far in the future (year 2999) — can only come from clock
+  // skew or a manual Firestore write. The old `>= reportDate` check would
+  // accept it and falsely mark the stats reliable. It must be rejected.
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2999-01-01T09:30:00.000Z",
+  });
+  const r = await runNightlyReport(REPORT_DATE);
+  assertEquals(r.counts.ydAnsweredReliable, false);
+});
+
+Deno.test("counter reliability: a per-day answeredCounterFailed flag demotes ydAnsweredReliable even when the cron marker is fresh+ok", async () => {
+  const { db } = setup();
+  const REPORT_DATE = "2026-06-15";
+  const YESTERDAY = "2026-06-14";
+  // The disposition cron's batch committed and the marker reads ok+fresh, but
+  // the answered counter increment failed afterward — import-dispositions
+  // stamps answeredCounterFailedAt on the day's doc to record that. The number
+  // is therefore NOT reliable despite the fresh marker.
+  db.docs.set(metricsDailyDocPath(YESTERDAY), {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 0, // never incremented because the counter write failed
+    activations: 1,
+    answeredCounterFailedAt: "2026-06-15T09:31:00.000Z",
+  });
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:30:00.000Z",
+  });
+  db.docs.set(metricsCronRunDocPath("daily-qb-sale-match"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:00:00.000Z",
+  });
+
+  const r = await runNightlyReport(REPORT_DATE);
+
+  assertEquals(r.counts.ydAnsweredReliable, false); // demoted by the flag
+  assertEquals(r.counts.ydBookingsReliable, true); // bookings unaffected
+});
+
+Deno.test("counter reliability: a per-day activationsCounterFailed flag demotes ydBookingsReliable", async () => {
+  const { db } = setup();
+  const REPORT_DATE = "2026-06-15";
+  const YESTERDAY = "2026-06-14";
+  db.docs.set(metricsDailyDocPath(YESTERDAY), {
+    textsSent: 100,
+    apptsBooked: 2,
+    answered: 7,
+    activations: 0,
+    activationsCounterFailedAt: "2026-06-15T09:01:00.000Z",
+  });
+  db.docs.set(metricsCronRunDocPath("readymode-daily-pull"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:30:00.000Z",
+  });
+  db.docs.set(metricsCronRunDocPath("daily-qb-sale-match"), {
+    lastStatus: "ok",
+    lastRunAt: "2026-06-15T09:00:00.000Z",
+  });
+
+  const r = await runNightlyReport(REPORT_DATE);
+
+  assertEquals(r.counts.ydAnsweredReliable, true);
+  assertEquals(r.counts.ydBookingsReliable, false); // demoted by the flag
+});
+
+Deno.test("WTD text count: a backfill report queries the REPORT's week, not the current week", async () => {
+  const { db } = setup();
+  // 2026-06-18 is a Thursday; its ET-Monday week key is 2026-06-15. Today's
+  // week key differs. Pre-fix the WTD text-recipient query used today's Monday
+  // (easternMondayDateString() with no arg), so a backfill counted the wrong
+  // week. Seed two recipient docs under the REPORT's week key; if the query
+  // used the current week instead, it would find 0.
+  const REPORT_DATE = "2026-06-18";
+  const REPORT_WEEK_KEY = "2026-06-15";
+  for (const phone of ["9000000001", "9000000002"]) {
+    db.docs.set(
+      weeklyRecipientByPhoneWeekDocPath(REPORT_WEEK_KEY, phone),
+      { phone, weekKey: REPORT_WEEK_KEY, firstSentAt: "2026-06-16T12:00:00Z" },
+    );
+  }
+
+  const r = await runNightlyReport(REPORT_DATE);
+
+  assertEquals(r.counts.textsSentWtd, 2);
+});
+
+Deno.test("WTD completeness: the report exposes a wtdComplete reliability flag", async () => {
+  const { db } = setup();
+  // The WTD window walks back from the real wall clock, so we can't seed an
+  // exact set of days deterministically. We only pin that the flag is now
+  // populated (it was absent before the fix), so the observability signal
+  // reaches the counts. On a multi-day window with no seeded daily docs, past
+  // days are missing → the flag is false; on a Monday (single-day window) it
+  // can be true. Either way it must be a boolean.
+  const r = await runNightlyReport(undefined, { forceSend: true });
+  assertEquals(typeof r.counts.wtdComplete, "boolean");
+  assert(db !== undefined);
 });
 
 Deno.test("report skips (no email) when report.enabled=false and not forced", async () => {

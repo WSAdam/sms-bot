@@ -157,28 +157,34 @@ export async function setGatesConfig(
   >,
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<GatesConfig> {
-  const current = await getGatesConfig(client);
-  const next: GatesConfig = {
-    attemptsThreshold: partial.attemptsThreshold ?? current.attemptsThreshold,
-    saleMatchWindowDays: partial.saleMatchWindowDays ??
-      current.saleMatchWindowDays,
-    globalDailySmsCap: partial.globalDailySmsCap ?? current.globalDailySmsCap,
-    rateLimitWindowDays: partial.rateLimitWindowDays ??
-      current.rateLimitWindowDays,
-    costPerText: partial.costPerText ?? current.costPerText,
-    earningsPerSale: partial.earningsPerSale ?? current.earningsPerSale,
-    tpiMinSpacingMs: partial.tpiMinSpacingMs ?? current.tpiMinSpacingMs,
-    tpiMaxPer5Min: partial.tpiMaxPer5Min ?? current.tpiMaxPer5Min,
-    scheduledInjectionSweepEnabled: partial.scheduledInjectionSweepEnabled ??
-      current.scheduledInjectionSweepEnabled,
-    scheduledInjectionDedupHours: partial.scheduledInjectionDedupHours ??
-      current.scheduledInjectionDedupHours,
-    updatedAt: new Date().toISOString(),
-  };
-  await client.set(
-    gatesConfigDocPath(),
-    next as unknown as Record<string, unknown>,
-  );
+  // Read-merge-write INSIDE a Firestore transaction, reading the live doc
+  // (NOT the 60s cache). Two concurrent admin POSTs used to both read the
+  // same stale cached config, build conflicting next-states, and the second
+  // plain set() silently clobbered the first request's change. The
+  // transaction re-reads the fresh doc and merges this partial on top, so
+  // concurrent writes to different fields no longer lose each other.
+  let next: GatesConfig = GATES_CONFIG_DEFAULTS;
+  await client.transactionalUpdate(gatesConfigDocPath(), (existing) => {
+    const current = mergeWithDefaults(existing);
+    next = {
+      attemptsThreshold: partial.attemptsThreshold ?? current.attemptsThreshold,
+      saleMatchWindowDays: partial.saleMatchWindowDays ??
+        current.saleMatchWindowDays,
+      globalDailySmsCap: partial.globalDailySmsCap ?? current.globalDailySmsCap,
+      rateLimitWindowDays: partial.rateLimitWindowDays ??
+        current.rateLimitWindowDays,
+      costPerText: partial.costPerText ?? current.costPerText,
+      earningsPerSale: partial.earningsPerSale ?? current.earningsPerSale,
+      tpiMinSpacingMs: partial.tpiMinSpacingMs ?? current.tpiMinSpacingMs,
+      tpiMaxPer5Min: partial.tpiMaxPer5Min ?? current.tpiMaxPer5Min,
+      scheduledInjectionSweepEnabled: partial.scheduledInjectionSweepEnabled ??
+        current.scheduledInjectionSweepEnabled,
+      scheduledInjectionDedupHours: partial.scheduledInjectionDedupHours ??
+        current.scheduledInjectionDedupHours,
+      updatedAt: new Date().toISOString(),
+    };
+    return next as unknown as Record<string, unknown>;
+  });
   // Invalidate cache so the next read sees the new value immediately
   // (otherwise the writer would still see the stale cached row until TTL).
   cached = { at: Date.now(), value: next };

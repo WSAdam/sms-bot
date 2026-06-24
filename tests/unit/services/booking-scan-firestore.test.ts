@@ -143,6 +143,52 @@ Deno.test("detects 'locked in' signal from Firestore Guest/AI Bot sender enum", 
   }
 });
 
+Deno.test("detects the nodeTag 'appointment scheduled' signal (carried through the message mapping)", async () => {
+  // booking-scan documents three booking signals; one is the bot message's
+  // nodeTag='appointment scheduled'. The mapping into BlandMsg used to DROP
+  // nodeTag, so a conversation tagged only via nodeTag (no "locked in" / no
+  // "Appointment Scheduled:" text) was never detected → tag_appointment_
+  // scheduled was an unreachable enum. This pins it as detectable.
+  const mock = new FirestoreMock();
+  setFirestoreClientForTests(mock);
+  try {
+    const t0 = "2026-05-10T14:00:00.000Z";
+    const t1 = "2026-05-10T14:01:00.000Z";
+    seed(mock, [
+      {
+        phone: "5551230099",
+        callId: "convo-tag",
+        sender: "Guest",
+        message: "ok sounds good",
+        timestamp: t0,
+      },
+      {
+        // No "locked in", no "Appointment Scheduled:" text — ONLY the nodeTag.
+        phone: "5551230099",
+        callId: "convo-tag",
+        sender: "AI Bot",
+        message: "You're all set, talk soon!",
+        timestamp: t1,
+        nodeTag: "appointment scheduled",
+      },
+    ]);
+    const summary = await scanConversationsForBookings(
+      "2026-05-01T00:00:00.000Z",
+      "2026-05-22T23:59:59.999Z",
+      false,
+    );
+    assertEquals(
+      summary.proposed,
+      1,
+      `expected 1 proposal for the nodeTag signal, got ${summary.proposed}`,
+    );
+    assertEquals(summary.proposals[0].phone10, "5551230099");
+    assertEquals(summary.proposals[0].signal, "tag_appointment_scheduled");
+  } finally {
+    setFirestoreClientForTests(null);
+  }
+});
+
 Deno.test("skips conversations with no signal — no Bland call", async () => {
   // The whole point of the refactor: conversations without a signal
   // shouldn't trigger ANY Bland API call. We can't directly mock

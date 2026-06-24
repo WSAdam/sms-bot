@@ -1111,6 +1111,73 @@ in the **conversation review view**.
   reseed remains the completeness backstop (the on-booking pull may miss the
   final wrap-up message still in flight when the webhook fires).
 
+### 0.22 Correctness hardening sweep — 42 bug fixes (June 2026)
+
+A multi-agent bug-hunt (8 flows × find → adversarially-verify → fix → test, 3
+rounds) audited the live pipeline and fixed **42 verified bugs**; unit suite
+**193 → 265** (72 new tests), scoped shape-check still 0. All changes sit behind
+existing seams — no architecture change. Five themes:
+
+- **Phantom-success on ReadyMode's HTTP-200-but-rejected responses
+  (generalized).** The `40a5c8e` verdict fix only covered the main inject; the
+  same loose `text.includes("Success") || res.ok` check was silently recording
+  rejected leads as injected in `handleDuplicate`, `scrubLead`, and `dncLead`.
+  All now use the strict `injectVerdictIsSuccess(isSuccess, explicitlyRejected)`
+  helper + `injectBodyExplicitlyRejected` (whose text fallback now also catches
+  `"Success":false`, not just `"Accepted":false`). The route handlers
+  `return-to-source`, `disposition` (both the ODR-return and recycle branches),
+  and `bland/talk-now` now **check `injectLead`'s status before** flipping the
+  lead pointer / deleting the pending `scheduledinjection` / writing the
+  `injectionhistory` status — a failed RM inject no longer reads as a completed
+  move (talk-now leaves the pending marker for the sweep to retry).
+
+- **Atomicity on hot-path read-modify-writes (was check-then-write TOCTOU).**
+  Converted to Firestore transactions with reserve/release-on-failure: the
+  **global daily SMS cap** + **per-phone rate limiter** are now *reserved
+  atomically before* the Bland send and *released* if the send fails (so a
+  transient Bland error doesn't lock the phone out for the 30-day window); the
+  **A/B variant toggle**, **`setGatesConfig`/`setCronConfig`** (were merging
+  against the 60s cache → lost updates), **sale-match activation dedup**, and the
+  **nightly-report cron idempotency** (transactional `claimReportDay` CAS on
+  `lastSentEtDate` → no double-send on concurrent fires). The injection sweep now
+  writes `injectionhistory` and deletes the `scheduledinjection` in **one batch**
+  (all-or-nothing). Post-send metadata writes in `processInboundLead` moved into
+  their **own** try-catch so a Firestore hiccup *after* a delivered SMS can't flip
+  the result to "Bland failed" and trigger an upstream resend.
+
+- **Firestore doc-id collisions (same-millisecond overwrite).** Message +
+  injection doc ids built from `phone__callId__timestamp` silently overwrote when
+  two writes landed in the same ms. Added a per-message discriminator
+  (`conversationDiscriminator`, djb2) to the conversation-webhook + reseed ids, a
+  message index to reseed, and a nonce (`injectionDiscriminator`) to talk-now's
+  `injectionhistory` id.
+
+- **Webhook status contract change — ⚠️ action for monitoring.** Endpoints that
+  previously returned **HTTP 200 even on internal failure** now return **502**
+  (failed inject / all-domain DNC failure) or **400** (`/trigger/manual` error):
+  `/sms-callback/{disposition,stop,bland/talk-now,return-to-source,conversation/[phone]/[callId]}`
+  and `/trigger/manual`. This lets Bland/ReadyMode retry or alert instead of
+  silently dropping. The local DNC opt-out (`storeMessage` + `markDnc`) is still
+  recorded **before** any 502, so the guest is locally suppressed regardless.
+
+- **Reliability + counting.** Nightly report now demotes
+  `ydAnsweredReliable`/`ydBookingsReliable` when a counter increment **silently
+  failed** (per-day `answeredCounterFailedAt`/`activationsCounterFailedAt` flags,
+  set on failure and **cleared on a later successful** increment) and exposes a
+  `wtdComplete` flag when a WTD day's `metrics/daily` doc is missing; `cronFreshFor`
+  rejects **future-dated** markers (`> currentEtDay`); RM pagination no longer
+  terminates early when the response omits `pages` (defaults to ≥1); booking-scan
+  again honors the `appointment scheduled` **nodeTag** signal (it was dropped in
+  the message mapping); `normalizeAppointmentTime` **throws** on a
+  syntactically-invalid TZ-marked input instead of passing it downstream (where the
+  sweep would never fire it); `parseHhMmOr` rejects hours 24–29;
+  `guestanswered.lastDisposition` is HTML-entity-decoded to match `calldisposition`.
+
+Method note: the hunt + adversarial verify ran on Haiku, the distill + fixes on
+Opus; the loop stopped at the agreed 3-round cap **without converging** (round 3
+still surfaced new majors), so a future pass may find more. Partially advances the
+TODO "make injection-recording reliable" + "lock with a test" items.
+
 ---
 
 ## 1. Project goals

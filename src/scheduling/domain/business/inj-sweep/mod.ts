@@ -87,15 +87,26 @@ export async function sweepScheduledInjections(
       ...(skipReason ? { skipReason } : {}),
     };
 
-    await client.set(
-      injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
-      history as unknown as Record<string, unknown>,
-    );
+    // Atomically write the history entry AND delete the scheduledinjection in
+    // ONE batch. As two separate ops, a delete failure after the set succeeds
+    // left the scheduledinjection in place → re-processed next sweep →
+    // duplicate history + duplicate injection attempt. The batch makes them
+    // all-or-nothing.
     // Always delete the scheduledinjection doc, even when the dedup
     // guard skipped the dial. Leaving it would mean the sweep keeps
     // re-evaluating it every minute forever; the doc has served its
     // purpose once an injectionhistory entry has been recorded.
-    await client.delete(scheduledInjectionDocPath(phone));
+    await client.batch([
+      {
+        type: "set",
+        path: injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
+        data: history as unknown as Record<string, unknown>,
+      },
+      {
+        type: "delete",
+        path: scheduledInjectionDocPath(phone),
+      },
+    ]);
   }
 
   // `scanned` now means "due docs the sweep considered" — what was
@@ -141,11 +152,19 @@ export async function fireSingle(
     ...(skipReason ? { skipReason } : {}),
   };
 
-  await client.set(
-    injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
-    history as unknown as Record<string, unknown>,
-  );
-  await client.delete(scheduledInjectionDocPath(phone));
+  // Atomic history-write + scheduledinjection-delete (see sweepScheduledInjections
+  // for the rationale — a delete failing after the set re-fires the injection).
+  await client.batch([
+    {
+      type: "set",
+      path: injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
+      data: history as unknown as Record<string, unknown>,
+    },
+    {
+      type: "delete",
+      path: scheduledInjectionDocPath(phone),
+    },
+  ]);
   return {
     fired: status === "success",
     ...(status === "skipped" ? { skipped: true } : {}),

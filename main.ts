@@ -8,6 +8,7 @@ import {
 } from "@shared/services/conversations/reseed.ts";
 import { runNightlyReport } from "@shared/services/report/nightly.ts";
 import {
+  claimReportDay,
   getCronConfig,
   setCronConfig,
 } from "@shared/services/config/cron-config.ts";
@@ -190,9 +191,26 @@ if (
           console.log(`⏭  nightly-report already sent for ${todayEt}`);
           return;
         }
+        // Atomically claim the day BEFORE sending. Two concurrent fires
+        // (Deno Deploy retry / clock skew) both passed the cheap read above,
+        // but only one wins this transactional compare-and-set — the loser
+        // bails here, so the email goes out exactly once.
+        const claimed = await claimReportDay(todayEt);
+        if (!claimed) {
+          console.log(
+            `⏭  nightly-report day ${todayEt} already claimed by a concurrent run`,
+          );
+          return;
+        }
         const r = await runNightlyReport(todayEt);
-        if (r.skipped) return;
-        await setCronConfig({ report: { lastSentEtDate: todayEt } });
+        if (r.skipped) {
+          // We claimed the day but didn't actually send — release the claim so
+          // a later (re)run for the same day can still send.
+          await setCronConfig({
+            report: { lastSentEtDate: cfg.report.lastSentEtDate ?? "" },
+          });
+          return;
+        }
         console.log(
           `⏰ daily report sent: date=${r.date} ` +
             `yesterday(${r.counts.yesterdayDate}) sms=${r.counts.ydSmsSent} ` +

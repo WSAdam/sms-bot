@@ -207,10 +207,17 @@ export async function importDailyDispositions(
       }
     }
     // Find the disposition that corresponds to the earliest answered call
-    // in this batch (for the lastDisposition snapshot).
-    const dispoForLog = unique.find((r) =>
+    // in this batch (for the lastDisposition snapshot). DECODE it so
+    // guestanswered stores the same HTML-decoded string calldisposition does
+    // (line ~123) — otherwise the same call carried two different disposition
+    // strings ("⇒ Agent" vs "&rArr; Agent") across the two docs, breaking
+    // audits/exports/comparisons.
+    const rawDispoForLog = unique.find((r) =>
       r.phone10 === phone10 && r.callTime === newAt
-    )?.disposition ?? "(unknown)";
+    )?.disposition;
+    const dispoForLog = rawDispoForLog != null
+      ? decodeHtmlEntities(rawDispoForLog)
+      : "(unknown)";
     ops.push({
       type: "set",
       path: guestAnsweredDocPath(phone10),
@@ -281,11 +288,38 @@ export async function importDailyDispositions(
             .join(",") || "(none)"
         }`,
       );
+      // Clear any stale per-day failure flag a PRIOR run stamped. nightly reads
+      // answeredCounterFailedAt and forces ydAnsweredReliable=false whenever it's
+      // a string, so without this the flag permanently demotes the answered stat
+      // to "unreliable" even after this run incremented the counter correctly.
+      // Setting it to null (non-string) clears the demotion without needing a
+      // FieldValue.delete sentinel in the business layer. Best-effort.
+      await Promise.all(
+        answeredDayEntries.map(([day]) =>
+          db.setMerge(metricsDailyDocPath(day), {
+            answeredCounterFailedAt: null,
+          }).catch(() => {})
+        ),
+      );
     } catch (e) {
       console.warn(
         `[rm-import] answered counter writes failed (non-fatal): ${
           (e as Error).message
         }`,
+      );
+      // Make the silent counter failure OBSERVABLE: stamp a per-day flag on
+      // each affected metrics/daily doc so the nightly report can demote
+      // ydAnsweredReliable instead of emailing an answered count that was
+      // never incremented. Best-effort — if this write also fails, we've at
+      // least logged above. Uses setMerge (independent of the increment that
+      // just failed) so it can land even when the increment couldn't.
+      const failNow = new Date().toISOString();
+      await Promise.all(
+        answeredDayEntries.map(([day]) =>
+          db.setMerge(metricsDailyDocPath(day), {
+            answeredCounterFailedAt: failNow,
+          }).catch(() => {})
+        ),
       );
     }
   }

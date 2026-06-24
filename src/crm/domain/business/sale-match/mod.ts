@@ -423,14 +423,47 @@ export async function processSaleMatches(
     await client.batch(writes);
   }
 
+  // Atomically claim the activation count for each phone before incrementing.
+  // `alreadyActivatedSet` was a stale pre-loaded snapshot (a non-transactional
+  // list() at the top of the run), so two overlapping runs (daily cron + a
+  // manual activate-from-report) could BOTH see a phone as not-yet-activated
+  // and BOTH increment the counters — double-counting the activation. Here we
+  // transactionally set `activationCounted:true` on the guestActivated doc
+  // (written just above in the batch) and only keep phones where THIS run won
+  // the claim. Idempotent across overlapping runs and re-runs.
+  const countedPhones: string[] = [];
+  for (const phone10 of newlyActivatedPhones) {
+    try {
+      let won = false;
+      await client.transactionalUpdate(
+        guestActivatedDocPath(phone10),
+        (existing) => {
+          if (existing?.activationCounted === true) {
+            won = false;
+            return existing;
+          }
+          won = true;
+          return { ...(existing ?? {}), activationCounted: true };
+        },
+      );
+      if (won) countedPhones.push(phone10);
+    } catch (e) {
+      console.warn(
+        `[sale-match] activation count-claim failed for ${phone10} (skipping count): ${
+          (e as Error).message
+        }`,
+      );
+    }
+  }
+
   // Activations counter increments (daily + lifetime). Fire-and-forget;
   // these power the nightly report and a failure here must not block
   // the rest of sale-match. Increments are atomic (FieldValue.increment)
   // and grouped per ET day, so a single cron run typically touches one
   // daily doc + the lifetime doc.
-  if (newlyActivatedPhones.length > 0) {
+  if (countedPhones.length > 0) {
     const byDay = new Map<string, number>();
-    for (const phone10 of newlyActivatedPhones) {
+    for (const phone10 of countedPhones) {
       // saleAt is what we used for activatedAt above; bucket activations
       // by the ET day of the sale, not the cron-run day.
       const match = summary.matches.find((m) => m.phone10 === phone10);
@@ -443,7 +476,7 @@ export async function processSaleMatches(
       byDay.set(day, (byDay.get(day) ?? 0) + 1);
     }
     const nowIso = new Date().toISOString();
-    const total = newlyActivatedPhones.length;
+    const total = countedPhones.length;
     try {
       await Promise.all([
         ...Array.from(byDay.entries()).flatMap(([day, n]) => [
@@ -463,11 +496,37 @@ export async function processSaleMatches(
           Array.from(byDay.entries()).map(([d, n]) => `${d}:+${n}`).join(",")
         }`,
       );
+      // Clear any stale per-day failure flag a PRIOR run stamped. nightly reads
+      // activationsCounterFailedAt and forces ydBookingsReliable=false whenever
+      // it's a string, so without this the flag permanently demotes the booking
+      // stat to "unreliable" even after this run incremented the counter
+      // correctly. Setting it to null (non-string) clears the demotion without
+      // needing a FieldValue.delete sentinel in the business layer. Best-effort.
+      await Promise.all(
+        Array.from(byDay.keys()).map((day) =>
+          client.setMerge(metricsDailyDocPath(day), {
+            activationsCounterFailedAt: null,
+          }).catch(() => {})
+        ),
+      );
     } catch (e) {
       console.warn(
         `[sale-match] activations counter writes failed (non-fatal): ${
           (e as Error).message
         }`,
+      );
+      // Make the silent counter failure OBSERVABLE: stamp a per-day flag on
+      // each affected metrics/daily doc so the nightly report can demote
+      // ydBookingsReliable instead of emailing an activations count that was
+      // never incremented. Best-effort; setMerge is independent of the
+      // increment that just failed.
+      const failNow = new Date().toISOString();
+      await Promise.all(
+        Array.from(byDay.keys()).map((day) =>
+          client.setMerge(metricsDailyDocPath(day), {
+            activationsCounterFailedAt: failNow,
+          }).catch(() => {})
+        ),
       );
     }
   }

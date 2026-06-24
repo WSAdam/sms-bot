@@ -81,6 +81,38 @@ export async function getCronConfig(
   };
 }
 
+// Atomically claim the nightly-report send for `todayEt`. Inside a single
+// Firestore transaction, set report.lastSentEtDate to todayEt ONLY if it isn't
+// already todayEt. Returns true when THIS caller won the claim (clear to send),
+// false when the day was already claimed.
+//
+// This closes the nightly-report TOCTOU: the previous flow read
+// lastSentEtDate, checked it, sent the email, THEN wrote the marker — so two
+// near-simultaneous cron fires (Deno Deploy retry / clock skew) both saw the
+// stale value, both passed, and both sent. Claiming the day atomically BEFORE
+// sending means only one invocation proceeds.
+export async function claimReportDay(
+  todayEt: string,
+  client: FirestoreClient = getFirestoreClient(),
+): Promise<boolean> {
+  let won = false;
+  await client.transactionalUpdate(cronConfigDocPath(), (existing) => {
+    const report = (existing?.report as Partial<ReportConfig> | undefined) ??
+      {};
+    if (report.lastSentEtDate === todayEt) {
+      won = false;
+      return existing ?? {};
+    }
+    won = true;
+    return {
+      ...(existing ?? {}),
+      report: { ...report, lastSentEtDate: todayEt },
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  return won;
+}
+
 export async function setCronConfig(
   partial: {
     report?: Partial<ReportConfig>;
@@ -88,15 +120,37 @@ export async function setCronConfig(
   },
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<CronConfig> {
-  const current = await getCronConfig(client);
-  const next: CronConfig = {
-    report: { ...current.report, ...(partial.report ?? {}) },
-    qbSaleMatch: { ...current.qbSaleMatch, ...(partial.qbSaleMatch ?? {}) },
-    updatedAt: new Date().toISOString(),
-  };
-  await client.set(
-    cronConfigDocPath(),
-    next as unknown as Record<string, unknown>,
-  );
+  // Read-merge-write INSIDE a Firestore transaction (mirrors setGatesConfig).
+  // The previous getCronConfig()+set() pair was non-atomic: two concurrent
+  // POST /api/config/cron requests editing DIFFERENT fields (e.g. report.enabled
+  // vs qbSaleMatch.reportId) both read the same state and the later set()
+  // clobbered the earlier change. The transaction re-reads the live doc and
+  // merges this partial on top, so concurrent writes to different fields no
+  // longer lose each other.
+  let next: CronConfig = CRON_CONFIG_DEFAULTS;
+  await client.transactionalUpdate(cronConfigDocPath(), (existing) => {
+    // Merge the live doc with defaults the same way getCronConfig does, so a
+    // partial doc (missing newly-added fields) doesn't drop them on write.
+    const current: CronConfig = {
+      report: {
+        ...CRON_CONFIG_DEFAULTS.report,
+        ...((existing?.report as Partial<ReportConfig> | undefined) ?? {}),
+      },
+      qbSaleMatch: {
+        ...CRON_CONFIG_DEFAULTS.qbSaleMatch,
+        ...((existing?.qbSaleMatch as Partial<QbSaleMatchConfig> | undefined) ??
+          {}),
+      },
+      updatedAt: typeof existing?.updatedAt === "string"
+        ? existing.updatedAt
+        : CRON_CONFIG_DEFAULTS.updatedAt,
+    };
+    next = {
+      report: { ...current.report, ...(partial.report ?? {}) },
+      qbSaleMatch: { ...current.qbSaleMatch, ...(partial.qbSaleMatch ?? {}) },
+      updatedAt: new Date().toISOString(),
+    };
+    return next as unknown as Record<string, unknown>;
+  });
   return next;
 }

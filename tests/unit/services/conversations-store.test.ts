@@ -190,6 +190,36 @@ Deno.test("getAllConversations does NOT do a full-collection scan", async () => 
   assertEquals(lastWhereField, "phoneNumber");
 });
 
+Deno.test("storeMessage: two DIFFERENT messages in the same millisecond both persist (no doc-ID overwrite)", async () => {
+  // No tick() between writes — both land in the same ISO-millisecond. Pre-fix
+  // the doc ID was phone__callId__timestamp with no per-message discriminator,
+  // so the second set() overwrote the first and a message was silently lost.
+  const mock = new FirestoreMock();
+  await Promise.all([
+    storeMessage(
+      "8432222986",
+      "call-1",
+      "Guest",
+      "first",
+      undefined,
+      undefined,
+      mock,
+    ),
+    storeMessage(
+      "8432222986",
+      "call-1",
+      "AI Bot",
+      "second",
+      undefined,
+      undefined,
+      mock,
+    ),
+  ]);
+  assertEquals(countMessages(mock), 2);
+  const got = await getAllConversations("8432222986", mock);
+  assertEquals(got.map((m) => m.message).sort(), ["first", "second"]);
+});
+
 Deno.test("storeMessage dedupe returns the original message (with original nodeTag)", async () => {
   const mock = new FirestoreMock();
 

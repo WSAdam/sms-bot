@@ -129,7 +129,14 @@ export function normalizeAppointmentTime(
   if (hasTzMarker) {
     // Already unambiguous — just canonicalize to UTC ISO.
     const ms = new Date(trimmed).getTime();
-    if (!Number.isFinite(ms)) return trimmed;
+    if (!Number.isFinite(ms)) {
+      // A TZ-marked but syntactically-invalid string (e.g.
+      // "2026-99-99T12:00:00Z") must NOT be passed through unchanged:
+      // scheduleInjection's regex guard would accept it, the sweep's
+      // "eventTime <= now()" string comparison would never match, and the
+      // injection would silently never fire — losing the lead. Reject loudly.
+      throw new Error(`Invalid appointment time: ${raw}`);
+    }
     return new Date(ms).toISOString();
   }
   // TZ-naive — interpret as the customer's local wall-clock in `tz`

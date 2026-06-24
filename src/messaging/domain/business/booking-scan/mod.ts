@@ -71,6 +71,7 @@ interface BlandMsg {
   sender?: string;
   message?: string;
   created_at?: string;
+  nodeTag?: string;
 }
 
 export interface BookingProposal {
@@ -205,6 +206,12 @@ function detectSignal(
   const text = m.message ?? "";
   const ts = m.created_at ?? new Date().toISOString();
   if (/locked\s+in/i.test(text)) return { signal: "locked_in", signalAt: ts };
+  // Signal #2: the legacy nodeTag "appointment scheduled" set on the bot
+  // message. Documented as one of the three booking signals but previously
+  // unreachable because the tag was dropped in the message mapping.
+  if ((m.nodeTag ?? "").trim().toLowerCase() === "appointment scheduled") {
+    return { signal: "tag_appointment_scheduled", signalAt: ts };
+  }
   if (/^appointment\s+scheduled/i.test(text)) {
     return { signal: "text_appointment_scheduled", signalAt: ts };
   }
@@ -383,6 +390,10 @@ export async function scanConversationsForBookings(
         sender: m.sender,
         message: m.message,
         created_at: m.timestamp,
+        // Carry the nodeTag through — it's one of the three documented
+        // booking signals ("appointment scheduled"). Dropping it here made
+        // the tag_appointment_scheduled signal unreachable.
+        nodeTag: m.nodeTag,
       }))
       .filter((m) => m.message && m.message !== "<Call Connected>");
     msgs.sort((a, b) => (a.created_at ?? "") < (b.created_at ?? "") ? -1 : 1);

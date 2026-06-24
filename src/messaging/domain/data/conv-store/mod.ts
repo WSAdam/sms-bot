@@ -20,7 +20,10 @@ import type {
   CallIdLookup,
   ConversationMessage,
 } from "@shared/types/conversation.ts";
-import { conversationDocId } from "@shared/util/id.ts";
+import {
+  conversationDiscriminator,
+  conversationDocId,
+} from "@shared/util/id.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 import { lookupDocPath } from "@messaging/domain/data/conv-lookup/mod.ts";
 
@@ -98,8 +101,21 @@ export async function storeMessage(
     ...(doNotText ? { doNotText: true } : {}),
   };
 
+  // Include a per-message content discriminator in the doc id. Without it,
+  // two DIFFERENT messages (different sender or text) for one callId landing
+  // in the same ISO-millisecond collapsed to one id and the second set()
+  // silently overwrote the first — data loss. The exact-dup case is already
+  // handled by the dedupe guard above; the discriminator only separates
+  // distinct same-timestamp messages.
   await client.set(
-    conversationDocPath(conversationDocId(phone, callId, timestamp)),
+    conversationDocPath(
+      conversationDocId(
+        phone,
+        callId,
+        timestamp,
+        conversationDiscriminator(sender, message),
+      ),
+    ),
     msg as unknown as Record<string, unknown>,
   );
 
