@@ -37,7 +37,11 @@ import {
 import { getRmCreds } from "@dialer/domain/data/rm-auth/mod.ts";
 import { DOMAIN_CONFIG } from "@dialer/domain/business/domain-config/mod.ts";
 import { fetchAttemptsFromTpi } from "@dialer/domain/data/tpi-client/mod.ts";
-import { denormalize, normalize } from "@dialer/domain/business/mapping/mod.ts";
+import {
+  denormalize,
+  leadFieldFor,
+  normalize,
+} from "@dialer/domain/business/mapping/mod.ts";
 import {
   DialerDomain,
   type ReadymodeLeadDto,
@@ -428,6 +432,7 @@ async function storeInitialBlandMessage(
 function buildLeadUrl(
   baseUrl: string,
   lead: Record<string, unknown>,
+  domain: DialerDomain,
 ): string {
   const params = new URLSearchParams();
   const append = (field: string, value: unknown) => {
@@ -437,14 +442,22 @@ function buildLeadUrl(
 
   append("phone", (lead.phone as string) || (lead.primaryPhone as string));
 
+  // RM's lead-api REJECTS the entire lead if it sees a field name it doesn't
+  // recognize (HTTP 200 + {"Accepted":false,"Error":"Field not recognized"}).
+  // "notes" is a normalized name — RM wants the domain's custom field
+  // (Custom_52 on ODR/ACT, Custom_21 on Monster). Translate it; everything else
+  // is passed through (callers already use RM field names for those).
+  const notesField = leadFieldFor(domain, "notes") ?? "Custom_21";
   for (const [k, v] of Object.entries(lead)) {
     if (k === "phone" || k === "primaryPhone") continue;
-    append(k, v);
+    append(k === "notes" ? notesField : k, v);
   }
 
-  if (!lead.Custom_21 && !lead.notes) {
+  // Default note when the caller supplied none — under the domain's field, not
+  // a hardcoded Custom_21 (which RM rejects on ODR/ACT).
+  if (!lead.notes && !lead[notesField]) {
     append(
-      "Custom_21",
+      notesField,
       `Scheduled Call Added at: ${
         new Date().toLocaleString("en-US", {
           timeZone: "America/New_York",
@@ -459,6 +472,22 @@ function buildLeadUrl(
   }
 
   return `${baseUrl}/?${params.toString()}`;
+}
+
+// RM's lead-api returns HTTP 200 even when it REJECTS the lead — an unrecognized
+// field name comes back as
+// {"0":{"Success":false,"Accepted":false,"Error":"Field not recognized"}}.
+// Trusting res.ok alone recorded these never-created leads as "injected" (the
+// scheduled-appointment sweep then logged "✅ fired"). Detect the explicit
+// rejection so a 200 is never mistaken for a created lead.
+export function injectBodyExplicitlyRejected(
+  text: string,
+  json: unknown,
+): boolean {
+  const row = (json as Record<string, Record<string, unknown>> | null)?.["0"];
+  if (row?.Accepted === false || row?.Success === false) return true;
+  return text.includes('"Accepted":false') ||
+    text.includes('"Accepted": false');
 }
 
 export async function injectLead(
@@ -504,7 +533,11 @@ export async function injectLead(
     );
   }
 
-  const url = buildLeadUrl(baseUrl, lead as unknown as Record<string, unknown>);
+  const url = buildLeadUrl(
+    baseUrl,
+    lead as unknown as Record<string, unknown>,
+    domain,
+  );
   console.log(
     `[inject] 🚀 ${domain} phone=${lead.phone} target=${targetId} → ${
       url.slice(0, 200)
@@ -535,7 +568,7 @@ export async function injectLead(
     let outcome = "";
     if (isSuccess) {
       success = true;
-      outcome = `ok http=${res.status}`;
+      outcome = `ok http=${res.status} body="${bodySlice}"`;
       console.log(
         `[inject] ✅ ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
       );
@@ -554,9 +587,14 @@ export async function injectLead(
         } ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
       );
     } else {
-      success = res.ok;
+      // RM returns HTTP 200 even when it rejects the lead — honor the body's
+      // explicit verdict over res.ok (see injectBodyExplicitlyRejected). This
+      // is the safety net: even if some other field name breaks later, the
+      // failure surfaces loudly instead of being recorded as a phantom inject.
+      const rejected = injectBodyExplicitlyRejected(text, json);
+      success = res.ok && !rejected;
       outcome = `${
-        success ? "ok" : "failed"
+        rejected ? "rejected" : success ? "ok" : "failed"
       } http=${res.status} body="${bodySlice}"`;
       console.log(
         `[inject] ${

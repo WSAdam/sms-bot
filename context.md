@@ -331,6 +331,21 @@ surfaces stale crons within hours rather than days.
   `scheduled-injection-sweep` on 2026-05-25 because Deno Deploy's runtime had
   gotten stuck on the original name (28k errors over 30 days, handler body never
   invoked); the old registration is orphaned and decays naturally.
+  - ⚠️ **Phantom-injection bug (fixed 2026-06-24).** RM's lead-api rejects the
+    ENTIRE lead if it sees an unrecognized field name, returning **HTTP 200**
+    with `{"0":{"Accepted":false,"Error":"Field not recognized"}}`. Two stacked
+    bugs in `injectLead`
+    ([lead-service/mod.ts](src/dialer/domain/business/lead-service/mod.ts)) made
+    every scheduled-appointment auto-injection silently fail: (1) the normalized
+    `notes` field was sent **raw** instead of the domain's RM field (ODR/ACT
+    want `Custom_52`), so RM rejected the lead; (2) the success check fell back
+    to `res.ok`, so an `Accepted:false`+HTTP-200 was recorded as
+    `status:success` and the sweep logged `✅ fired` — a lead that never entered
+    RM and was never dialed. Fix: `buildLeadUrl` now maps `notes` via
+    `leadFieldFor(domain, "notes")`, and `injectBodyExplicitlyRejected` makes
+    the success verdict honor the body over the HTTP code (so any future
+    unrecognized field surfaces loudly instead of phantom-succeeding). The
+    inject log now includes the response body on both ✅ and ❌.
 - **`metrics-kvbreakdown-refresh`** — `0 6 * * *` UTC = 2 AM EDT. Re-counts
   every Firestore collection and overwrites `metrics/kvBreakdown/totals`.
   Self-healing floor for the dashboard sidebar.

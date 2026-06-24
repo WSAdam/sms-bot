@@ -201,3 +201,15 @@ export function denormalize(
   }
   return output;
 }
+
+// The RM custom-field name a normalized StandardLead field maps to for a given
+// domain — e.g. notes → "Custom_52" on ODR/ACT, "Custom_21" on Monster. The
+// inject path uses this to translate normalized field names before hitting RM's
+// lead-api, which REJECTS THE ENTIRE LEAD if it sees a field name it doesn't
+// recognize (HTTP 200 + {"Accepted":false,"Error":"Field not recognized"}).
+export function leadFieldFor(
+  domain: DialerDomain,
+  standardField: keyof StandardLead,
+): string | undefined {
+  return MAPS[domain]?.[standardField];
+}
