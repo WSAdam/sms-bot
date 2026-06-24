@@ -447,15 +447,30 @@ function buildLeadUrl(
   // "notes" is a normalized name — RM wants the domain's custom field
   // (Custom_52 on ODR/ACT, Custom_21 on Monster). Translate it; everything else
   // is passed through (callers already use RM field names for those).
-  const notesField = leadFieldFor(domain, "notes") ?? "Custom_21";
+  // NO fallback to a hardcoded field: an unmapped domain that defaulted to a
+  // guessed field (e.g. Custom_21) would get the whole lead rejected — the very
+  // bug this exists to kill — so a missing mapping drops the note instead.
+  const notesField = leadFieldFor(domain, "notes");
   for (const [k, v] of Object.entries(lead)) {
     if (k === "phone" || k === "primaryPhone") continue;
-    append(k === "notes" ? notesField : k, v);
+    if (k === "notes") {
+      if (!notesField) {
+        console.warn(
+          `[inject] no notes-field mapping for ${domain} — dropping notes`,
+        );
+        continue;
+      }
+      // Explicit domain field (e.g. Custom_52) already present → it wins; don't
+      // also emit the translated `notes` and double-send the field.
+      if (notesField in lead) continue;
+      append(notesField, v);
+      continue;
+    }
+    append(k, v);
   }
 
-  // Default note when the caller supplied none — under the domain's field, not
-  // a hardcoded Custom_21 (which RM rejects on ODR/ACT).
-  if (!lead.notes && !lead[notesField]) {
+  // Default note when the caller supplied none — under the domain's field.
+  if (notesField && !lead.notes && !lead[notesField]) {
     append(
       notesField,
       `Scheduled Call Added at: ${
@@ -474,6 +489,10 @@ function buildLeadUrl(
   return `${baseUrl}/?${params.toString()}`;
 }
 
+// Exported for tests — the URL wiring is the actual fix site (notes → the
+// domain's RM field), so it's covered directly rather than only via leadFieldFor.
+export const _buildLeadUrlForTest = buildLeadUrl;
+
 // RM's lead-api returns HTTP 200 even when it REJECTS the lead — an unrecognized
 // field name comes back as
 // {"0":{"Success":false,"Accepted":false,"Error":"Field not recognized"}}.
@@ -486,8 +505,9 @@ export function injectBodyExplicitlyRejected(
 ): boolean {
   const row = (json as Record<string, Record<string, unknown>> | null)?.["0"];
   if (row?.Accepted === false || row?.Success === false) return true;
-  return text.includes('"Accepted":false') ||
-    text.includes('"Accepted": false');
+  // Text fallback for when JSON.parse failed or the shape differs. Whitespace-
+  // tolerant so "Accepted":false / "Accepted" : false / newlines all match.
+  return /"Accepted"\s*:\s*false/.test(text);
 }
 
 export async function injectLead(
@@ -553,6 +573,11 @@ export async function injectLead(
       json = JSON.parse(text);
     } catch { /* ignore */ }
 
+    // The authoritative "was the lead actually created" verdict. RM returns
+    // HTTP 200 even on rejection, so every branch below consults this — a
+    // 200-but-Accepted:false is never recorded as a phantom inject.
+    const explicitlyRejected = injectBodyExplicitlyRejected(text, json);
+
     const isSuccess =
       ((json as Record<string, unknown> | null)?.Success === true) ||
       ((json as Record<string, Record<string, unknown>> | null)?.["0"]
@@ -567,10 +592,17 @@ export async function injectLead(
     let success = false;
     let outcome = "";
     if (isSuccess) {
-      success = true;
-      outcome = `ok http=${res.status} body="${bodySlice}"`;
+      // isSuccess already requires Success:true (mutually exclusive with a
+      // rejection), but gate on the verdict too so a contradictory body can
+      // never slip through as a phantom success.
+      success = !explicitlyRejected;
+      outcome = `${
+        success ? "ok" : "rejected"
+      } http=${res.status} body="${bodySlice}"`;
       console.log(
-        `[inject] ✅ ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
+        `[inject] ${
+          success ? "✅" : "❌"
+        } ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
       );
     } else if (isDuplicate) {
       console.log(
@@ -587,14 +619,11 @@ export async function injectLead(
         } ${domain} phone=${lead.phone} target=${targetId} → ${outcome}`,
       );
     } else {
-      // RM returns HTTP 200 even when it rejects the lead — honor the body's
-      // explicit verdict over res.ok (see injectBodyExplicitlyRejected). This
-      // is the safety net: even if some other field name breaks later, the
-      // failure surfaces loudly instead of being recorded as a phantom inject.
-      const rejected = injectBodyExplicitlyRejected(text, json);
-      success = res.ok && !rejected;
+      // Honor the body's explicit verdict over res.ok — the safety net that
+      // surfaces a rejected lead instead of recording a phantom inject.
+      success = res.ok && !explicitlyRejected;
       outcome = `${
-        rejected ? "rejected" : success ? "ok" : "failed"
+        explicitlyRejected ? "rejected" : success ? "ok" : "failed"
       } http=${res.status} body="${bodySlice}"`;
       console.log(
         `[inject] ${
