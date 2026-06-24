@@ -4,7 +4,7 @@
 
 import { define } from "@/utils.ts";
 import { storeMessage } from "@shared/services/conversations/store.ts";
-import { markDnc } from "@shared/services/dnc/service.ts";
+import { allDncFailed, markDnc } from "@shared/services/dnc/service.ts";
 import { dncGlobal } from "@shared/services/readymode/service.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
@@ -46,10 +46,7 @@ export const handler = define.handlers({
     // believe the lead was DNC'd in RM when it wasn't. Surface a 502 in that
     // case (consistent with disposition.ts / return-to-source.ts), while a
     // partial success still returns 200.
-    const dncValues = Object.values(dncResults);
-    const allFailed = dncValues.length > 0 &&
-      dncValues.every((v) => v === "Failed" || v === "Error");
-    if (allFailed) {
+    if (allDncFailed(dncResults)) {
       return Response.json(
         { status: "error", phone, dnc: dncResults },
         { status: 502 },

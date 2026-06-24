@@ -72,12 +72,13 @@ async function handle(ctx: { req: Request }) {
   // pointer to RETURNED_TO_SOURCE and report success while the lead was
   // actually lost. Only update the pointer on a confirmed inject.
   if (injectResult.status !== "success") {
+    // Coarse status only — don't echo the raw RM inject payload (lead/phone
+    // identifiers) back in the response body. Full detail is in the server logs.
     return Response.json(
       {
         status: "error",
         message: "Return to source failed — lead not injected",
-        source,
-        injectResult,
+        resultStatus: injectResult.status,
       },
       { status: 502 },
     );

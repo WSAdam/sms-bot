@@ -42,10 +42,20 @@ export const handler = define.handlers({
     // Same TZ-stamp fix as /cal/schedule — Bland's pathway can send a
     // TZ-naive event_time which JS reads as UTC. Stamp ET by default so
     // the sweep dials at the customer's actual local hour, not 4h early.
-    const normalizedEventTime = normalizeAppointmentTime(
-      body.event_time,
-      undefined,
-    );
+    let normalizedEventTime: string;
+    try {
+      normalizedEventTime = normalizeAppointmentTime(
+        body.event_time,
+        undefined,
+      );
+    } catch (e) {
+      // normalizeAppointmentTime throws on a syntactically-invalid time; map it
+      // to a clean 400 so a malformed webhook payload can't surface as a 500.
+      return Response.json(
+        { error: `Invalid event_time: ${(e as Error).message}` },
+        { status: 400 },
+      );
+    }
 
     const dateStr = new Date(normalizedEventTime).toLocaleString("en-US", {
       month: "short",

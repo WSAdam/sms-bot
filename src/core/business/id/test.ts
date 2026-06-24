@@ -33,13 +33,18 @@ Deno.test("injectionHistoryDocId: optional discriminator appends a 3rd segment",
   assertEquals(injectionHistoryDocId("5551230001", "t1"), "5551230001__t1");
 });
 
-Deno.test("injectionDiscriminator: short, Firestore-safe, and distinct across calls", () => {
-  const a = injectionDiscriminator();
-  const b = injectionDiscriminator();
-  assertNotEquals(a, b, "two consecutive nonces must differ");
+Deno.test("injectionDiscriminator: short, Firestore-safe, and distinct across many calls", () => {
+  // Volume check — two non-colliding samples prove nothing about collision rate.
+  // 1000 nonces in a tight loop guards the property the discriminator exists for:
+  // same-millisecond talk-now injects for one phone must get distinct doc-id
+  // segments (also stresses any same-tick path if it's time/counter-seeded).
+  const seen = new Set<string>();
+  for (let i = 0; i < 1000; i++) seen.add(injectionDiscriminator());
+  assertEquals(seen.size, 1000, "1000 nonces must all be distinct");
   // Short + no "/" so it's a safe Firestore doc-id segment.
-  assert(a.length > 0 && a.length <= 12);
-  assert(!a.includes("/"));
+  const sample = injectionDiscriminator();
+  assert(sample.length > 0 && sample.length <= 12);
+  assert(!sample.includes("/"));
 });
 
 Deno.test("sha256Hex is deterministic and hex", async () => {

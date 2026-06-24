@@ -38,6 +38,20 @@ Deno.test("reserveGlobalDailySlot: concurrent requests cannot overshoot the cap"
   assertEquals(doc?.count, 10);
 });
 
+Deno.test("reserveGlobalDailySlot: fails OPEN (returns true) on a Firestore transaction error", async () => {
+  // Intentional trade-off, documented here so it can't be "fixed" into
+  // fail-closed by accident: if the transaction throws (Firestore unreachable)
+  // the send is allowed to proceed rather than hard-blocking the whole funnel.
+  // The cost is that under sustained Firestore failure the daily cap CAN
+  // overshoot — availability is chosen over a strict cap, matching the
+  // read-only gate's fail-open behavior. The per-phone reservation that
+  // rateLimitCheckAndReserve already took is deliberately NOT released here.
+  const throwing = {
+    transactionalUpdate: () => Promise.reject(new Error("firestore down")),
+  } as unknown as FirestoreMock;
+  assertEquals(await reserveGlobalDailySlot(throwing, 10), true);
+});
+
 Deno.test("releaseGlobalDailySlot: rolls back a reserved slot, never below 0", async () => {
   const db = new FirestoreMock();
   await reserveGlobalDailySlot(db, 5); // count=1

@@ -8,6 +8,7 @@ import { assertEquals } from "@std/assert";
 import {
   claimReportDay,
   getCronConfig,
+  setCronConfig,
 } from "@core/business/cron-config/mod.ts";
 import { FirestoreMock } from "@tests/mocks/firestore-mock.ts";
 
@@ -36,4 +37,19 @@ Deno.test("claimReportDay: persists lastSentEtDate so getCronConfig reflects the
   await claimReportDay("2026-06-28", db);
   const cfg = await getCronConfig(db);
   assertEquals(cfg.report.lastSentEtDate, "2026-06-28");
+});
+
+Deno.test("claimReportDay: a skipped report releases the day so a same-day re-run can still send", async () => {
+  // main.ts claims the day BEFORE running the report; if runNightlyReport comes
+  // back {skipped:true} it releases by writing the PRE-CLAIM snapshot back. This
+  // proves the round-trip: claim today → same-day re-claim is blocked → after
+  // the snapshot-restore release, today is claimable again (so the report isn't
+  // permanently suppressed by a single skipped run).
+  const db = new FirestoreMock();
+  await setCronConfig({ report: { lastSentEtDate: "2026-06-29" } }, db); // yesterday sent
+  assertEquals(await claimReportDay("2026-06-30", db), true); // cron claims today
+  assertEquals(await claimReportDay("2026-06-30", db), false); // can't double-claim
+  // Skip path: restore the pre-claim snapshot (NOT leaving today stamped).
+  await setCronConfig({ report: { lastSentEtDate: "2026-06-29" } }, db);
+  assertEquals(await claimReportDay("2026-06-30", db), true); // re-claimable after release
 });

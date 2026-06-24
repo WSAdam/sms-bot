@@ -64,10 +64,20 @@ export const handler = define.handlers({
     // that as UTC, so "12 pm" became 12 pm UTC = 8 am EDT in storage and
     // the sweep would dial 4 hours early. Confirmed root cause for
     // 7164674843 + several other stuck pendings as of 2026-05-22.
-    const normalizedStartTime = normalizeAppointmentTime(
-      body.startTime,
-      body.timeZone,
-    );
+    let normalizedStartTime: string;
+    try {
+      normalizedStartTime = normalizeAppointmentTime(
+        body.startTime,
+        body.timeZone,
+      );
+    } catch (e) {
+      // normalizeAppointmentTime throws on a syntactically-invalid time; map it
+      // to a clean 400 so a malformed webhook payload can't surface as a 500.
+      return Response.json(
+        { error: `Invalid startTime: ${(e as Error).message}` },
+        { status: 400 },
+      );
+    }
 
     let bookingUid = "CAL_FAILED_BUT_INJECTION_SCHEDULED";
     let bookingSuccess = false;

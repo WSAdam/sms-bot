@@ -22,7 +22,7 @@
 
 import { define } from "@/utils.ts";
 import { storeMessage } from "@shared/services/conversations/store.ts";
-import { markDnc } from "@shared/services/dnc/service.ts";
+import { allDncFailed, markDnc } from "@shared/services/dnc/service.ts";
 import { dncGlobal } from "@shared/services/readymode/service.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
 
@@ -135,22 +135,17 @@ export const handler = define.handlers({
     // believe the lead was removed from active RM campaigns when it wasn't.
     // Surface a 502 in that case (the unfixed twin of /stop's all-failed check),
     // while a partial success still returns 200.
-    if (dncResults) {
-      const dncValues = Object.values(dncResults);
-      const allFailed = dncValues.length > 0 &&
-        dncValues.every((v) => v === "Failed" || v === "Error");
-      if (allFailed) {
-        return Response.json(
-          {
-            status: "error",
-            phoneNumber: phone10,
-            callId,
-            timestamp: stored.timestamp,
-            dnc: dncResults,
-          },
-          { status: 502 },
-        );
-      }
+    if (allDncFailed(dncResults)) {
+      return Response.json(
+        {
+          status: "error",
+          phoneNumber: phone10,
+          callId,
+          timestamp: stored.timestamp,
+          dnc: dncResults,
+        },
+        { status: 502 },
+      );
     }
 
     return Response.json({

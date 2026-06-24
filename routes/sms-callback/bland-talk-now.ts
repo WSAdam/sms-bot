@@ -88,11 +88,9 @@ export const handler = define.handlers({
     // placeholder). Best-effort: failures here don't block the call,
     // they just mean we fall back to the answered-backfill path later.
     const firedAt = new Date().toISOString();
-    // Discriminate the doc id with a per-request nonce. Two concurrent talk-now
-    // injections for the SAME phone can produce the SAME firedAt ISO millisecond;
-    // without a discriminator their doc ids collide and set(merge:false) silently
-    // overwrites the first, losing one injection's audit trail. (conversationDocId
-    // got the same treatment — this is the injectionhistory twin.)
+    // Per-request nonce so two same-millisecond talk-now injects for one phone
+    // get distinct doc ids instead of set(merge:false) overwriting one's audit
+    // trail (the injectionhistory twin of conversationDocId's discriminator).
     const firedDiscriminator = injectionDiscriminator();
     try {
       await getFirestoreClient().set(
@@ -162,11 +160,12 @@ export const handler = define.handlers({
     // Reflect the real inject verdict in the response too — a failed inject
     // must not report 200/"success".
     if (result.status !== "success") {
+      // Coarse status only — don't echo the raw inject payload in the body.
       return Response.json(
         {
           status: "error",
           message: `Inject to ${target.name} failed`,
-          result,
+          resultStatus: result.status,
         },
         { status: 502 },
       );
