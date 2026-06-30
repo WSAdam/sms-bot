@@ -154,7 +154,10 @@ export async function sweepScheduledInjections(
         // Terminal write landed → text Adam now. Push ONLY after the batch
         // succeeds: on a failed terminal write the doc survives and re-terminals
         // next sweep, so paging here (not in the catch) avoids re-texting every
-        // minute while a write is stuck. Fail-safe: never throws, never blocks.
+        // minute while a write is stuck. The push never THROWS, but it is awaited
+        // (blocks ≤5s on a hung receiver, serialized across terminals in a sweep)
+        // so the alert delivers before the cron tears down — fine, terminals are
+        // rare.
         await pushInjectionFailure({
           phone,
           error: errorMsg ?? "unknown",

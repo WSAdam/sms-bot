@@ -7,6 +7,7 @@ import { pushInjectionFailure } from "@scheduling/domain/data/canary-alert/mod.t
 
 const URL_KEY = "CANARY_INGEST_URL";
 const TOK_KEY = "CANARY_INGEST_TOKEN";
+const SECRET_KEY = "CANARY_SECRET";
 
 function restore(key: string, prev: string | undefined) {
   if (prev === undefined) Deno.env.delete(key);
@@ -90,6 +91,92 @@ Deno.test("pushInjectionFailure: FAIL-SAFE — never throws if the POST fails", 
       error: "x",
       attempts: 5,
     });
+  } finally {
+    globalThis.fetch = origFetch;
+    restore(URL_KEY, prevUrl);
+  }
+});
+
+Deno.test("pushInjectionFailure: token falls back to CANARY_SECRET when CANARY_INGEST_TOKEN is unset", async () => {
+  const prevUrl = Deno.env.get(URL_KEY);
+  const prevTok = Deno.env.get(TOK_KEY);
+  const prevSec = Deno.env.get(SECRET_KEY);
+  const origFetch = globalThis.fetch;
+  const cap: { auth?: string } = {};
+  Deno.env.set(URL_KEY, "https://canary.example/ingest");
+  Deno.env.delete(TOK_KEY);
+  Deno.env.set(SECRET_KEY, "sec-456");
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    cap.auth = (init?.headers as Record<string, string> | undefined)
+      ?.authorization;
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  }) as typeof fetch;
+  try {
+    await pushInjectionFailure({
+      phone: "5550000000",
+      error: "x",
+      attempts: 5,
+    });
+    assertEquals(cap.auth, "Bearer sec-456", "falls back to CANARY_SECRET");
+  } finally {
+    globalThis.fetch = origFetch;
+    restore(URL_KEY, prevUrl);
+    restore(TOK_KEY, prevTok);
+    restore(SECRET_KEY, prevSec);
+  }
+});
+
+Deno.test("pushInjectionFailure: omits the auth header when neither token nor CANARY_SECRET is set", async () => {
+  const prevUrl = Deno.env.get(URL_KEY);
+  const prevTok = Deno.env.get(TOK_KEY);
+  const prevSec = Deno.env.get(SECRET_KEY);
+  const origFetch = globalThis.fetch;
+  const cap: { hasAuth?: boolean } = {};
+  Deno.env.set(URL_KEY, "https://canary.example/ingest");
+  Deno.env.delete(TOK_KEY);
+  Deno.env.delete(SECRET_KEY);
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    const h = (init?.headers ?? {}) as Record<string, string>;
+    cap.hasAuth = "authorization" in h;
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  }) as typeof fetch;
+  try {
+    await pushInjectionFailure({
+      phone: "5550000000",
+      error: "x",
+      attempts: 5,
+    });
+    assertEquals(
+      cap.hasAuth,
+      false,
+      "no token → the authorization key is omitted entirely (not 'Bearer ')",
+    );
+  } finally {
+    globalThis.fetch = origFetch;
+    restore(URL_KEY, prevUrl);
+    restore(TOK_KEY, prevTok);
+    restore(SECRET_KEY, prevSec);
+  }
+});
+
+Deno.test("pushInjectionFailure: a non-ok HTTP response logs but does NOT throw", async () => {
+  const prevUrl = Deno.env.get(URL_KEY);
+  const origFetch = globalThis.fetch;
+  let called = false;
+  Deno.env.set(URL_KEY, "https://canary.example/ingest");
+  globalThis.fetch = (() => {
+    called = true;
+    return Promise.resolve(new Response("nope", { status: 500 }));
+  }) as typeof fetch;
+  try {
+    // Reaching the assert without throwing IS the guarantee: a live-but-erroring
+    // Canary receiver degrades gracefully (logged) instead of breaking the sweep.
+    await pushInjectionFailure({
+      phone: "5550000000",
+      error: "x",
+      attempts: 5,
+    });
+    assertEquals(called, true, "the POST was attempted");
   } finally {
     globalThis.fetch = origFetch;
     restore(URL_KEY, prevUrl);

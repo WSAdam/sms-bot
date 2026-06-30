@@ -1,25 +1,23 @@
 // Immediate push alert to Canary on a TERMINAL injection failure — Canary texts
-// Adam the moment an injection fails for good (after the sweep has exhausted its
+// Adam the moment an injection fails for good (after the sweep exhausts its
 // retries; transient blips that self-heal never reach here, so this is signal,
-// not noise). Nightly "all failures" go the other way: Canary POSTs to
-// /canary/errors for the previous day. This is the immediate, injection-only leg.
+// not noise).
 //
-// Fail-safe: NEVER throws, NEVER blocks the sweep. No-ops (with a warning) if
-// CANARY_INGEST_URL is unset, so it's safe to ship before Canary's receiver is
-// live.
+// NEVER throws — a failed alert must not break the sweep. It DOES block the
+// caller up to INGEST_TIMEOUT_MS (5s) on the POST: the sweep awaits each push so
+// the page actually delivers before the cron tears down, and terminal failures
+// are rare enough that the per-terminal serialization is fine. No-ops (warns) if
+// CANARY_INGEST_URL is unset.
 //
-// Contract (bot → Canary), so the Canary side can be built to match:
+// Contract (bot → Canary):
 //   POST {CANARY_INGEST_URL}
 //   Authorization: Bearer {CANARY_INGEST_TOKEN || CANARY_SECRET}
-//   Content-Type: application/json
-//   {
-//     "source": "sms-bot",
-//     "kind":   "injection-failure",
-//     "phone":  "6142967343",
-//     "error":  "ODR injection failed: ...",
-//     "attempts": 5,
-//     "ts":     "2026-06-30T13:46:24.681Z"
-//   }
+//   { "source":"sms-bot", "kind":"injection-failure",
+//     "phone":"6142967343", "attempts":5, "ts":"<ISO>",
+//     "error":"6142967343 — ODR injection failed: ... (gave up after 5 attempts)" }
+//   Canary renders the `error` field as the SMS body, so it carries a composed
+//   summary (phone + reason + attempt count) — which is why phone/attempts also
+//   appear as structured fields.
 
 const INGEST_TIMEOUT_MS = 5_000;
 
@@ -43,9 +41,7 @@ export async function pushInjectionFailure(
   const token = Deno.env.get("CANARY_INGEST_TOKEN") ??
     Deno.env.get("CANARY_SECRET") ?? "";
 
-  // Canary renders the `error` field as the SMS body, so the phone + attempt
-  // count must live INSIDE it to be actionable ("which lead failed?"). phone and
-  // attempts are also kept as structured fields for any future Canary use.
+  // The composed `error` is the SMS body Canary renders (see the contract above).
   const summary =
     `${alert.phone} — ${alert.error} (gave up after ${alert.attempts} attempts)`;
   const body = JSON.stringify({

@@ -162,3 +162,52 @@ Deno.test("sweep: a TERMINAL failure pushes a Canary injection-failure alert (wi
     _clearGatesConfigCache();
   }
 });
+
+Deno.test("sweep: a TERMINAL failure whose batch write ALSO fails does NOT push (no re-page) and keeps the doc", async () => {
+  _clearGatesConfigCache();
+  const URL_KEY = "CANARY_INGEST_URL";
+  const prevUrl = Deno.env.get(URL_KEY);
+  const origFetch = globalThis.fetch;
+  const cap: { url?: string } = {};
+  Deno.env.set(URL_KEY, "https://canary.example/relay/fire");
+  globalThis.fetch = ((url: string | URL | Request) => {
+    cap.url = String(url);
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  }) as typeof fetch;
+
+  const mock = new FirestoreMock();
+  const phone = "5551239004";
+  // Terminal attempt, but make the terminal batch write fail.
+  mock.docs.set(scheduledInjectionDocPath(phone), {
+    phone,
+    eventTime: "2020-01-01T00:00:00.000Z",
+    scheduledAt: Date.now(),
+    attempts: MAX_INJECTION_ATTEMPTS - 1,
+  });
+  failPointerRead(mock, phone);
+  mock.batch = () => Promise.reject(new Error("batch failed (transient)"));
+  setFirestoreClientForTests(mock);
+
+  try {
+    const r = await sweepScheduledInjections("cron", mock);
+    assertEquals(r.errors.length, 1, "still counted as one terminal error");
+    // The whole point of the follow-up fix: a stuck terminal write must NOT page
+    // (otherwise it re-terminals and re-texts every minute until the write lands).
+    assertEquals(
+      cap.url,
+      undefined,
+      "no Canary push when the terminal write failed",
+    );
+    // And the doc survives → it re-terminals on the next sweep (delay-not-loss).
+    assert(
+      await mock.get(scheduledInjectionDocPath(phone)),
+      "the scheduledinjection survives a failed terminal batch",
+    );
+  } finally {
+    globalThis.fetch = origFetch;
+    if (prevUrl === undefined) Deno.env.delete(URL_KEY);
+    else Deno.env.set(URL_KEY, prevUrl);
+    setFirestoreClientForTests(null);
+    _clearGatesConfigCache();
+  }
+});
