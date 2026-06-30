@@ -22,8 +22,21 @@ export interface SweepResult {
   scanned: number;
   fired: number;
   skipped: number;
+  // Phones whose dial threw but were KEPT for a future retry (attempts <
+  // MAX_INJECTION_ATTEMPTS) — delay-not-loss, not yet a terminal failure.
+  retrying: number;
+  // Terminal failures only: a dial that errored AND exhausted its retries, or
+  // a batch write that failed. These are what the canary alert surfaces.
   errors: Array<{ phone: string; error: string }>;
 }
+
+// A dial that THROWS is retried on subsequent every-minute sweeps instead of
+// being consumed. After this many failed attempts the sweep gives up: it writes
+// a terminal injectionhistory status="error" (watched by the canary
+// injection-failure alert) and deletes the scheduledinjection. Until then the
+// appointment is delay-not-loss — never silently dropped, the way the missing
+// (phone, firedAt) index dropped every booking Jun 24–30 2026.
+export const MAX_INJECTION_ATTEMPTS = 5;
 
 export async function sweepScheduledInjections(
   firedBy: "cron" | "manual" = "cron",
@@ -48,6 +61,7 @@ export async function sweepScheduledInjections(
   const errors: SweepResult["errors"] = [];
   let fired = 0;
   let skipped = 0;
+  let retrying = 0;
 
   for (const { phone, injection } of due) {
     const firedAt = new Date().toISOString();
@@ -68,13 +82,93 @@ export async function sweepScheduledInjections(
     } catch (e) {
       status = "error";
       errorMsg = (e as Error).message;
-      errors.push({ phone, error: errorMsg });
       // Log per-phone so the failure is visible in real time. The aggregate
       // `⏰ sweep: ... errors=N` line only tells you a count; you used to have
       // to crack open injectionhistory to learn which phone and why.
       console.error(`[sweep] ❌ phone=${phone} → ${errorMsg}`);
     }
 
+    // ─── Error path: DELAY-NOT-LOSS ─────────────────────────────────────────
+    // A dial that THREW must NOT consume the appointment. Pre-fix, ANY error
+    // wrote status="error" and deleted the scheduledinjection in one batch — so
+    // a single missing-index throw silently lost the booking forever (incident
+    // 2026-06-24..30). Now we KEEP the doc and retry on the next sweep, bumping
+    // `attempts`. Only after MAX_INJECTION_ATTEMPTS do we give up: write the
+    // terminal status="error" history row (the canary injection-failure alert
+    // watches these) and delete the doc.
+    if (status === "error") {
+      const attempts = (injection.attempts ?? 0) + 1;
+      if (attempts < MAX_INJECTION_ATTEMPTS) {
+        retrying++;
+        console.warn(
+          `[sweep] ↻ retry phone=${phone} attempt=${attempts}/${MAX_INJECTION_ATTEMPTS} ` +
+            `(keeping scheduledinjection) → ${errorMsg}`,
+        );
+        // Best-effort bookkeeping. Even if this write fails we did NOT delete
+        // the doc, so the next sweep retries regardless — never a lost booking.
+        try {
+          await client.setMerge(scheduledInjectionDocPath(phone), {
+            attempts,
+            lastError: errorMsg ?? "unknown",
+            lastAttemptAt: firedAt,
+          });
+        } catch (e2) {
+          console.error(
+            `[sweep] ⚠️ retry bookkeeping write failed phone=${phone} → ${
+              (e2 as Error).message
+            }`,
+          );
+        }
+        continue; // try again next minute — no history written, no delete
+      }
+
+      // Exhausted retries → terminal failure. Record the error ONCE here; if the
+      // batch below ALSO fails we must not double-count the same phone.
+      errors.push({ phone, error: errorMsg ?? "unknown" });
+      console.error(
+        `[sweep] ✖ giving up phone=${phone} after ${attempts} attempts → ${errorMsg}`,
+      );
+      const terminal: InjectionHistoryEntry = {
+        phone,
+        eventTime: injection.eventTime,
+        scheduledAt: injection.scheduledAt,
+        firedAt,
+        firedBy,
+        status: "error",
+        attempts,
+        ...(injection.isTest ? { isTest: true } : {}),
+        ...(errorMsg ? { error: errorMsg } : {}),
+      };
+      try {
+        await client.batch([
+          {
+            type: "set",
+            path: injectionHistoryDocPath(
+              injectionHistoryDocId(phone, firedAt),
+            ),
+            data: terminal as unknown as Record<string, unknown>,
+          },
+          { type: "delete", path: scheduledInjectionDocPath(phone) },
+        ]);
+      } catch (e2) {
+        // Batch failed → the delete didn't happen, so the doc survives and the
+        // next sweep re-evaluates it. The dial error was already pushed above,
+        // so DON'T push a second one (no double-count).
+        console.error(
+          `[sweep] ❌ terminal batch write failed phone=${phone} → ${
+            (e2 as Error).message
+          }`,
+        );
+      }
+      continue;
+    }
+
+    // ─── Success / skipped path: atomic history-write + delete ──────────────
+    // Both ops go through ONE batch so they're all-or-nothing. As two separate
+    // ops, a delete failure after the set re-fired the injection next sweep
+    // (duplicate dial). The scheduledinjection is deleted even on a dedup
+    // skip — leaving it would re-evaluate every minute forever; it has served
+    // its purpose once an injectionhistory entry exists.
     const history: InjectionHistoryEntry = {
       phone,
       eventTime: injection.eventTime,
@@ -83,25 +177,8 @@ export async function sweepScheduledInjections(
       firedBy,
       status,
       ...(injection.isTest ? { isTest: true } : {}),
-      ...(errorMsg ? { error: errorMsg } : {}),
       ...(skipReason ? { skipReason } : {}),
     };
-
-    // Atomically write the history entry AND delete the scheduledinjection in
-    // ONE batch. As two separate ops, a delete failure after the set succeeds
-    // left the scheduledinjection in place → re-processed next sweep →
-    // duplicate history + duplicate injection attempt. The batch makes them
-    // all-or-nothing.
-    // Always delete the scheduledinjection doc, even when the dedup
-    // guard skipped the dial. Leaving it would mean the sweep keeps
-    // re-evaluating it every minute forever; the doc has served its
-    // purpose once an injectionhistory entry has been recorded.
-    //
-    // The batch is per-phone try-catch'd: a transient batch failure
-    // (quota/network) must NOT abort the whole sweep and strand the REMAINING
-    // due phones in the loop. On failure the scheduledinjection doc stays in
-    // place (the batch is all-or-nothing, so no history was written either) and
-    // the next sweep retries it — delay-not-loss.
     try {
       await client.batch([
         {
@@ -109,27 +186,25 @@ export async function sweepScheduledInjections(
           path: injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
           data: history as unknown as Record<string, unknown>,
         },
-        {
-          type: "delete",
-          path: scheduledInjectionDocPath(phone),
-        },
+        { type: "delete", path: scheduledInjectionDocPath(phone) },
       ]);
     } catch (e) {
-      const msg = (e as Error).message;
-      // Don't double-count a phone whose dial already errored above.
-      if (status !== "error") {
-        errors.push({ phone, error: msg });
-      }
-      console.error(`[sweep] ❌ batch write failed phone=${phone} → ${msg}`);
-      // Leave the scheduledinjection in place for the next sweep; continue with
-      // the remaining due phones.
+      // A transient batch failure must NOT abort the whole sweep and strand the
+      // REMAINING due phones. The doc stays in place (the batch is
+      // all-or-nothing, so no history was written either) and the next sweep
+      // retries it — delay-not-loss.
+      errors.push({ phone, error: (e as Error).message });
+      console.error(
+        `[sweep] ❌ batch write failed phone=${phone} → ${
+          (e as Error).message
+        }`,
+      );
     }
   }
 
-  // `scanned` now means "due docs the sweep considered" — what was
-  // historically the full list (since we filtered in memory). With the
-  // database-side where filter, that's identical to `dueDocs.length`.
-  return { scanned: dueDocs.length, fired, skipped, errors };
+  // `scanned` = due docs the sweep considered (identical to dueDocs.length now
+  // that the where-filter does the work the in-memory scan used to).
+  return { scanned: dueDocs.length, fired, skipped, retrying, errors };
 }
 
 export async function fireSingle(
@@ -157,6 +232,35 @@ export async function fireSingle(
     errorMsg = (e as Error).message;
   }
 
+  // Error path: DELAY-NOT-LOSS. Don't consume the appointment on a failed
+  // manual fire — keep the scheduledinjection (bump `attempts`) so the
+  // every-minute cron sweep automatically retries it and eventually writes a
+  // terminal status="error" once MAX_INJECTION_ATTEMPTS is reached. Pre-fix a
+  // failed manual fire deleted the doc, permanently losing the booking.
+  if (status === "error") {
+    const attempts = (inj.attempts ?? 0) + 1;
+    try {
+      await client.setMerge(scheduledInjectionDocPath(phone), {
+        attempts,
+        lastError: errorMsg ?? "unknown",
+        lastAttemptAt: firedAt,
+      });
+    } catch (e2) {
+      console.error(
+        `[fireSingle] ⚠️ retry bookkeeping write failed phone=${phone} → ${
+          (e2 as Error).message
+        }`,
+      );
+    }
+    console.error(
+      `[fireSingle] ❌ phone=${phone} attempt=${attempts} kept for retry → ${errorMsg}`,
+    );
+    return { fired: false, error: errorMsg };
+  }
+
+  // Success / skipped: record history + delete the scheduledinjection atomically
+  // (see sweepScheduledInjections — a delete failing after the set re-fires the
+  // injection).
   const history: InjectionHistoryEntry = {
     phone,
     eventTime: inj.eventTime,
@@ -165,26 +269,18 @@ export async function fireSingle(
     firedBy,
     status,
     ...(inj.isTest ? { isTest: true } : {}),
-    ...(errorMsg ? { error: errorMsg } : {}),
     ...(skipReason ? { skipReason } : {}),
   };
-
-  // Atomic history-write + scheduledinjection-delete (see sweepScheduledInjections
-  // for the rationale — a delete failing after the set re-fires the injection).
   await client.batch([
     {
       type: "set",
       path: injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
       data: history as unknown as Record<string, unknown>,
     },
-    {
-      type: "delete",
-      path: scheduledInjectionDocPath(phone),
-    },
+    { type: "delete", path: scheduledInjectionDocPath(phone) },
   ]);
   return {
     fired: status === "success",
     ...(status === "skipped" ? { skipped: true } : {}),
-    ...(errorMsg ? { error: errorMsg } : {}),
   };
 }

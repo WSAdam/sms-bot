@@ -23,6 +23,14 @@
         { "fieldPath": "nodeTag", "order": "ASCENDING" },
         { "fieldPath": "timestamp", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "byPhone",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "phone", "order": "ASCENDING" },
+        { "fieldPath": "firedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -27,30 +27,57 @@ export type HandleDelayedInjectionResult =
 export async function handleDelayedInjection(
   phone: string,
 ): Promise<HandleDelayedInjectionResult> {
-  // Dedup guard. Read injectionhistory for this phone (single-field
-  // index on `phone`, limit 5 — small slice is enough since we're
-  // checking "most recent within N hours"). Pulled from gatesConfig
-  // so the window is live-editable.
+  // Dedup guard. Skip the dial only if we ALREADY successfully dialed this
+  // phone within scheduledInjectionDedupHours (live-editable via gatesConfig).
+  //
+  // FAIL-OPEN BY DESIGN: this is a SECONDARY safety check (avoid a rare
+  // double-dial). It must NEVER abort the PRIMARY injection. A throw here —
+  // e.g. the missing (phone, firedAt) composite index that silently consumed
+  // every appointment Jun 24–30 2026 — previously propagated to the sweep,
+  // which recorded status="error" and DELETED the scheduledinjection, turning
+  // a guard hiccup into a permanently lost appointment. Now any failure of the
+  // guard logs loudly and PROCEEDS to inject: an extra dial is recoverable, a
+  // never-dialed appointment is not.
   const gates = await getGatesConfig();
   const windowHours = gates.scheduledInjectionDedupHours;
   if (windowHours > 0) {
     const cutoffMs = Date.now() - windowHours * 3_600_000;
-    const recent = await getFirestoreClient().list(injectionHistoryCollection, {
-      where: { field: "phone", op: "==", value: phone },
-      // Most-recent first. Without this, Firestore returns 5 entries in
-      // document-ID order, so a phone with 6+ history docs could have its
-      // latest fire fall outside the slice — the guard would then read an
-      // older firedAt and permit a duplicate dial.
-      orderBy: { field: "firedAt", dir: "desc" },
-      limit: 5,
-    });
     let lastFiredMs = 0;
-    for (const r of recent) {
-      const firedAt = (r.data as Record<string, unknown>).firedAt;
-      if (typeof firedAt === "string") {
-        const ms = new Date(firedAt).getTime();
-        if (Number.isFinite(ms) && ms > lastFiredMs) lastFiredMs = ms;
+    try {
+      const recent = await getFirestoreClient().list(
+        injectionHistoryCollection,
+        {
+          where: { field: "phone", op: "==", value: phone },
+          // Most-recent first. Without this, Firestore returns 5 entries in
+          // document-ID order, so a phone with 6+ history docs could have its
+          // latest fire fall outside the slice — the guard would then read an
+          // older firedAt and permit a duplicate dial. Requires the
+          // (phone asc, firedAt desc) byPhone composite index; see
+          // firestore.indexes.json (DO NOT drop it).
+          orderBy: { field: "firedAt", dir: "desc" },
+          limit: 5,
+        },
+      );
+      for (const r of recent) {
+        const data = r.data as Record<string, unknown>;
+        // Only a REAL prior dial suppresses this one. status="error" (never
+        // dialed) and status="skipped" (dedup'd, also never dialed) must NOT
+        // gate a real injection — otherwise one failed attempt poisons the
+        // whole window and the appointment can never be recovered.
+        if (data.status !== "success") continue;
+        const firedAt = data.firedAt;
+        if (typeof firedAt === "string") {
+          const ms = new Date(firedAt).getTime();
+          if (Number.isFinite(ms) && ms > lastFiredMs) lastFiredMs = ms;
+        }
       }
+    } catch (e) {
+      // Fail OPEN — log and inject anyway. A broken dedup query (missing
+      // index, Firestore blip) must not strand the appointment.
+      console.error(
+        `❌ [dedup-guard] query failed for ${phone}; injecting anyway ` +
+          `(fail-open): ${(e as Error).message}`,
+      );
     }
     if (lastFiredMs > cutoffMs) {
       const minutesAgo = Math.round((Date.now() - lastFiredMs) / 60_000);
