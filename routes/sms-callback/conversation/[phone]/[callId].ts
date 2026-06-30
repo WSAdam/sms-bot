@@ -107,17 +107,15 @@ export const handler = define.handlers({
     );
 
     let dncResults: Record<string, string> | undefined;
+    let dncMarked = true;
     if (body.doNotText === true) {
       console.log(
         `[conv-webhook] 🛑 doNotText=true → marking DNC for ${phone10}`,
       );
-      try {
-        await markDnc(phone10, body.nodeTag ?? "Stop");
-      } catch (e) {
-        console.warn(
-          `[conv-webhook] markDnc failed (non-fatal): ${(e as Error).message}`,
-        );
-      }
+      // markDnc retries the idempotent write and returns whether it landed (it
+      // no longer throws); a lost local flag is what isDnc gates on, so a failed
+      // mark forces a 502 below to make ReadyMode/Bland retry the opt-out.
+      dncMarked = await markDnc(phone10, body.nodeTag ?? "Stop");
       try {
         dncResults = await dncGlobal(phone10);
       } catch (e) {
@@ -135,7 +133,7 @@ export const handler = define.handlers({
     // believe the lead was removed from active RM campaigns when it wasn't.
     // Surface a 502 in that case (the unfixed twin of /stop's all-failed check),
     // while a partial success still returns 200.
-    if (allDncFailed(dncResults)) {
+    if (allDncFailed(dncResults) || !dncMarked) {
       return Response.json(
         {
           status: "error",
@@ -143,6 +141,7 @@ export const handler = define.handlers({
           callId,
           timestamp: stored.timestamp,
           dnc: dncResults,
+          localDncRecorded: dncMarked,
         },
         { status: 502 },
       );

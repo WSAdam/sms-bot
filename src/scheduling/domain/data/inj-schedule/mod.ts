@@ -10,6 +10,7 @@ import {
 import {
   type FirestoreClient,
   getFirestoreClient,
+  withCounterFailureFlag,
 } from "@shared/firestore/wrapper.ts";
 import type { FutureInjection } from "@shared/types/injection.ts";
 import { normalizePhone } from "@shared/util/phone.ts";
@@ -99,47 +100,21 @@ async function recordInjectionAggregators(
   // bookings increment both daily and lifetime `apptsBooked`.
   if (isTest) return;
   const today = easternDateString();
-  try {
-    await Promise.all([
-      client.incrementField(metricsDailyDocPath(today), { apptsBooked: 1 }),
-      client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIso }),
-      client.incrementField(metricsLifetimeDocPath(), { apptsBooked: 1 }),
-      client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
-    ]);
-    // Clear any stale failure flag a PRIOR failed write stamped, now that the
-    // counter incremented cleanly for this day. Setting null (non-string)
-    // clears the "possibly incomplete" marker without a delete sentinel.
-    // Best-effort — independent of the increment above.
-    await client.setMerge(metricsDailyDocPath(today), {
-      apptsBookedCounterFailedAt: null,
-    }).catch((e) =>
-      console.warn(
-        `[inj-schedule] apptsBooked failure-flag clear failed for ${today}: ${
-          (e as Error).message
-        } (stale ydBookingsReliable=false may persist)`,
-      )
-    );
-  } catch (e) {
-    // Make the silent counter drift OBSERVABLE — mirror sale-match's
-    // *CounterFailedAt pattern. If the apptsBooked increment fails
-    // (quota/network), stamp a per-day flag so the dashboard / nightly report
-    // can mark that day's bookings counter as possibly incomplete instead of
-    // emailing a number that was never incremented. The flag write is
-    // independent of the increment that just failed.
-    const failNow = new Date().toISOString();
-    await client.setMerge(metricsDailyDocPath(today), {
-      apptsBookedCounterFailedAt: failNow,
-    }).catch((e2) =>
-      console.warn(
-        `[inj-schedule] apptsBooked failure-flag stamp failed for ${today}: ${
-          (e2 as Error).message
-        } (counter drift will look reliable)`,
-      )
-    );
-    // Re-throw so the fire-and-forget caller logs the aggregator failure as
-    // before — the flag is additive observability, not a swallow.
-    throw e;
-  }
+  // Clear-on-success / stamp-on-failure of apptsBookedCounterFailedAt is
+  // centralized in withCounterFailureFlag; it re-throws so the fire-and-forget
+  // caller still logs the aggregator failure.
+  await withCounterFailureFlag(
+    client,
+    metricsDailyDocPath(today),
+    "apptsBookedCounterFailedAt",
+    () =>
+      Promise.all([
+        client.incrementField(metricsDailyDocPath(today), { apptsBooked: 1 }),
+        client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIso }),
+        client.incrementField(metricsLifetimeDocPath(), { apptsBooked: 1 }),
+        client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
+      ]).then(() => {}),
+  );
 }
 
 export async function getScheduledInjection(

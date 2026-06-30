@@ -38,7 +38,8 @@
   },
   "exclude": [
     "**/_fresh/*",
-    "_source-omnisource/"
+    "_source-omnisource/",
+    "spec/product/"
   ],
   "imports": {
     "@/": "./",

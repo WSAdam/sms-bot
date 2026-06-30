@@ -4338,13 +4338,14 @@ function defaultDateTimeLocal(plusMinutes){
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/New_York",
     year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).formatToParts(d);
   const get = t => (parts.find(p => p.type === t) || {}).value || "";
-  // en-CA hour can come through as "24" at midnight — normalize to "00".
-  const hour = get("hour") === "24" ? "00" : get("hour");
+  // hourCycle:"h23" keeps hour in 00–23 so midnight is "00" on the SAME day. The
+  // old hour12:false default could emit hour "24" belonging to the PRIOR day,
+  // yielding a default a full day early in the ~2-min window before ET midnight.
   return get("year") + "-" + get("month") + "-" + get("day") +
-    "T" + hour + ":" + get("minute");
+    "T" + get("hour") + ":" + get("minute");
 }
 document.querySelectorAll('input[type="datetime-local"]').forEach(el => {
   el.value = defaultDateTimeLocal(2);

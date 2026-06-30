@@ -29,7 +29,7 @@ export const handler = define.handlers({
       "STOP",
       true,
     );
-    await markDnc(phone, "STOP");
+    const dncMarked = await markDnc(phone, "STOP");
 
     let dncResults: Record<string, string> = {};
     try {
@@ -46,9 +46,18 @@ export const handler = define.handlers({
     // believe the lead was DNC'd in RM when it wasn't. Surface a 502 in that
     // case (consistent with disposition.ts / return-to-source.ts), while a
     // partial success still returns 200.
-    if (allDncFailed(dncResults)) {
+    // 502 if the RM-side opt-out fully failed OR the local DNC flag write didn't
+    // land — either way the opt-out isn't durably recorded, so signal ReadyMode
+    // to retry (re-marking is idempotent) instead of a false success that could
+    // let the opted-out phone be texted again.
+    if (allDncFailed(dncResults) || !dncMarked) {
       return Response.json(
-        { status: "error", phone, dnc: dncResults },
+        {
+          status: "error",
+          phone,
+          dnc: dncResults,
+          localDncRecorded: dncMarked,
+        },
         { status: 502 },
       );
     }

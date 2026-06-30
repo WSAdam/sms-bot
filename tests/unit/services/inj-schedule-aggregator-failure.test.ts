@@ -104,7 +104,7 @@ Deno.test("scheduleInjection: a failed flag-CLEAR write (success path) is logged
     await scheduleInjection(phone, FUTURE, false, undefined, mock);
     await new Promise((r) => setTimeout(r, 50));
     assert(
-      lines.some((w) => w.includes("apptsBooked failure-flag clear failed")),
+      lines.some((w) => w.includes("apptsBookedCounterFailedAt clear failed")),
       `a failed flag-clear write must be logged; got: ${lines.join(" | ")}`,
     );
   } finally {

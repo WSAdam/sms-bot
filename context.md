@@ -1178,6 +1178,59 @@ Opus; the loop stopped at the agreed 3-round cap **without converging** (round 3
 still surfaced new majors), so a future pass may find more. Partially advances the
 TODO "make injection-recording reliable" + "lock with a test" items.
 
+### 0.23 Resilience incident + hardening — ET dates, fail-safe config, DNC compliance (June 29–30 2026)
+
+A live incident: the dashboard showed an empty "tomorrow" after 8 PM ET, and the
+Deno Deploy logs carried `[gates-config] read failed, using defaults` on a
+transient Firestore DNS blip (`getaddrinfo EAI_AGAIN`). Two root causes, both
+fixed; a follow-up adversarial sweep + a code review then hardened the whole
+class. Unit suite **265 → 320**. No leads were lost (delayed only).
+
+- **Dates were UTC, not ET.** The dashboard default range + "Send Report" used
+  `new Date().toISOString()` (UTC), so after ~8 PM ET they jumped a day ahead and
+  showed nothing. Client defaults now format in ET via
+  `toLocaleDateString("en-CA", { timeZone: "America/New_York" })`. The sweep also
+  killed the whole **DST class**: a new `etDayBoundaryIso(date,"start"|"end")`
+  reads the EDT(-04)/EST(-05) offset for the specific date, replacing hardcoded
+  `-04:00` boundaries in dashboard drill/stats, appointments, audit-browse, and
+  `easternMondayDateString` (all an hour wrong every winter); and
+  `defaultDateTimeLocal` switched to `hourCycle:"h23"` (the old `hour12:false`
+  could emit hour `24` belonging to the prior day → an off-by-one default near
+  ET midnight).
+- **A DNS blip was disarming the dialer.** `getGatesConfig()` returned
+  `GATES_CONFIG_DEFAULTS` on any read failure, and the default
+  `scheduledInjectionSweepEnabled` is `false` — so a transient blip silently
+  PAUSED the per-minute injection sweep (delay-not-loss: the gate short-circuits
+  before touching `scheduledinjections` docs, so they re-fire on the next healthy
+  minute). Fix: gates-config now serves the **last-good cached value** on a read
+  failure (safe defaults only on a cold start with no prior read), and the
+  Firestore wrapper **retries idempotent reads** (`get`/`list`) on transient
+  errors (`withTransientRetry`/`isTransientFirestoreError`). The sweep's per-phone
+  `batch()` was also moved INSIDE the per-phone try-catch (a transient batch
+  failure had aborted the whole sweep and stranded later due phones).
+- **Observability honesty.** `CronRunMarker.lastStatus` gained `"skipped"` +
+  `skipReason`; `recordCronRun` hands the wrapped fn a `markSkipped(reason)`
+  context. A paused sweep (incl. a blip-induced disarm) and the 4 nightly-report
+  skip paths now record `"skipped"` on `/api/admin/cron-health` instead of a
+  misleading green `"ok"`.
+- **[DECISION] DNC fails CLOSED (compliance).** `isDnc()` now returns `true`
+  (treat as opted-out) on a read failure rather than fail-open — contacting a
+  DNC/TCPA opt-out is a violation, so when we can't confirm we must NOT contact
+  (a sustained outage conservatively skips a few recoverable texts; the wrapper
+  retry makes that rare). It bumps a best-effort `dncReadFailures` daily counter.
+  `markDnc()` now retries the idempotent write and RETURNS whether it landed;
+  `/sms-callback/stop` + the conversation webhook return 502 on a failed local
+  mark so ReadyMode/Bland retries rather than silently dropping the opt-out.
+- **Tidy-ups (from the review):** the clear-on-success / stamp-on-failure
+  `*CounterFailedAt` logic in lead-service, inj-schedule, and sale-match is now
+  one `withCounterFailureFlag(client, docPaths, field, fn)` helper (the null/ISO
+  contract nightly reads lives in one place).
+- **Product intent docs recovered.** `spec/product/spec.md` +
+  `user-stories.md` reverse-engineered from the shipped app (16 capability areas,
+  74 stories, 12 `[DECISION]`s) for the Shepherd User Stories tab. `spec` is in
+  the shape-check `HIDE` list and `spec/product/` is excluded from `deno fmt`
+  (fmt line-wraps the one-line-per-story format the parser needs).
+
 ---
 
 ## 1. Project goals

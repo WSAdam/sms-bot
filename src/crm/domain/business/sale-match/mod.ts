@@ -21,6 +21,7 @@ import {
   type BatchOp,
   type FirestoreClient,
   getFirestoreClient,
+  withCounterFailureFlag,
 } from "@shared/firestore/wrapper.ts";
 import type {
   ActivateFromReportSummary,
@@ -477,68 +478,47 @@ export async function processSaleMatches(
     }
     const nowIso = new Date().toISOString();
     const total = countedPhones.length;
+    // Centralized clear-on-success / stamp-on-failure across one metrics/daily
+    // doc per ET day (withCounterFailureFlag). It re-throws on failure; we catch
+    // + warn here (NOT propagate) so a counter-write blip can't false-fail the
+    // whole QB sale-match cron — the matches are already written, only the
+    // metrics increment failed, and the stamped flag tells nightly to demote.
     try {
-      await Promise.all([
-        ...Array.from(byDay.entries()).flatMap(([day, n]) => [
-          client.incrementField(metricsDailyDocPath(day), { activations: n }),
-          client.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
-        ]),
-        client.incrementField(metricsLifetimeDocPath(), { activations: total }),
-        client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
-        // Dashboard kvBreakdown sidebar counter — atomic increment for
-        // every new guestactivated doc we just wrote.
-        client.incrementField(metricsKvBreakdownDocPath(), {
-          guestactivated: total,
-        }),
-      ]);
-      console.log(
-        `[sale-match] activations counters: +${total} (lifetime), days=${
-          Array.from(byDay.entries()).map(([d, n]) => `${d}:+${n}`).join(",")
-        }`,
-      );
-      // Clear any stale per-day failure flag a PRIOR run stamped. nightly reads
-      // activationsCounterFailedAt and forces ydBookingsReliable=false whenever
-      // it's a string, so without this the flag permanently demotes the booking
-      // stat to "unreliable" even after this run incremented the counter
-      // correctly. Setting it to null (non-string) clears the demotion without
-      // needing a FieldValue.delete sentinel in the business layer. Best-effort.
-      await Promise.all(
-        Array.from(byDay.keys()).map((day) =>
-          client.setMerge(metricsDailyDocPath(day), {
-            activationsCounterFailedAt: null,
-          }).catch((e) =>
-            console.warn(
-              `[sale-match] failure-flag clear failed for ${day}: ${
-                (e as Error).message
-              } (stale ydBookingsReliable=false may persist)`,
-            )
-          )
-        ),
+      await withCounterFailureFlag(
+        client,
+        Array.from(byDay.keys()).map((day) => metricsDailyDocPath(day)),
+        "activationsCounterFailedAt",
+        () =>
+          Promise.all([
+            ...Array.from(byDay.entries()).flatMap(([day, n]) => [
+              client.incrementField(metricsDailyDocPath(day), {
+                activations: n,
+              }),
+              client.setMerge(metricsDailyDocPath(day), { updatedAt: nowIso }),
+            ]),
+            client.incrementField(metricsLifetimeDocPath(), {
+              activations: total,
+            }),
+            client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIso }),
+            // Dashboard kvBreakdown sidebar counter — atomic increment for
+            // every new guestactivated doc we just wrote.
+            client.incrementField(metricsKvBreakdownDocPath(), {
+              guestactivated: total,
+            }),
+          ]).then(() => {
+            console.log(
+              `[sale-match] activations counters: +${total} (lifetime), days=${
+                Array.from(byDay.entries()).map(([d, n]) => `${d}:+${n}`)
+                  .join(",")
+              }`,
+            );
+          }),
       );
     } catch (e) {
       console.warn(
         `[sale-match] activations counter writes failed (non-fatal): ${
           (e as Error).message
         }`,
-      );
-      // Make the silent counter failure OBSERVABLE: stamp a per-day flag on
-      // each affected metrics/daily doc so the nightly report can demote
-      // ydBookingsReliable instead of emailing an activations count that was
-      // never incremented. Best-effort; setMerge is independent of the
-      // increment that just failed.
-      const failNow = new Date().toISOString();
-      await Promise.all(
-        Array.from(byDay.keys()).map((day) =>
-          client.setMerge(metricsDailyDocPath(day), {
-            activationsCounterFailedAt: failNow,
-          }).catch((e) =>
-            console.warn(
-              `[sale-match] failure-flag stamp failed for ${day}: ${
-                (e as Error).message
-              } (counter drift will look reliable)`,
-            )
-          )
-        ),
       );
     }
   }

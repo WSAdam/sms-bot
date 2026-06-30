@@ -57,6 +57,7 @@ HIDE=(
   routes
   scripts
   shared
+  spec
   static
   tests
   utils.ts

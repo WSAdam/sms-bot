@@ -131,6 +131,42 @@ export async function withTransientRetry<T>(
   throw lastErr;
 }
 
+// Run a metrics-counter write `fn`, keeping the per-day "this counter may be
+// incomplete" flag in sync: CLEAR it (null) on success, STAMP it (ISO string)
+// on failure, then re-throw so the caller can log/decide. The nightly report
+// reads the flag — a string demotes the stat's reliability, null trusts it.
+// This centralizes the null/ISO contract the three counter writers share
+// (textsSent / apptsBooked / activations) so it can't drift between them.
+// `docPaths` may be one path or many (sale-match stamps one metrics/daily doc
+// per ET day). Flag writes are best-effort but VISIBLE (warn) so a stuck stale
+// flag surfaces rather than silently demoting a stat forever.
+export async function withCounterFailureFlag(
+  client: FirestoreClient,
+  docPaths: DocPath | DocPath[],
+  flagField: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const paths = Array.isArray(docPaths) ? docPaths : [docPaths];
+  const setFlag = (value: string | null) =>
+    Promise.all(
+      paths.map((p) =>
+        client.setMerge(p, { [flagField]: value }).catch((e) =>
+          console.warn(
+            `⚠️ [metrics] ${flagField} ${value === null ? "clear" : "stamp"} ` +
+              `failed for ${p}: ${(e as Error).message}`,
+          )
+        )
+      ),
+    );
+  try {
+    await fn();
+    await setFlag(null);
+  } catch (e) {
+    await setFlag(new Date().toISOString());
+    throw e;
+  }
+}
+
 class FirebaseAdminClient implements FirestoreClient {
   get(path: DocPath): Promise<Record<string, unknown> | null> {
     return withTiming(

@@ -128,10 +128,22 @@ function etOffsetMinutesAt(utcMs: number): number {
   const offsetPart = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
   // shortOffset is like "GMT-4", "GMT-04:00", or "GMT".
   const m = offsetPart.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
-  if (!m) return 0;
+  if (!m) {
+    // No signed offset parsed (e.g. a future ICU/runtime emitting a bare "GMT"
+    // or a localized name). Returning 0 would treat ET as UTC and mis-bucket
+    // every date by 4–5h — the exact silent-skew class this file guards
+    // against — so make it a loud, greppable signal instead of failing quietly.
+    console.warn(
+      `⚠️ [time] etOffsetMinutesAt: unparsed shortOffset '${offsetPart}' — defaulting to 0 (ET treated as UTC)`,
+    );
+    return 0;
+  }
+  // America/New_York is always a whole-hour offset (-240 EDT / -300 EST), so m[2]
+  // (minutes) is always absent here; parse it straight and carry the hour's sign
+  // (only matters for the half-hour zones this ET-only formatter never emits).
   const h = parseInt(m[1], 10);
-  const min = m[2] ? parseInt(m[2], 10) * Math.sign(h || 1) : 0;
-  return h * 60 + min;
+  const min = m[2] ? parseInt(m[2], 10) : 0;
+  return h * 60 + (h < 0 ? -min : min);
 }
 
 // Convert an ET calendar day (YYYY-MM-DD) + which end of the day into the

@@ -60,7 +60,9 @@ Deno.test("sale-match: a failed flag-CLEAR write (success path) is logged, not s
     });
 
     assert(
-      warnings.some((w) => w.includes("failure-flag clear failed")),
+      warnings.some((w) =>
+        w.includes("activationsCounterFailedAt clear failed")
+      ),
       `a failed flag-clear write must be logged; got: ${warnings.join(" | ")}`,
     );
   } finally {
@@ -98,7 +100,9 @@ Deno.test("sale-match: a failed flag-STAMP write (failure path) is logged, not s
     // Two warnings expected: the increment-failed warning AND the flag-stamp
     // warning. We assert the flag-stamp one specifically (the new behavior).
     assert(
-      warnings.some((w) => w.includes("failure-flag stamp failed")),
+      warnings.some((w) =>
+        w.includes("activationsCounterFailedAt stamp failed")
+      ),
       `a failed flag-stamp write must be logged; got: ${warnings.join(" | ")}`,
     );
   } finally {

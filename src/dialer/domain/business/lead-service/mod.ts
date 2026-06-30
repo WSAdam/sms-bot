@@ -21,6 +21,7 @@ import {
 import {
   type FirestoreClient,
   getFirestoreClient,
+  withCounterFailureFlag,
 } from "@shared/firestore/wrapper.ts";
 import { getAndToggleVariant } from "@shared/services/ab-test/service.ts";
 import { getGatesConfig } from "@shared/services/config/gates-config.ts";
@@ -540,27 +541,21 @@ async function recordOutboundRecipientMarkers(
   // day. Stamp a per-day flag so the nightly report can mark the count as
   // unreliable instead of emailing a 0 that was never incremented; clear the
   // flag on a clean write.
-  try {
-    await Promise.all([
-      client.incrementField(metricsDailyDocPath(today), { textsSent: 1 }),
-      client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIsoStr }),
-      client.incrementField(metricsLifetimeDocPath(), { textsSent: 1 }),
-      client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIsoStr }),
-    ]);
-    // Clear any stale flag a PRIOR failed write left. null (non-string) clears
-    // the demotion without a delete sentinel. Best-effort.
-    await client.setMerge(metricsDailyDocPath(today), {
-      textsSentCounterFailedAt: null,
-    }).catch(() => {});
-  } catch (e) {
-    const failNow = new Date().toISOString();
-    await client.setMerge(metricsDailyDocPath(today), {
-      textsSentCounterFailedAt: failNow,
-    }).catch(() => {});
-    // Re-throw so the fire-and-forget caller logs the failure — the flag is
-    // additive observability, not a swallow.
-    throw e;
-  }
+  // Clear-on-success / stamp-on-failure of the per-day textsSentCounterFailedAt
+  // flag is centralized in withCounterFailureFlag; it re-throws so the
+  // fire-and-forget caller still logs the aggregator failure.
+  await withCounterFailureFlag(
+    client,
+    metricsDailyDocPath(today),
+    "textsSentCounterFailedAt",
+    () =>
+      Promise.all([
+        client.incrementField(metricsDailyDocPath(today), { textsSent: 1 }),
+        client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIsoStr }),
+        client.incrementField(metricsLifetimeDocPath(), { textsSent: 1 }),
+        client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIsoStr }),
+      ]).then(() => {}),
+  );
 }
 
 // Exported for tests — the textsSent counter-failure observability (the
