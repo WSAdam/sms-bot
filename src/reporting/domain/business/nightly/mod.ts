@@ -63,6 +63,10 @@ export interface DailyReportCounts {
   // failed pull can never again masquerade as a real zero.
   ydAnsweredReliable?: boolean; // readymode-daily-pull cron fresh + ok
   ydBookingsReliable?: boolean; // daily-qb-sale-match cron fresh + ok
+  // false = a textsSent counter increment failed for yesterday (a per-day
+  // textsSentCounterFailedAt flag is present), so ydSmsSent's value may be
+  // missing sends rather than a measured count. Mirrors ydAnsweredReliable.
+  ydSmsSentReliable?: boolean;
   // WTD completeness flag. false = at least one past day in the WTD window
   // (today excluded — it's still settling) had NO metrics/daily doc, so its
   // apptsBooked/activations contributed 0 that may be "doc missing" rather
@@ -247,6 +251,13 @@ async function build(reportDate: string): Promise<{
   const ydBookingsReliable = cronFreshFor(
     saleMatchMarker as Record<string, unknown> | null,
   ) && !activationsCounterFailed;
+  // SMS-sent isn't fed by a morning cron (it increments live per send), so its
+  // reliability hinges solely on the per-day textsSentCounterFailedAt flag the
+  // outbound path stamps when an increment fails. Present → the day's textsSent
+  // may undercount, so treat ydSmsSent as "possibly incomplete", not measured.
+  const textsSentCounterFailed =
+    typeof ydData.textsSentCounterFailedAt === "string";
+  const ydSmsSentReliable = !textsSentCounterFailed;
 
   const counts: DailyReportCounts = {
     textsSentWtd: wtdRecipientDocs.length,
@@ -262,6 +273,7 @@ async function build(reportDate: string): Promise<{
     ydBookings: num(ydData.activations),
     ydAnsweredReliable,
     ydBookingsReliable,
+    ydSmsSentReliable,
     wtdComplete,
   };
 
@@ -295,10 +307,16 @@ async function build(reportDate: string): Promise<{
 
   // Rows whose value is "not collected" because the feeding pull failed.
   const ydUnreliable: Record<string, boolean> = {
+    smsSent: !ydSmsSentReliable,
     answered: !ydAnsweredReliable,
     bookings: !ydBookingsReliable,
   };
   const warnings: string[] = [];
+  if (!ydSmsSentReliable) {
+    warnings.push(
+      "“SMS sent” is unverified — a textsSent counter write failed yesterday, so the value may be missing sends. Treat it as possibly incomplete.",
+    );
+  }
   if (!ydAnsweredReliable) {
     warnings.push(
       "“Calls answered” is unverified — the ReadyMode daily pull did not complete on this report’s morning, so yesterday’s answered calls were never imported. Treat the value as “no data”, not zero.",
@@ -411,6 +429,11 @@ export async function runNightlyReport(
   options: NightlyReportOptions = {},
 ): Promise<NightlyReportResult & { skipped?: boolean; reason?: string }> {
   const reportDate = date ?? easternDateString();
+  // getCronConfig() has no internal try-catch by design: a Firestore read
+  // failure here throws and is caught by the outer try-catch in main.ts's
+  // nightly-report cron handler, which logs and SKIPS the report (fail-closed —
+  // better to miss one morning's email than to send a report built on a
+  // partially-read config). Pinned by cron-getconfig-failure-skips-report.test.
   const cfg = (await getCronConfig()).report;
 
   if (!cfg.enabled && !options.forceSend) {

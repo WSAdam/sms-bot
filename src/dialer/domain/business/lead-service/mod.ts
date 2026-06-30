@@ -521,6 +521,9 @@ async function recordOutboundRecipientMarkers(
   const nowIsoStr = new Date().toISOString();
   const weekKey = easternMondayDateString();
   const today = easternDateString();
+  // Unique-recipient markers are idempotent and independent of the counter —
+  // keep them out of the counter-failure flag so a marker blip doesn't demote
+  // the textsSent stat (and vice-versa).
   await Promise.all([
     client.atomicCreate(uniqueRecipientByPhoneDocPath(phone), {
       phone,
@@ -530,12 +533,41 @@ async function recordOutboundRecipientMarkers(
       weeklyRecipientByPhoneWeekDocPath(weekKey, phone),
       { phone, weekKey, firstSentAt: nowIsoStr },
     ),
-    client.incrementField(metricsDailyDocPath(today), { textsSent: 1 }),
-    client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIsoStr }),
-    client.incrementField(metricsLifetimeDocPath(), { textsSent: 1 }),
-    client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIsoStr }),
   ]);
+  // textsSent counter writes. Mirror the apptsBooked/activations
+  // *CounterFailedAt observability pattern: on a quota/network blip the daily
+  // textsSent increment can fail while the day looks like a real zero-texts
+  // day. Stamp a per-day flag so the nightly report can mark the count as
+  // unreliable instead of emailing a 0 that was never incremented; clear the
+  // flag on a clean write.
+  try {
+    await Promise.all([
+      client.incrementField(metricsDailyDocPath(today), { textsSent: 1 }),
+      client.setMerge(metricsDailyDocPath(today), { updatedAt: nowIsoStr }),
+      client.incrementField(metricsLifetimeDocPath(), { textsSent: 1 }),
+      client.setMerge(metricsLifetimeDocPath(), { updatedAt: nowIsoStr }),
+    ]);
+    // Clear any stale flag a PRIOR failed write left. null (non-string) clears
+    // the demotion without a delete sentinel. Best-effort.
+    await client.setMerge(metricsDailyDocPath(today), {
+      textsSentCounterFailedAt: null,
+    }).catch(() => {});
+  } catch (e) {
+    const failNow = new Date().toISOString();
+    await client.setMerge(metricsDailyDocPath(today), {
+      textsSentCounterFailedAt: failNow,
+    }).catch(() => {});
+    // Re-throw so the fire-and-forget caller logs the failure — the flag is
+    // additive observability, not a swallow.
+    throw e;
+  }
 }
+
+// Exported for tests — the textsSent counter-failure observability (the
+// textsSentCounterFailedAt flag) is covered directly rather than only via the
+// full Bland-dependent trigger flow.
+export const _recordOutboundRecipientMarkersForTest =
+  recordOutboundRecipientMarkers;
 
 async function storeInitialBlandMessage(
   phone: string,

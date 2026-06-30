@@ -25,9 +25,10 @@ const CRON_FRESHNESS_HOURS: Record<string, number> = {
 
 interface CronRunMarker {
   lastRunAt?: string;
-  lastStatus?: "ok" | "error";
+  lastStatus?: "ok" | "error" | "skipped";
   lastDurationMs?: number;
   lastError?: string;
+  skipReason?: string;
 }
 
 interface CronStatus extends CronRunMarker {
@@ -59,6 +60,9 @@ export const handler = define.handlers({
         lastStatus: m.lastStatus,
         lastDurationMs: m.lastDurationMs,
         lastError: m.lastError,
+        // Surface why a run skipped so the test page can render
+        // "PAUSED: sweep disabled" instead of a misleading OK/green.
+        skipReason: m.lastStatus === "skipped" ? m.skipReason : undefined,
         agedHours: agedHours === null ? null : Math.round(agedHours * 10) / 10,
         stale,
         expectedFreshnessHours: expected,
@@ -66,10 +70,15 @@ export const handler = define.handlers({
     });
     const anyStale = crons.some((c) => c.stale);
     const anyErrored = crons.some((c) => c.lastStatus === "error");
+    // A skipped run is the cron doing nothing on purpose (paused gate,
+    // already-sent). Not an error, but distinct from a healthy "ok" so the
+    // operator can tell a disarmed sweep apart from a working one.
+    const anySkipped = crons.some((c) => c.lastStatus === "skipped");
     return Response.json({
       ok: !anyStale && !anyErrored,
       anyStale,
       anyErrored,
+      anySkipped,
       crons,
     }, { headers: { "Cache-Control": "no-store" } });
   },

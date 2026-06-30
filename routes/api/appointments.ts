@@ -19,6 +19,7 @@ import {
   scheduledInjectionsCollection,
 } from "@shared/firestore/paths.ts";
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
+import { etDayBoundaryIso } from "@shared/util/time.ts";
 
 // scheduledinjections rarely exceeds a few hundred active records (it's
 // drained by the every-minute sweep). 5_000 is a generous safety ceiling
@@ -48,12 +49,13 @@ export const handler = define.handlers({
       Math.min(500, Number(url.searchParams.get("pageSize") ?? 50)),
     );
 
-    const startIso = startDate
-      ? new Date(`${startDate}T00:00:00`).toISOString()
-      : null;
-    const endIso = endDate
-      ? new Date(`${endDate}T23:59:59.999`).toISOString()
-      : null;
+    // The UI sends YYYY-MM-DD as ET calendar days. Resolve each to the correct
+    // UTC instant for the ET day boundary (DST-aware). A bare
+    // `new Date("YYYY-MM-DDT00:00:00")` would be parsed as the server's local
+    // time (UTC on Deploy) = ~19:00 the prior ET day, pulling in the previous
+    // evening's appointments and dropping early-morning ones.
+    const startIso = etDayBoundaryIso(startDate, "start");
+    const endIso = etDayBoundaryIso(endDate, "end");
 
     const db = getFirestoreClient();
 

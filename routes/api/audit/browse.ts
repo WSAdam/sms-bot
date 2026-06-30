@@ -18,6 +18,7 @@ import {
 } from "@shared/firestore/wrapper.ts";
 import { sanitizeStage } from "@shared/services/audit/service.ts";
 import type { AuditMarker } from "@shared/types/audit.ts";
+import { easternDateString, etDayBoundaryIso } from "@shared/util/time.ts";
 
 export const handler = define.handlers({
   async GET(ctx) {
@@ -32,12 +33,12 @@ export const handler = define.handlers({
       Math.min(500, Number(url.searchParams.get("pageSize") ?? 50)),
     );
 
-    const startIso = startDate
-      ? new Date(`${startDate}T00:00:00`).toISOString()
-      : null;
-    const endIso = endDate
-      ? new Date(`${endDate}T23:59:59.999`).toISOString()
-      : null;
+    // The UI sends YYYY-MM-DD as ET calendar days; resolve each to the correct
+    // UTC instant for the ET day boundary (DST-aware). A bare
+    // `new Date("YYYY-MM-DDT00:00:00")` parses as the server's local time
+    // (UTC on Deploy), shifting the window ~5 hours.
+    const startIso = etDayBoundaryIso(startDate, "start");
+    const endIso = etDayBoundaryIso(endDate, "end");
 
     const parent = stage ? auditStageCollection(stage) : auditCollection;
 
@@ -80,10 +81,14 @@ export const handler = define.handlers({
       });
 
     const total = records.length;
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // "Today" means ET today, not UTC-local today. setHours(0,0,0,0) on a UTC
+    // server bucketed ET records from 19:00–23:59 ET (the prior calendar day in
+    // UTC) into the wrong day. Resolve ET-midnight-as-UTC instead.
+    const todayStartMs = new Date(
+      etDayBoundaryIso(easternDateString(), "start")!,
+    ).getTime();
     const todayCount = records.filter((r) =>
-      new Date(r.processedAt).getTime() >= todayStart.getTime()
+      new Date(r.processedAt).getTime() >= todayStartMs
     ).length;
     const latest = records[0]?.processedAt ?? null;
 

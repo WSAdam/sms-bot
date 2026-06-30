@@ -14,12 +14,26 @@ export async function markDnc(
 ): Promise<void> {
   const phone10 = normalizePhone(rawPhone);
   if (!phone10) return;
-  await client.set(dncDocPath(phone10), {
-    phone10,
-    doNotText: true,
-    reason,
-    markedAt: new Date().toISOString(),
-  });
+  // Fire-and-forget on failure (like rate-limiter.release): if Firestore is
+  // down, swallow rather than throw. In /sms-callback/stop this lets the
+  // dncGlobal()→502 path still run (the route's caller used to throw here,
+  // skipping dncGlobal entirely and returning a bare 500), and the STOP is
+  // already persisted to conversations. The local flag may be missed on a blip,
+  // but the wrapper retries transient reads/writes and a re-STOP re-marks.
+  try {
+    await client.set(dncDocPath(phone10), {
+      phone10,
+      doNotText: true,
+      reason,
+      markedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn(
+      `⚠️ [dnc] markDnc write failed for ${phone10} (non-fatal): ${
+        (e as Error).message
+      }`,
+    );
+  }
 }
 
 export async function isDnc(
@@ -28,8 +42,22 @@ export async function isDnc(
 ): Promise<boolean> {
   const phone10 = normalizePhone(rawPhone);
   if (!phone10) return false;
-  const r = await client.get(dncDocPath(phone10));
-  return !!r?.doNotText;
+  // Fail-OPEN on read failure (return false), matching rate-limiter.checkOnly:
+  // Firestore being unreachable must not throw all the way out of the
+  // processInboundLead gatekeeper and return a 500 to ReadyMode. The wrapper
+  // already retries transient reads; this guards the residual failure so a blip
+  // looks like "not opted out" rather than crashing the trigger.
+  try {
+    const r = await client.get(dncDocPath(phone10));
+    return !!r?.doNotText;
+  } catch (e) {
+    console.warn(
+      `⚠️ [dnc] isDnc read failed for ${phone10}, fail-open (not DNC): ${
+        (e as Error).message
+      }`,
+    );
+    return false;
+  }
 }
 
 // True when a dncGlobal() result reports failure for EVERY ReadyMode domain

@@ -2991,7 +2991,12 @@ ${sharedThemeCss}
 </div>
 
 <script>
-const today = new Date().toISOString().split("T")[0];
+// ET calendar day, not the UTC day. toISOString() extracts the UTC date, so
+// after ~8 PM ET the default would jump to tomorrow (ET). Match the
+// dashboard/audit fix and read the America/New_York wall-clock day.
+const today = new Date().toLocaleDateString("en-CA", {
+  timeZone: "America/New_York",
+});
 document.getElementById("reviewDate").value = today;
 
 function formatTimestamp(iso){
@@ -4322,12 +4327,24 @@ document.querySelectorAll('.endpoint-card [data-param="phone"]').forEach(el => {
   });
 });
 
-// Default datetime-local values to "now + 2 minutes" so scheduling works out of the box
+// Default datetime-local values to "now + 2 minutes" so scheduling works out of
+// the box. We derive the ET (America/New_York) wall-clock fields via Intl, NOT
+// the host's local getters: on a UTC-hosted preview the local getters read the
+// UTC clock, so after ~8 PM ET the prefill jumped to tomorrow. Reading the ET
+// wall-clock keeps the default on the operational (ET) calendar day regardless
+// of where the page is rendered.
 function defaultDateTimeLocal(plusMinutes){
   const d = new Date(Date.now() + (plusMinutes||0) * 60000);
-  const pad = n => String(n).padStart(2, "0");
-  return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) +
-    "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const get = t => (parts.find(p => p.type === t) || {}).value || "";
+  // en-CA hour can come through as "24" at midnight — normalize to "00".
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  return get("year") + "-" + get("month") + "-" + get("day") +
+    "T" + hour + ":" + get("minute");
 }
 document.querySelectorAll('input[type="datetime-local"]').forEach(el => {
   el.value = defaultDateTimeLocal(2);
@@ -4395,8 +4412,14 @@ async function runTriggerReadymode(btn){
 async function runApptBooked(btn){
   const card = btn.closest(".endpoint-card");
   const phone = getCardPhone(card); if(!phone) return;
+  // Send the RAW datetime-local string (TZ-naive "YYYY-MM-DDThh:mm"), NOT
+  // toISOString(). new Date(local).toISOString() stamps a 'Z', which the
+  // backend's normalizeAppointmentTime then reads as literal UTC — defeating
+  // its ET-default protection and firing the appointment hours off. Passing the
+  // naive string lets the backend apply the ET default. When empty we keep an
+  // unambiguous explicit-UTC instant (now + 2 min) so the fallback stays exact.
   const local = param(card, "event_time");
-  const event_time = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
+  const event_time = local || new Date(Date.now()+120000).toISOString();
   await runRequest(card, {
     method: "POST", url: "/sms-callback/appointment-booked",
     headers: { "content-type": "application/json" },
@@ -4411,8 +4434,10 @@ async function runCronTriggerSingle(btn){
 async function runInjectionSchedule(btn){
   const card = btn.closest(".endpoint-card");
   const phone = getCardPhone(card); if(!phone) return;
+  // Raw TZ-naive datetime-local string (see runApptBooked): toISOString() would
+  // re-stamp it as UTC and defeat the backend's ET-default normalization.
   const local = param(card, "eventTime");
-  const eventTime = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
+  const eventTime = local || new Date(Date.now()+120000).toISOString();
   await runRequest(card, {
     method: "POST", url: "/api/injection/schedule",
     headers: { "content-type": "application/json" },
@@ -4430,8 +4455,10 @@ async function runCalAvailableTimes(btn){
 async function runCalSchedule(btn){
   const card = btn.closest(".endpoint-card");
   const phone = getCardPhone(card); if(!phone) return;
+  // Raw TZ-naive datetime-local string (see runApptBooked): toISOString() would
+  // re-stamp it as UTC and defeat the backend's ET-default normalization.
   const local = param(card, "startTime");
-  const startTime = local ? new Date(local).toISOString() : new Date(Date.now()+120000).toISOString();
+  const startTime = local || new Date(Date.now()+120000).toISOString();
   const name = param(card, "name") || "Test Guest";
   const email = param(card, "email") || "test@example.com";
   const conversationId = param(card, "conversationId") || undefined;

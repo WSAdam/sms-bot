@@ -4,6 +4,7 @@ import { assertEquals, assertThrows } from "@std/assert";
 import {
   daysBetween,
   easternDateString,
+  easternMondayDateString,
   isWithinWindowAfter,
   normalizeAppointmentTime,
   parseDateishToMs,
@@ -75,4 +76,37 @@ Deno.test("daysBetween counts days correctly", () => {
   const t0 = Date.now();
   assertEquals(daysBetween(t0, t0 + 24 * 60 * 60 * 1000), 1);
   assertEquals(daysBetween(t0, t0 + 7 * 24 * 60 * 60 * 1000), 7);
+});
+
+Deno.test("easternMondayDateString: DST-correct bucketing across the EST Monday boundary", () => {
+  // EST is UTC-5, so Monday 00:00 ET = Monday 05:00 UTC. The instant
+  // Mon 2026-01-05 04:30 UTC is Sun 2026-01-04 23:30 EST — the LAST ET hour of
+  // Sunday — which belongs to the PREVIOUS week (Monday 2025-12-29). The old
+  // hardcoded -4h (EDT) offset computed 00:30 UTC Monday and wrongly bucketed
+  // it into 2026-01-05. The DST-aware helper buckets it correctly.
+  assertEquals(
+    easternMondayDateString(new Date("2026-01-05T04:30:00.000Z")),
+    "2025-12-29",
+    "Sun 23:30 EST must bucket into the prior week's Monday",
+  );
+  // One ET hour later (Mon 00:30 EST = Mon 05:30 UTC) is the new week.
+  assertEquals(
+    easternMondayDateString(new Date("2026-01-05T05:30:00.000Z")),
+    "2026-01-05",
+    "Mon 00:30 EST must bucket into the current week's Monday",
+  );
+});
+
+Deno.test("easternMondayDateString: still correct in EDT (summer, UTC-4)", () => {
+  // EDT is UTC-4: Monday 00:00 ET = Monday 04:00 UTC.
+  // Sun 23:30 EDT = Mon 03:30 UTC → previous week's Monday (2026-06-29).
+  assertEquals(
+    easternMondayDateString(new Date("2026-07-06T03:30:00.000Z")),
+    "2026-06-29",
+  );
+  // Mon 00:30 EDT = Mon 04:30 UTC → current week's Monday (2026-07-06).
+  assertEquals(
+    easternMondayDateString(new Date("2026-07-06T04:30:00.000Z")),
+    "2026-07-06",
+  );
 });

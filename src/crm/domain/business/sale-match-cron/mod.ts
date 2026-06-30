@@ -10,7 +10,10 @@ import {
   QUICKBASE_BOOKINGS_REPORT_ID,
   QUICKBASE_BOOKINGS_TABLE_ID,
 } from "@shared/config/constants.ts";
-import { getCronConfig } from "@shared/services/config/cron-config.ts";
+import {
+  CRON_CONFIG_DEFAULTS,
+  getCronConfig,
+} from "@shared/services/config/cron-config.ts";
 import { getQuickbaseClient } from "@crm/domain/data/qb-client/mod.ts";
 import { normalizeBookingRowsDetailed } from "@crm/domain/data/qb-report/mod.ts";
 import { processSaleMatches } from "@crm/domain/business/sale-match/mod.ts";
@@ -28,7 +31,22 @@ export async function runDailyQbSaleMatch(
   options: { verbose?: boolean; forceRun?: boolean } = {},
 ): Promise<DailyCronResult> {
   // Pull cron config so explicit caller args win, then config, then constants.
-  const cfg = (await getCronConfig()).qbSaleMatch;
+  // A transient Firestore blip on this read must NOT abort the whole day's QB
+  // sale matching (the wrapper already retries transient reads). Unlike the
+  // nightly report — which fails CLOSED because a wrong-config email is worse
+  // than no email — skipping sale-match for a day is silent data LOSS, so we
+  // degrade gracefully to the static qbSaleMatch defaults (reportId/tableId/
+  // enabled) and keep running. Caller args still win below.
+  let cfg = CRON_CONFIG_DEFAULTS.qbSaleMatch;
+  try {
+    cfg = (await getCronConfig()).qbSaleMatch;
+  } catch (e) {
+    console.warn(
+      `[sale-match] ⚠️ cronConfig read failed (${
+        (e as Error).message
+      }) — falling back to static qbSaleMatch defaults so the match still runs`,
+    );
+  }
   if (!cfg.enabled && !options.forceRun) {
     console.log(`[sale-match] ⏭ skipped — qbSaleMatch.enabled=false`);
     return { ok: false, reason: "disabled in cron config" };

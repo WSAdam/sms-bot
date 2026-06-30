@@ -96,17 +96,34 @@ export async function sweepScheduledInjections(
     // guard skipped the dial. Leaving it would mean the sweep keeps
     // re-evaluating it every minute forever; the doc has served its
     // purpose once an injectionhistory entry has been recorded.
-    await client.batch([
-      {
-        type: "set",
-        path: injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
-        data: history as unknown as Record<string, unknown>,
-      },
-      {
-        type: "delete",
-        path: scheduledInjectionDocPath(phone),
-      },
-    ]);
+    //
+    // The batch is per-phone try-catch'd: a transient batch failure
+    // (quota/network) must NOT abort the whole sweep and strand the REMAINING
+    // due phones in the loop. On failure the scheduledinjection doc stays in
+    // place (the batch is all-or-nothing, so no history was written either) and
+    // the next sweep retries it — delay-not-loss.
+    try {
+      await client.batch([
+        {
+          type: "set",
+          path: injectionHistoryDocPath(injectionHistoryDocId(phone, firedAt)),
+          data: history as unknown as Record<string, unknown>,
+        },
+        {
+          type: "delete",
+          path: scheduledInjectionDocPath(phone),
+        },
+      ]);
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Don't double-count a phone whose dial already errored above.
+      if (status !== "error") {
+        errors.push({ phone, error: msg });
+      }
+      console.error(`[sweep] ❌ batch write failed phone=${phone} → ${msg}`);
+      // Leave the scheduledinjection in place for the next sweep; continue with
+      // the remaining due phones.
+    }
   }
 
   // `scanned` now means "due docs the sweep considered" — what was

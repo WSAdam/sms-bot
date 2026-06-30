@@ -17,9 +17,19 @@ import { easternDateString } from "@shared/util/time.ts";
 import { scrapeReadymode } from "@shared/services/readymode/scrape-orchestrator.ts";
 import { recordCronRun } from "@shared/services/cron-health/marker.ts";
 import { refreshKvBreakdown } from "@shared/services/cron-health/kv-breakdown.ts";
-import { getGatesConfig } from "@shared/services/config/gates-config.ts";
+import {
+  type GatesConfig,
+  getGatesConfig,
+} from "@shared/services/config/gates-config.ts";
 
 export const app = new App<State>();
+
+// The sweep gate decision, extracted so it can be unit-tested in isolation
+// (the cron handler couples it to recordCronRun otherwise). Returns true when
+// the scheduled-injection sweep is allowed to run given the live gates.
+export function shouldRunSweep(gates: GatesConfig): boolean {
+  return gates.scheduledInjectionSweepEnabled;
+}
 
 app.use(staticFiles());
 
@@ -81,12 +91,16 @@ if (
       `[cron-tick] scheduled-injection-sweep-v2 ${new Date().toISOString()}`,
     );
     try {
-      await recordCronRun("scheduled-injection-sweep-v2", async () => {
+      await recordCronRun("scheduled-injection-sweep-v2", async (ctx) => {
         // Runtime kill-switch via gatesConfig. Paused by default after
         // the 2026-05-25 near-miss; flip via /test → Gates Config form.
         const gates = await getGatesConfig();
-        if (!gates.scheduledInjectionSweepEnabled) {
+        if (!shouldRunSweep(gates)) {
           console.log(`⏸  sweep paused via gatesConfig`);
+          // Record the run as "skipped" (not "ok") so cron-health shows the
+          // sweep as PAUSED instead of healthy-green — a safe-default disarm
+          // after a Firestore blip would otherwise look identical to normal.
+          ctx.markSkipped("sweep disabled via gatesConfig");
           return;
         }
         const r = await sweepScheduledInjections("cron");
@@ -180,15 +194,17 @@ if (
       `[cron-tick] nightly-report ${new Date().toISOString()}`,
     );
     try {
-      await recordCronRun("nightly-report", async () => {
+      await recordCronRun("nightly-report", async (ctx) => {
         const cfg = await getCronConfig();
         if (!cfg.report.enabled) {
           console.log(`⏸  nightly-report disabled via cronConfig`);
+          ctx.markSkipped("report disabled via cronConfig");
           return;
         }
         const todayEt = easternDateString(new Date());
         if (cfg.report.lastSentEtDate === todayEt) {
           console.log(`⏭  nightly-report already sent for ${todayEt}`);
+          ctx.markSkipped(`already sent for ${todayEt}`);
           return;
         }
         // Atomically claim the day BEFORE sending. Two concurrent fires
@@ -200,6 +216,7 @@ if (
           console.log(
             `⏭  nightly-report day ${todayEt} already claimed by a concurrent run`,
           );
+          ctx.markSkipped(`day ${todayEt} claimed by a concurrent run`);
           return;
         }
         const r = await runNightlyReport(todayEt);
@@ -209,6 +226,7 @@ if (
           await setCronConfig({
             report: { lastSentEtDate: cfg.report.lastSentEtDate ?? "" },
           });
+          ctx.markSkipped(r.reason ?? "no data to report");
           return;
         }
         console.log(

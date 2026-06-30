@@ -24,7 +24,7 @@ import {
 import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import { getGatesConfig } from "@shared/services/config/gates-config.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
-import { easternDateString } from "@shared/util/time.ts";
+import { easternDateString, etDayBoundaryIso } from "@shared/util/time.ts";
 
 // Bounded reads for surfaces we don't yet have a counter for. Each of
 // these collections is small (<10k docs in the foreseeable future) and
@@ -209,13 +209,10 @@ export const handler = define.handlers({
     if (haveDateFilter) {
       // ET 00:00 of startDate → ET 23:59:59 of endDate (or today if
       // endDate omitted). Stringified ISO so we compare against the
-      // doc's stored timestamp without re-parsing.
-      const startIso = startDate
-        ? new Date(`${startDate}T00:00:00-04:00`).toISOString()
-        : null;
-      const endIso = endDate
-        ? new Date(`${endDate}T23:59:59-04:00`).toISOString()
-        : null;
+      // doc's stored timestamp without re-parsing. DST-aware boundaries —
+      // hardcoding -04:00 shifted the reply window an hour every EST winter.
+      const startIso = etDayBoundaryIso(startDate, "start");
+      const endIso = etDayBoundaryIso(endDate, "end");
       const repliedPhones = new Set<string>();
       for (const e of guestMessagesInRange) {
         const m = e.data as unknown as ConversationMessage;

@@ -101,6 +101,65 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+// ---------------------------------------------------------------------------
+// Eastern-time day-boundary → UTC ISO.
+//
+// The dashboard/audit/appointments endpoints receive YYYY-MM-DD strings that
+// the operator reads as ET calendar days. To filter Firestore docs (stored as
+// UTC ISO timestamps) we need the UTC instant of ET 00:00:00 (start) or ET
+// 23:59:59.999 (end) for that day.
+//
+// The naive approach hardcodes a "-04:00" (EDT) offset, which is WRONG for
+// Nov–Mar (EST is -05:00) — every winter query lands an hour off, shifting the
+// reply/booking/audit counts. This helper derives the correct offset for THAT
+// SPECIFIC DATE from the IANA zone, so it's right across DST.
+// ---------------------------------------------------------------------------
+
+const ET_OFFSET_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: EASTERN_TZ,
+  timeZoneName: "shortOffset",
+});
+
+// Minutes to ADD to a UTC instant to express it as ET wall-clock for the given
+// moment (negative — ET is behind UTC). Derived from the IANA zone so it tracks
+// DST (-240 in EDT, -300 in EST).
+function etOffsetMinutesAt(utcMs: number): number {
+  const parts = ET_OFFSET_FORMATTER.formatToParts(new Date(utcMs));
+  const offsetPart = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  // shortOffset is like "GMT-4", "GMT-04:00", or "GMT".
+  const m = offsetPart.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+  if (!m) return 0;
+  const h = parseInt(m[1], 10);
+  const min = m[2] ? parseInt(m[2], 10) * Math.sign(h || 1) : 0;
+  return h * 60 + min;
+}
+
+// Convert an ET calendar day (YYYY-MM-DD) + which end of the day into the
+// canonical UTC ISO instant. `which === "start"` → ET 00:00:00.000;
+// `which === "end"` → ET 23:59:59.999. Returns null for a falsy/blank input so
+// callers can keep their `dateString ? ... : null` shape.
+//
+// DST-correct: we first interpret the wall-clock as if it were UTC, read the ET
+// offset that applies at that moment, then subtract it to land on the real UTC
+// instant. Reading the offset at the wall-clock-as-UTC point is accurate for
+// day boundaries (00:00 / 23:59) because those never fall inside the DST
+// transition hour for America/New_York.
+export function etDayBoundaryIso(
+  dateString: string | null | undefined,
+  which: "start" | "end",
+): string | null {
+  if (!dateString) return null;
+  const wall = which === "start"
+    ? `${dateString}T00:00:00.000Z`
+    : `${dateString}T23:59:59.999Z`;
+  const asUtc = new Date(wall).getTime();
+  if (!Number.isFinite(asUtc)) return null;
+  const offsetMinutes = etOffsetMinutesAt(asUtc);
+  // ET wall-clock = UTC + offset (offset negative). To recover real UTC from a
+  // wall-clock we treated as UTC, subtract the offset.
+  return new Date(asUtc - offsetMinutes * 60_000).toISOString();
+}
+
 // Stamp a customer-agreed appointment time with an explicit timezone so
 // the sweep doesn't fire 4 hours early. Background: Bland's pathway has
 // historically sent `startTime: "2026-05-19T12:00:00"` (no Z, no
@@ -171,19 +230,28 @@ export function normalizeAppointmentTime(
 
 // ISO date (YYYY-MM-DD) of the Monday 00:00 ET that begins the week
 // containing `date`. Used as the partition key for weekly recipient
-// markers. Approximated using -4h (EDT) — off by an hour around DST
-// transitions, which only matters for events fired in the 1-hour DST
-// drift; benign for week-bucketing reporting.
+// markers. DST-correct: the ET wall-clock is derived from the IANA zone's
+// actual offset at each instant (etOffsetMinutesAt) rather than a hardcoded
+// -4h (EDT). During EST (-5h) the old constant bucketed a marker written in
+// the last ET hour of a Sunday→Monday boundary into the wrong week.
 export function easternMondayDateString(date: Date = new Date()): string {
-  const etNow = new Date(date.getTime() - 4 * 60 * 60 * 1000);
+  // etOffsetMinutesAt is the (negative) minutes to ADD to a UTC instant to get
+  // ET wall-clock, so UTC + offset = wall-clock.
+  const etNow = new Date(
+    date.getTime() + etOffsetMinutesAt(date.getTime()) * 60_000,
+  );
   const dow = etNow.getUTCDay(); // 0=Sun..6=Sat
   const daysSinceMonday = (dow + 6) % 7;
   const monday = new Date(etNow);
   monday.setUTCDate(etNow.getUTCDate() - daysSinceMonday);
   monday.setUTCHours(0, 0, 0, 0);
-  // Shift back to "wall clock" by formatting via the same Eastern formatter.
-  // monday represents Monday 00:00 ET expressed in UTC; re-encode as ET date.
-  return DATE_FORMATTER.format(new Date(monday.getTime() + 4 * 60 * 60 * 1000));
+  // `monday` is Monday 00:00 ET expressed as if it were UTC; recover the real
+  // UTC instant (wall-clock − offset), then format that instant as an ET date.
+  // Reading the offset at the Monday-as-UTC point is accurate because 00:00 ET
+  // never falls inside the DST transition hour for America/New_York.
+  const realMondayMs = monday.getTime() -
+    etOffsetMinutesAt(monday.getTime()) * 60_000;
+  return DATE_FORMATTER.format(new Date(realMondayMs));
 }
 
 // IANA timezone → approximate UTC offset (hours). Used to interpret

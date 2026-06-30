@@ -18,6 +18,7 @@ import {
 } from "@shared/firestore/wrapper.ts";
 import { dedupeMessages } from "@shared/services/conversations/dedupe.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
+import { etDayBoundaryIso } from "@shared/util/time.ts";
 
 const MAX_ITEMS = 500;
 
@@ -30,13 +31,11 @@ export const handler = define.handlers({
     const nodeTagFilter = url.searchParams.get("nodeTag") ?? "";
     const phoneFilter = url.searchParams.get("phone") ?? "";
 
-    // Eastern-time day boundaries — matches the legacy contract.
-    const startIso = startDate
-      ? new Date(`${startDate}T00:00:00-04:00`).toISOString()
-      : null;
-    const endIso = endDate
-      ? new Date(`${endDate}T23:59:59-04:00`).toISOString()
-      : null;
+    // Eastern-time day boundaries — matches the legacy contract. DST-aware:
+    // etDayBoundaryIso derives the correct EDT/EST offset for the given date
+    // (hardcoding -04:00 was wrong all winter, shifting every query an hour).
+    const startIso = etDayBoundaryIso(startDate, "start");
+    const endIso = etDayBoundaryIso(endDate, "end");
 
     // Choose the most-selective filter for the database `where` clause.
     // Order: phone (per-phone, very selective) > timestamp range (when set,

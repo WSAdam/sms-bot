@@ -66,3 +66,51 @@ Deno.test("getGatesConfig: a read failure with NO prior good read falls back to 
   );
   _clearGatesConfigCache();
 });
+
+Deno.test("getGatesConfig: serving last-good on a read failure does NOT bump cache expiry — the next call retries Firestore", async () => {
+  // Load-bearing for the 2026-06-29 incident: a stale gates config with
+  // scheduledInjectionSweepEnabled=false must not silently persist for the full
+  // TTL if Firestore recovers. The failure path serves last-good but
+  // deliberately does NOT refresh cached.at, so the very next call re-reads.
+  _clearGatesConfigCache();
+  const db = new FirestoreMock();
+  await db.set(gatesConfigDocPath(), {
+    scheduledInjectionSweepEnabled: true,
+    globalDailySmsCap: 250,
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Prime the cache with the live, armed config.
+  await getGatesConfig(db);
+
+  // Expire the cache and fail the read — must serve last-good (armed).
+  _expireGatesConfigCache();
+  let getCalls = 0;
+  const blip = {
+    get: () => {
+      getCalls++;
+      return Promise.reject(new Error("getaddrinfo EAI_AGAIN"));
+    },
+  } as unknown as FirestoreMock;
+  const duringBlip = await getGatesConfig(blip);
+  assertEquals(duringBlip.scheduledInjectionSweepEnabled, true);
+  assertEquals(getCalls, 1, "the failed read must have hit Firestore once");
+
+  // The KEY assertion: because cached.at was NOT bumped by the failed read,
+  // the next call retries Firestore (here, recovered) instead of serving the
+  // stale value for the full 60s TTL. If the failure path had refreshed
+  // cached.at, this read would be served from cache and Firestore never hit.
+  await db.set(gatesConfigDocPath(), {
+    scheduledInjectionSweepEnabled: true,
+    globalDailySmsCap: 999, // operator bumped it again post-recovery
+    updatedAt: new Date().toISOString(),
+  });
+  const afterRecovery = await getGatesConfig(db);
+  assertEquals(
+    afterRecovery.globalDailySmsCap,
+    999,
+    "the next call must retry Firestore (cache.at was not bumped on the failed read)",
+  );
+
+  _clearGatesConfigCache();
+});

@@ -506,7 +506,13 @@ export async function processSaleMatches(
         Array.from(byDay.keys()).map((day) =>
           client.setMerge(metricsDailyDocPath(day), {
             activationsCounterFailedAt: null,
-          }).catch(() => {})
+          }).catch((e) =>
+            console.warn(
+              `[sale-match] failure-flag clear failed for ${day}: ${
+                (e as Error).message
+              } (stale ydBookingsReliable=false may persist)`,
+            )
+          )
         ),
       );
     } catch (e) {
@@ -525,7 +531,13 @@ export async function processSaleMatches(
         Array.from(byDay.keys()).map((day) =>
           client.setMerge(metricsDailyDocPath(day), {
             activationsCounterFailedAt: failNow,
-          }).catch(() => {})
+          }).catch((e) =>
+            console.warn(
+              `[sale-match] failure-flag stamp failed for ${day}: ${
+                (e as Error).message
+              } (counter drift will look reliable)`,
+            )
+          )
         ),
       );
     }
