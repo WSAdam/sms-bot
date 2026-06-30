@@ -114,3 +114,51 @@ Deno.test("sweep: a dial error at the retry cap is TERMINAL (writes status=error
     _clearGatesConfigCache();
   }
 });
+
+Deno.test("sweep: a TERMINAL failure pushes a Canary injection-failure alert (wiring)", async () => {
+  _clearGatesConfigCache();
+  const URL_KEY = "CANARY_INGEST_URL";
+  const prevUrl = Deno.env.get(URL_KEY);
+  const origFetch = globalThis.fetch;
+  const cap: { url?: string; body?: string } = {};
+  Deno.env.set(URL_KEY, "https://canary.example/relay/fire");
+  globalThis.fetch = ((url: string | URL | Request, init?: RequestInit) => {
+    cap.url = String(url);
+    cap.body = String(init?.body ?? "");
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  }) as typeof fetch;
+
+  const mock = new FirestoreMock();
+  const phone = "5551239003";
+  // Already exhausted retries → this attempt is terminal, batch succeeds → push.
+  mock.docs.set(scheduledInjectionDocPath(phone), {
+    phone,
+    eventTime: "2020-01-01T00:00:00.000Z",
+    scheduledAt: Date.now(),
+    attempts: MAX_INJECTION_ATTEMPTS - 1,
+  });
+  failPointerRead(mock, phone);
+  setFirestoreClientForTests(mock);
+
+  try {
+    const r = await sweepScheduledInjections("cron", mock);
+    assertEquals(r.errors.length, 1);
+    assertEquals(
+      cap.url,
+      "https://canary.example/relay/fire",
+      "a terminal injection failure must push to Canary",
+    );
+    const body = JSON.parse(cap.body ?? "{}");
+    assertEquals(body.kind, "injection-failure");
+    assert(
+      body.error.includes(phone),
+      "the SMS body must name the failed phone",
+    );
+  } finally {
+    globalThis.fetch = origFetch;
+    if (prevUrl === undefined) Deno.env.delete(URL_KEY);
+    else Deno.env.set(URL_KEY, prevUrl);
+    setFirestoreClientForTests(null);
+    _clearGatesConfigCache();
+  }
+});

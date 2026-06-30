@@ -192,11 +192,14 @@ sweep) and no-ops with a warning if `CANARY_INGEST_URL` is unset. Payload:
   "source": "sms-bot",
   "kind": "injection-failure",
   "phone": "6142967343",
-  "error": "ODR injection failed: …",
   "attempts": 5,
-  "ts": "2026-06-30T13:46:24.681Z"
+  "ts": "2026-06-30T13:46:24.681Z",
+  "error": "6142967343 — ODR injection failed: … (gave up after 5 attempts)"
 }
 ```
+
+Canary renders the `error` field as the SMS body, so it's a composed summary
+(phone + reason + attempt count), not the raw error string.
 
 ### Required env vars
 

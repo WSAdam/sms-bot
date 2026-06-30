@@ -151,23 +151,26 @@ export async function sweepScheduledInjections(
           },
           { type: "delete", path: scheduledInjectionDocPath(phone) },
         ]);
+        // Terminal write landed → text Adam now. Push ONLY after the batch
+        // succeeds: on a failed terminal write the doc survives and re-terminals
+        // next sweep, so paging here (not in the catch) avoids re-texting every
+        // minute while a write is stuck. Fail-safe: never throws, never blocks.
+        await pushInjectionFailure({
+          phone,
+          error: errorMsg ?? "unknown",
+          attempts,
+        });
       } catch (e2) {
         // Batch failed → the delete didn't happen, so the doc survives and the
-        // next sweep re-evaluates it. The dial error was already pushed above,
-        // so DON'T push a second one (no double-count).
+        // next sweep re-evaluates it. The dial error was already pushed to
+        // `errors` above, so DON'T double-count — and DON'T page (we page once
+        // the terminal write finally lands).
         console.error(
           `[sweep] ❌ terminal batch write failed phone=${phone} → ${
             (e2 as Error).message
           }`,
         );
       }
-      // Text Adam immediately — this injection failed for good (retries spent).
-      // Fail-safe: never throws, never blocks the rest of the sweep.
-      await pushInjectionFailure({
-        phone,
-        error: errorMsg ?? "unknown",
-        attempts,
-      });
       continue;
     }
 

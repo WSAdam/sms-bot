@@ -200,6 +200,8 @@ one Deno Deploy project:
 | `AUTH_ALLOWED_DOMAINS`           | optional                         | Comma-separated email-domain allowlist                 | Default `monsterrg.com`. Lowercased.                                                               |
 | `AUTH_SESSION_TTL_SECONDS`       | optional                         | Session cookie lifetime                                | Default 604800 (7 days).                                                                           |
 | `CANARY_SECRET`                  | ✅ for /canary monitoring        | Shared bearer secret the external Canary monitor sends | If unset, `/canary/*` reject every request (fail closed). See §0.16                                |
+| `CANARY_INGEST_URL`              | optional (enables push)          | Canary failure-ingest URL the bot POSTs terminal injection failures to | If unset, the immediate push no-ops (warns); the nightly `/canary` pull is unaffected. See §0.16   |
+| `CANARY_INGEST_TOKEN`            | optional                         | Bearer the push sends to Canary                        | Falls back to `CANARY_SECRET` if unset. See §0.16                                                  |
 
 **Removed since original plan:** `CRON_SHARED_SECRET`, `CRON_INTERNAL_TOKEN`,
 `SMS_COUNT_TOKEN`, `QUICKBASE_REALM` (now hardcoded constant).
@@ -314,7 +316,10 @@ bearer-authed; see §0.16):
   counter. Liveness; Canary alerts if it drops below a floor.
 - `GET|POST /canary/errors` — yesterday's terminal failures (ET):
   `{totalErrors, errors[]}` from `injectionhistory` status="error" + `cronruns`
-  lastStatus="error".
+  lastStatus="error". (Canary's nightly pull.)
+- **Push (bot → Canary, not an endpoint here):** terminal injection failures are
+  POSTed to `CANARY_INGEST_URL` the instant they happen, for an immediate text.
+  See §0.16.
 
 ### 0.6 Scheduled jobs (Deno.cron, Deploy-only)
 
@@ -324,8 +329,12 @@ surfaces stale crons within hours rather than days.
 
 - **`scheduled-injection-sweep-v2`** — every minute (`* * * * *`). Reads pending
   `scheduledinjections` where `eventTime <= now`, fires each through
-  `handleDelayedInjection` (which has the 72h dedup guard), writes
-  `injectionhistory`, deletes the pending doc. Guarded by
+  `handleDelayedInjection` (which has the 72h dedup guard). On success/skip it
+  writes `injectionhistory` and deletes the pending doc; on a dial **error** it
+  RETRIES up to `MAX_INJECTION_ATTEMPTS` (=5) over subsequent sweeps
+  (delay-not-loss, `attempts` bumped on the doc) before recording a terminal
+  `status="error"`, deleting, and pushing a Canary injection-failure alert. See
+  the sweep-safety stack (§ around line 603) + §0.16. Guarded by
   `gatesConfig.scheduledInjectionSweepEnabled` (default `false`) — a
   live-editable kill-switch you can flip without a redeploy. Renamed from
   `scheduled-injection-sweep` on 2026-05-25 because Deno Deploy's runtime had
@@ -607,14 +616,27 @@ tracker is [firestore-safety.md](firestore-safety.md).
   `false`). Checked inside the sweep handler before any work. Flip via /test →
   Gates Config form; gatesConfig is 60s-cached so the change is live within a
   minute. No redeploy.
-- **72h dedup guard** — `handleDelayedInjection` queries `injectionhistory` for
-  the phone before injecting. If any entry within
-  `gatesConfig.scheduledInjectionDedupHours` (default 72) is found, the function
-  returns `{skipped: true, reason}` and the sweep writes `injectionhistory` with
-  `status: "skipped"` + `skipReason`. The scheduledinjection doc is deleted
-  regardless (no value in re-evaluating forever). Single-field `phone` index on
-  injectionhistory; ~50 queries per minute under heavy sweep load is well within
-  budget.
+- **72h dedup guard (SECONDARY check, FAILS OPEN)** — `handleDelayedInjection`
+  queries `injectionhistory` for the phone before injecting and skips the dial if
+  it already **successfully** dialed within
+  `gatesConfig.scheduledInjectionDedupHours` (default 72) → returns
+  `{skipped: true, reason}`, sweep writes `status: "skipped"` and deletes the
+  doc. Two guardrails added 2026-06-30 after a dropped composite index silently
+  consumed every appointment Jun 24–30: (1) it **fails open** — if the query
+  throws (e.g. a missing index) it logs and injects anyway rather than erroring,
+  so a guard hiccup can never strand a booking; (2) it only counts
+  `status="success"` docs, so a prior `error`/`skipped` record never suppresses a
+  real dial. Requires the `(phone asc, firedAt desc)` `byPhone` composite index
+  (see the index section) — but fail-open means a missing index degrades to
+  "maybe a duplicate dial", never "lost appointment".
+- **Bounded-retry / delay-not-loss** (2026-06-30) — a dial that THROWS no longer
+  consumes the appointment. The sweep KEEPS the `scheduledinjection` (bumping
+  `attempts`) and retries on subsequent every-minute sweeps; only after
+  `MAX_INJECTION_ATTEMPTS` (=5) does it write a terminal `injectionhistory`
+  `status="error"`, delete the doc, and push the Canary injection-failure alert
+  (§0.16). So a transient ReadyMode/Firestore blip self-heals instead of losing
+  the booking, and only the success/skip paths delete the doc immediately.
+  `fireSingle` (manual) uses the same keep-and-retry behavior.
 - **Talk-now cleanup** —
   [routes/sms-callback/bland-talk-now.ts](routes/sms-callback/bland-talk-now.ts)
   now deletes the companion `scheduledinjections/{phone}` doc after firing.
@@ -622,6 +644,13 @@ tracker is [firestore-safety.md](firestore-safety.md).
   an `injectionhistory` audit entry but leave the pending doc in place, so when
   the sweep came back from its 22-day outage it tried to re-dial the same
   phones.
+- **Recovery tool** —
+  [scripts/recover-errored-injections.ts](scripts/recover-errored-injections.ts)
+  re-fires injections that terminally errored and were consumed — the existing
+  `trigger-single`/`repopulate-injections` paths can't (they skip any phone that
+  already has an `injectionhistory` doc). Dry-run by default; `--apply` to write.
+  Run after a terminal-failure cluster to re-inject lost bookings (requires the
+  `byPhone` index ENABLED + the dedup fail-open fix deployed).
 
 **Inbound trigger window gate** (env-driven, zero Firestore reads):
 
@@ -803,13 +832,31 @@ signals a problem; a non-2xx/timeout is Canary's down-detection.
   Window via `yesterdayEasternRange()`. Canary watches `totalErrors` `lte 0`.
   [routes/canary/errors.ts](routes/canary/errors.ts)
 
+**Immediate injection-failure push (bot → Canary).** Separate from the pull
+endpoints above: the moment a scheduled injection fails terminally — i.e. the
+sweep exhausts `MAX_INJECTION_ATTEMPTS` (=5) retries — the bot POSTs to
+`CANARY_INGEST_URL` so Canary texts immediately (transient blips that self-heal
+on retry never page). Impl
+[src/scheduling/domain/data/canary-alert/mod.ts](src/scheduling/domain/data/canary-alert/mod.ts)
+`pushInjectionFailure`, wired into `inj-sweep` and fired only **after** the
+terminal write lands (so a stuck write can't re-page). Fail-safe — never throws,
+never blocks the sweep, 5s timeout — and no-ops with a warning if
+`CANARY_INGEST_URL` is unset. Contract: `POST {CANARY_INGEST_URL}`,
+`Authorization: Bearer {CANARY_INGEST_TOKEN || CANARY_SECRET}`, JSON body
+`{source:"sms-bot", kind:"injection-failure", phone, attempts, error, ts}` —
+Canary renders the `error` field as the SMS body, so it's composed to include the
+phone + raw reason + attempt count.
+
 **Coverage gap:** inbound Bland-send failures (`processInboundLead` catch) and
 ad-hoc direct injects are console-only, not persisted — they don't appear in
-`/canary/errors`. Closing it means persisting those terminal failures at the
-catch sites (deferred — a hot-path change).
+`/canary/errors`. (Terminal scheduled-injection failures ARE covered now — pushed
+immediately AND in the nightly `/canary/errors` pull.) Closing the rest means
+persisting those terminal failures at the catch sites (deferred — a hot-path
+change).
 
-**Env:** `CANARY_SECRET` (fail-closed if unset). The monitor sends it as the
-bearer header; the same value is set in Deno Deploy settings.
+**Env:** `CANARY_SECRET` (fail-closed if unset) for the pull endpoints, plus
+`CANARY_INGEST_URL` + optional `CANARY_INGEST_TOKEN` for the push (push no-ops if
+the URL is unset). All set in Deno Deploy settings for prod.
 
 ### 0.17 Performance profiling (June 2026)
 
@@ -1592,8 +1639,16 @@ sms-bot (collection)
   [routes/api/dashboard/drill.ts](routes/api/dashboard/drill.ts) and the nodeTag
   query in
   [routes/api/admin/repopulate-injections.ts](routes/api/admin/repopulate-injections.ts)
-- `byPhone` collection group — `(phone asc, firedAt desc)` — powers per-phone
-  history paging in [routes/api/appointments.ts](routes/api/appointments.ts)
+- `byPhone` collection group — `(phone asc, firedAt desc)` — REQUIRED by the
+  injection dedup guard in
+  [src/sms-flow/domain/business/delayed-injection/mod.ts](src/sms-flow/domain/business/delayed-injection/mod.ts)
+  (`where(phone ==) + orderBy(firedAt desc)`). **DO NOT drop it.** It was once
+  removed as "unused" (when the only suspected consumer was appointments.ts,
+  which actually needs no composite — it filters + orders on the same `firedAt`
+  field), then a later `orderBy` in the dedup guard silently required it again →
+  every cron injection threw "requires an index" Jun 24–30 2026. The dedup guard
+  now also fails open, and `firestore-indexes-required.test.ts` fails CI if this
+  index disappears.
 
 Single-field auto-indexes cover the rest:
 
