@@ -133,8 +133,27 @@ export async function getGatesConfig(
     cached = { at: now, value };
     return value;
   } catch (e) {
-    // Firestore unavailable — return defaults so gates still enforce.
-    console.error("[gates-config] read failed, using defaults:", e);
+    // Firestore read failed (e.g. a transient EAI_AGAIN DNS blip on Deno
+    // Deploy's REST transport). If we have EVER read the live config, serve that
+    // last-good value instead of reverting to hard defaults. The defaults set
+    // scheduledInjectionSweepEnabled=false, so falling back to them on a blip
+    // silently DISARMS the injection sweep (and reverts operator-tuned caps) —
+    // appointments stop being dialed until the cache refills. Don't refresh
+    // cached.at, so the next call retries the read and we keep serving last-good
+    // only until Firestore returns. Incident 2026-06-29.
+    if (cached) {
+      console.warn(
+        "⚠️ [gates-config] read failed; serving last-good cached config:",
+        (e as Error).message,
+      );
+      return cached.value;
+    }
+    // Cold start with no successful read yet AND Firestore unreachable: fall
+    // back to the SAFE defaults (sweep paused, per the 2026-05-25 posture).
+    console.error(
+      "❌ [gates-config] read failed with no cached value; using safe defaults:",
+      e,
+    );
     return GATES_CONFIG_DEFAULTS;
   }
 }
@@ -195,4 +214,11 @@ export async function setGatesConfig(
 // the underlying doc. Production code should never call this.
 export function _clearGatesConfigCache(): void {
   cached = null;
+}
+
+// Test hook — force the next read to re-fetch WITHOUT dropping the last-good
+// value, so tests can exercise the serve-last-good-on-read-failure path.
+// Production code should never call this.
+export function _expireGatesConfigCache(): void {
+  if (cached) cached = { at: 0, value: cached.value };
 }

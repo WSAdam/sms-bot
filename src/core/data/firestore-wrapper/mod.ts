@@ -87,13 +87,61 @@ const LIST_RESULT_WARN_THRESHOLD = Number(
   Deno.env.get("FIRESTORE_LIST_WARN_THRESHOLD") ?? 500,
 );
 
+// Transient network failures on Deno Deploy's REST transport (a DNS hiccup =
+// `getaddrinfo EAI_AGAIN`, a dropped socket = ECONNRESET / "socket hang up",
+// Firestore's own UNAVAILABLE) are almost always gone on an immediate retry. We
+// retry idempotent READS a few times with short backoff so a blip never reaches
+// callers — a gates-config read that fell through to defaults silently DISARMED
+// the injection sweep (incident 2026-06-29). Writes are NOT auto-retried here:
+// incrementField isn't idempotent, and transactionalUpdate already retries
+// inside Firestore.
+const TRANSIENT_ERROR_RE =
+  /EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|getaddrinfo|Connection reset|UNAVAILABLE|DEADLINE_EXCEEDED/i;
+
+export function isTransientFirestoreError(e: unknown): boolean {
+  const err = e as { code?: string; errno?: string; message?: string } | null;
+  if (!err) return false;
+  const code = String(err.code ?? "") + " " + String(err.errno ?? "");
+  if (TRANSIENT_ERROR_RE.test(code)) return true;
+  return TRANSIENT_ERROR_RE.test(String(err.message ?? ""));
+}
+
+export async function withTransientRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (attempt === attempts || !isTransientFirestoreError(e)) throw e;
+      const backoffMs = 150 * attempt;
+      console.warn(
+        `⚠️ [firestore] transient error on ${label} ` +
+          `(attempt ${attempt}/${attempts}); retrying in ${backoffMs}ms: ${
+            (e as Error).message
+          }`,
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr;
+}
+
 class FirebaseAdminClient implements FirestoreClient {
   get(path: DocPath): Promise<Record<string, unknown> | null> {
-    return withTiming(`firestore.get ${path}`, async () => {
-      const db = await getDb();
-      const snap = await db.doc(path).get();
-      return snap.exists ? (snap.data() as Record<string, unknown>) : null;
-    });
+    return withTiming(
+      `firestore.get ${path}`,
+      () =>
+        withTransientRetry(`get ${path}`, async () => {
+          const db = await getDb();
+          const snap = await db.doc(path).get();
+          return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        }),
+    );
   }
 
   set(path: DocPath, data: Record<string, unknown>): Promise<void> {
@@ -115,34 +163,38 @@ class FirebaseAdminClient implements FirestoreClient {
     parentPath: string,
     opts: ListOptions = {},
   ): Promise<ListResult[]> {
-    return withTiming(`firestore.list ${parentPath}`, async () => {
-      const db = await getDb();
-      // deno-lint-ignore no-explicit-any
-      let q: any = db.collection(parentPath);
+    return withTiming(
+      `firestore.list ${parentPath}`,
+      () =>
+        withTransientRetry(`list ${parentPath}`, async () => {
+          const db = await getDb();
+          // deno-lint-ignore no-explicit-any
+          let q: any = db.collection(parentPath);
 
-      if (opts.where) {
-        q = q.where(opts.where.field, opts.where.op, opts.where.value);
-      }
-      if (opts.orderBy) {
-        q = q.orderBy(opts.orderBy.field, opts.orderBy.dir);
-      }
-      if (opts.startAfter) {
-        q = q.startAfter(opts.startAfter);
-      }
-      if (typeof opts.limit === "number") {
-        q = q.limit(opts.limit);
-      }
+          if (opts.where) {
+            q = q.where(opts.where.field, opts.where.op, opts.where.value);
+          }
+          if (opts.orderBy) {
+            q = q.orderBy(opts.orderBy.field, opts.orderBy.dir);
+          }
+          if (opts.startAfter) {
+            q = q.startAfter(opts.startAfter);
+          }
+          if (typeof opts.limit === "number") {
+            q = q.limit(opts.limit);
+          }
 
-      const snap = await q.get();
-      if (snap.size > LIST_RESULT_WARN_THRESHOLD) {
-        auditLargeListResult(parentPath, snap.size, opts);
-      }
-      // deno-lint-ignore no-explicit-any
-      return snap.docs.map((d: any) => ({
-        id: d.id,
-        data: d.data() as Record<string, unknown>,
-      }));
-    });
+          const snap = await q.get();
+          if (snap.size > LIST_RESULT_WARN_THRESHOLD) {
+            auditLargeListResult(parentPath, snap.size, opts);
+          }
+          // deno-lint-ignore no-explicit-any
+          return snap.docs.map((d: any) => ({
+            id: d.id,
+            data: d.data() as Record<string, unknown>,
+          }));
+        }),
+    );
   }
 
   batch(ops: BatchOp[]): Promise<void> {

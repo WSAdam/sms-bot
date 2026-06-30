@@ -376,8 +376,8 @@ let totalRecords = 0;
 
 // Default dates: today
 const today = new Date();
-document.getElementById("endDate").value = today.toISOString().split("T")[0];
-document.getElementById("startDate").value = today.toISOString().split("T")[0];
+document.getElementById("endDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+document.getElementById("startDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 
 document.getElementById("singleRecordId").addEventListener("keypress", (e) => {
   if (e.key === "Enter") checkSingleRecord();
@@ -531,8 +531,8 @@ function renderTable(data){
 
 function resetFilters(){
   const today = new Date();
-  document.getElementById("endDate").value = today.toISOString().split("T")[0];
-  document.getElementById("startDate").value = today.toISOString().split("T")[0];
+  document.getElementById("endDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  document.getElementById("startDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
   document.getElementById("searchRecordId").value = "";
   document.getElementById("stage").value = "";
   loadAuditData(1);
@@ -905,8 +905,8 @@ ${sharedThemeCss}
 
 <script>
 const today = new Date();
-document.getElementById("endDate").value = today.toISOString().split("T")[0];
-document.getElementById("startDate").value = today.toISOString().split("T")[0];
+document.getElementById("endDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+document.getElementById("startDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 
 function formatTimestamp(iso){
   if(!iso) return "-";
@@ -1075,8 +1075,8 @@ function renderDashboard(data){
 
 function resetFilters(){
   const today = new Date();
-  document.getElementById("endDate").value = today.toISOString().split("T")[0];
-  document.getElementById("startDate").value = today.toISOString().split("T")[0];
+  document.getElementById("endDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  document.getElementById("startDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
   document.getElementById("prefixFilter").value = "";
   loadDashboard();
 }
@@ -2599,7 +2599,7 @@ ${sharedThemeCss}
 <script>
 // Set default schedule date to today
 const today = new Date();
-document.getElementById("schedDate").value = today.toISOString().split("T")[0];
+document.getElementById("schedDate").value = today.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 
 function formatTimestamp(iso){
   if(!iso) return "-";
