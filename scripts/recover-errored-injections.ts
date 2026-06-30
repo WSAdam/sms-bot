@@ -174,7 +174,7 @@ for (const s of skipped) console.log(`   ⏭  ${s.phone} — ${s.reason}`);
 if (!apply && recovered.length > 0) {
   console.log(
     `\nRe-run with --apply to write. The every-minute cron sweep will fire ` +
-      `them; confirm via GET /canary/injections (no new errors) and ` +
-      `scripts/inspect-phone.ts <phone> (INJECT event + pointer IN_ODR).`,
+      `them; confirm via scripts/inspect-phone.ts <phone> ` +
+      `(injectionhistory status=success + INJECT event + pointer IN_ODR).`,
   );
 }

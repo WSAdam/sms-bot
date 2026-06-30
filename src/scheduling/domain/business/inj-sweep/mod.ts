@@ -17,6 +17,7 @@ import type {
 } from "@shared/types/injection.ts";
 import { injectionHistoryDocId } from "@shared/util/id.ts";
 import { handleDelayedInjection } from "@shared/services/orchestrator/queue.ts";
+import { pushInjectionFailure } from "@scheduling/domain/data/canary-alert/mod.ts";
 
 export interface SweepResult {
   scanned: number;
@@ -160,6 +161,13 @@ export async function sweepScheduledInjections(
           }`,
         );
       }
+      // Text Adam immediately — this injection failed for good (retries spent).
+      // Fail-safe: never throws, never blocks the rest of the sweep.
+      await pushInjectionFailure({
+        phone,
+        error: errorMsg ?? "unknown",
+        attempts,
+      });
       continue;
     }
 

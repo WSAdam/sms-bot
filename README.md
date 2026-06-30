@@ -180,10 +180,30 @@ Both require `Authorization: Bearer <CANARY_SECRET>` and return `401` otherwise.
 On a real reading they always return `200` — the watched value, not the status
 code, signals a problem.
 
-### Required env var
+**Immediate injection-failure push (bot → Canary).** Separately from the nightly
+pull above, the bot POSTs to Canary the moment a scheduled injection fails for
+good — i.e. after the every-minute sweep has exhausted its retries
+(`MAX_INJECTION_ATTEMPTS`), so transient blips that self-heal never page anyone.
+Canary texts on receipt. The push is fail-safe (never throws, never blocks the
+sweep) and no-ops with a warning if `CANARY_INGEST_URL` is unset. Payload:
 
-| Var             | Value                           | Notes                                                                                                         |
-| --------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `CANARY_SECRET` | any hard-to-guess shared secret | Must match the value given to Canary. If unset, the `/canary/*` endpoints reject every request (fail closed). |
+```json
+{
+  "source": "sms-bot",
+  "kind": "injection-failure",
+  "phone": "6142967343",
+  "error": "ODR injection failed: …",
+  "attempts": 5,
+  "ts": "2026-06-30T13:46:24.681Z"
+}
+```
 
-Set it in `env/local` for dev and in Deno Deploy settings for prod.
+### Required env vars
+
+| Var                   | Value                           | Notes                                                                                                                          |
+| --------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `CANARY_SECRET`       | any hard-to-guess shared secret | Must match the value given to Canary. If unset, the `/canary/*` endpoints reject every request (fail closed).                  |
+| `CANARY_INGEST_URL`   | Canary's failure-ingest URL     | Where the bot POSTs immediate injection failures. If unset, the push no-ops (logs a warning) — the nightly pull is unaffected. |
+| `CANARY_INGEST_TOKEN` | bearer Canary expects from us   | Auth for the push. Optional — falls back to `CANARY_SECRET` if unset.                                                          |
+
+Set them in `env/local` for dev and in Deno Deploy settings for prod.

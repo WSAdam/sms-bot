@@ -55,69 +55,6 @@ function inWindow(ts: string, fromIso: string, toIso: string): boolean {
   return ts >= fromIso && ts < toIso;
 }
 
-// Near-real-time injection-failure feed for the external canary monitor. Poll
-// this every few minutes with a `totalErrors lte 0` rule to TEXT on any
-// unrecoverable injection failure. Distinct from gatherHardErrorsForYesterday
-// (the daily digest): this looks back a short rolling window so a failure is
-// surfaced within minutes, not the next morning.
-//
-// Reliability note: a status="error" injectionhistory doc is now written ONLY
-// when the sweep has EXHAUSTED its retries (MAX_INJECTION_ATTEMPTS) — transient
-// blips that self-heal on the next sweep never land here. So every row is a
-// real, unrecoverable failure worth a text.
-//
-// Query is status=="error" only (single-field auto-index, no composite needed,
-// stays under the list anti-scan tripwire — terminal errors are rare). The
-// time window is applied in memory.
-export interface RecentInjectionErrorsReport {
-  since: string; // ISO lower bound of the window
-  until: string; // ISO upper bound (now)
-  lookbackMinutes: number;
-  totalErrors: number;
-  errors: CanaryError[];
-}
-
-export async function gatherRecentInjectionErrors(
-  lookbackMinutes: number,
-  client: FirestoreClient = getFirestoreClient(),
-  now: Date = new Date(),
-): Promise<RecentInjectionErrorsReport> {
-  const until = now.toISOString();
-  const since = new Date(now.getTime() - lookbackMinutes * 60_000)
-    .toISOString();
-
-  const injectionDocs = await client.list(injectionHistoryCollection, {
-    where: { field: "status", op: "==", value: "error" },
-    limit: INJECTION_ERROR_LIMIT,
-  });
-
-  const errors: CanaryError[] = [];
-  for (const d of injectionDocs) {
-    const e = d.data as unknown as InjectionHistoryEntry;
-    if (typeof e.firedAt !== "string") continue;
-    if (e.firedAt < since || e.firedAt > until) continue;
-    errors.push({
-      source: "injection",
-      error: e.error ?? "(no message)",
-      ts: e.firedAt,
-      phone: e.phone,
-      step: "scheduled-injection",
-      firedBy: e.firedBy,
-    });
-  }
-
-  // Newest first so the text/alert leads with the most recent failure.
-  errors.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-
-  return {
-    since,
-    until,
-    lookbackMinutes,
-    totalErrors: errors.length,
-    errors,
-  };
-}
-
 export async function gatherHardErrorsForYesterday(
   client: FirestoreClient = getFirestoreClient(),
 ): Promise<HardErrorsReport> {
