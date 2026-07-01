@@ -697,10 +697,24 @@ with no Z/offset) fired ~4h early in EDT, the contract is now:
 - Filters out conversations whose `callId` starts with `appt_` — those are
   bot-generated confirmations, not real Bland convos. Re-parsing our own output
   produced wrong-date proposals.
-- Deleted the `nextOccurrenceFromMessages` "time-only" fallback. It re-anchored
-  matches like "9:00 AM" to today's 9 AM regardless of the original message's
-  date. If no confident full date can be extracted, the proposal is now
-  `skippedNoTime` (placeholder injectionhistory only, no dial).
+- Deleted the `nextOccurrenceFromMessages` "time-only" fallback — it re-anchored
+  a bare "9:00 AM" to TODAY regardless of the message's date (the 2026-05-25
+  wrong-date incident). A bare TIME with no day is still never guessed.
+- **Nearest-weekday recovery** (`resolveNearestWeekday`, added 2026-07-01): when
+  a booking LOCKS IN and no full date parses but the customer named a WEEKDAY
+  (e.g. "Friday after 3pm"), resolve the NEAREST UPCOMING occurrence of that
+  weekday in ET and schedule a REAL dial (not a placeholder). DST-correct via
+  `normalizeAppointmentTime`; a stated am/pm — or an unambiguous 24h time
+  ≥ 13:00 — wins, else a noon-ET default. A named weekday is an explicit day the
+  customer chose (unlike the removed time-only guess). Safety rails: ambiguous
+  multi-day text ("Mon or Fri?") → no guess (falls to placeholder);
+  "next"/"following <weekday>" rolls to the week AFTER the nearest; collision-
+  prone bare abbreviations (`sun`/`sat`/`mon`/`wed`/`thu`) are excluded so casual
+  English can't mis-dial; the assumed source is logged `src=[weekday:...]` for
+  audit. Only when NO weekday is present does the proposal fall to `skippedNoTime`
+  (placeholder injectionhistory only, no dial). To pin a vague time by hand:
+  `scripts/schedule-injection.ts <phone> <eventTimeISO> [--apply]` (dry-run
+  default).
 - Skips proposals whose eventTime is more than 24h in the past (`skippedPast`
   counter). Stale signals don't generate dials.
 - Selectively calls `getBlandDesiredTime` only for conversations with a detected

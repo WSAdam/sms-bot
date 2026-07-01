@@ -114,15 +114,24 @@ function etDatePlusDays(etDate: string, days: number): string {
   return easternDateString(new Date(noonUtcMs + days * 86_400_000));
 }
 
+// Weekday-token matcher DERIVED from WEEKDAYS so the pattern and the map can't
+// drift (the deliberate sun/sat/mon/wed/thu omission lives in ONE place). Sorted
+// longest-first so alternation prefers full names over abbreviations. Global for
+// match-all — String.match with /g resets lastIndex, so reusing this is safe.
+const WEEKDAY_RE = new RegExp(
+  `\\b(${
+    Object.keys(WEEKDAYS).sort((a, b) => b.length - a.length).join("|")
+  })\\b`,
+  "g",
+);
+
 // Resolve a bare weekday (+ optional time) in `text` to the nearest UPCOMING
 // occurrence, as a TZ-naive ET wall-clock ISO ("YYYY-MM-DDTHH:MM:00"). The
 // caller runs it through normalizeAppointmentTime() for a DST-correct UTC
 // instant. Returns null when no weekday token is present. Exported for tests.
 export function resolveNearestWeekday(text: string, now: Date): string | null {
   const lc = (text ?? "").toLowerCase();
-  const all = lc.match(
-    /\b(sunday|monday|tuesday|tues|tue|wednesday|weds|thursday|thurs|thur|friday|fri|saturday)\b/g,
-  );
+  const all = lc.match(WEEKDAY_RE);
   if (!all) return null;
   // Ambiguous multi-day text ("Monday or Friday?", "not Monday, do Friday") must
   // NOT guess — bail so it falls through to the no-time placeholder path (an
@@ -154,6 +163,15 @@ export function resolveNearestWeekday(text: string, now: Date): string | null {
         hour = h;
         minute = min;
       }
+    } else {
+      // Bare 24-hour time ("Friday at 15:00"). Require colon+minutes AND hour
+      // >= 13 so it's UNAMBIGUOUSLY 24h — a low hour like "3:30" with no am/pm
+      // is left to the noon default rather than silently dialing 3:30 AM.
+      const t24 = lc.match(/\b(1[3-9]|2[0-3]):([0-5]\d)\b/);
+      if (t24) {
+        hour = parseInt(t24[1], 10);
+        minute = parseInt(t24[2], 10);
+      }
     }
   }
 
@@ -161,7 +179,10 @@ export function resolveNearestWeekday(text: string, now: Date): string | null {
   // instant is already in the past (target is today but the time has passed).
   const todayEt = easternDateString(now);
   const todayDow = new Date(`${todayEt}T12:00:00Z`).getUTCDay();
-  const addDays = (target - todayDow + 7) % 7;
+  let addDays = (target - todayDow + 7) % 7;
+  // "next Friday" / "following Friday" means the occurrence AFTER the nearest
+  // one — resolving it to the nearest (a week early) would dial the wrong week.
+  if (/\b(next|following)\b/.test(lc)) addDays += 7;
   const at = (offset: number) =>
     `${etDatePlusDays(todayEt, offset)}T${pad2(hour)}:${pad2(minute)}:00`;
   const naive = at(addDays);

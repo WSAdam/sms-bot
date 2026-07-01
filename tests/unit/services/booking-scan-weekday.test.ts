@@ -153,6 +153,44 @@ Deno.test("resolveNearestWeekday: ambiguous multi-day text → null (don't guess
     resolveNearestWeekday("Friday works, yeah Friday", WED_NOON_ET),
     "2026-07-03T12:00:00",
   );
+  // 3+ mentions with a repeat: distinct days {Mon,Fri} still > 1 → null (proves
+  // the Set counts resolved day-numbers, not raw token count).
+  assertEquals(
+    resolveNearestWeekday("Monday or Friday, or Monday again", WED_NOON_ET),
+    null,
+  );
+});
+
+Deno.test("resolveNearestWeekday: 'next'/'following' rolls to the week AFTER the nearest", () => {
+  // From Wed Jul 1: plain Friday = Jul 3; "next Friday" = Jul 10 (not a week early).
+  assertEquals(
+    resolveNearestWeekday("friday", WED_NOON_ET),
+    "2026-07-03T12:00:00",
+  );
+  assertEquals(
+    resolveNearestWeekday("next Friday", WED_NOON_ET),
+    "2026-07-10T12:00:00",
+  );
+  assertEquals(
+    resolveNearestWeekday("the following Friday at 3pm", WED_NOON_ET),
+    "2026-07-10T15:00:00",
+  );
+});
+
+Deno.test("resolveNearestWeekday: bare 24h time (>=13:00) parses; ambiguous low hour → noon default", () => {
+  assertEquals(
+    resolveNearestWeekday("Friday at 15:00", WED_NOON_ET),
+    "2026-07-03T15:00:00",
+  );
+  assertEquals(
+    resolveNearestWeekday("friday at 20:30", WED_NOON_ET),
+    "2026-07-03T20:30:00",
+  );
+  // Ambiguous "3:30" (no am/pm) is NOT read as 03:30 — stays the noon default.
+  assertEquals(
+    resolveNearestWeekday("friday at 3:30", WED_NOON_ET),
+    "2026-07-03T12:00:00",
+  );
 });
 
 Deno.test("booking-scan: a locked-in booking with only a weekday DIALS (schedules the nearest Friday), not a no-time placeholder", async () => {
@@ -179,10 +217,27 @@ Deno.test("booking-scan: a locked-in booking with only a weekday DIALS (schedule
       "2026-06-30T18:32:11.000Z",
     );
 
-    await scanConversationsForBookings(
-      "2026-06-01T00:00:00.000Z",
-      "2026-07-31T23:59:59.999Z",
-      true, // apply
+    const origLog = console.log;
+    const logs: string[] = [];
+    console.log = ((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    }) as typeof console.log;
+    try {
+      await scanConversationsForBookings(
+        "2026-06-01T00:00:00.000Z",
+        "2026-07-31T23:59:59.999Z",
+        true, // apply
+      );
+    } finally {
+      console.log = origLog;
+    }
+
+    // The assumed-weekday time is tagged in the schedule log as [weekday:bot]
+    // (the "Friday after 3pm" line is from AI Bot, reached by the backward scan)
+    // so an ASSUMED time is greppable/auditable vs a Bland/parsed exact time.
+    assert(
+      logs.some((l) => l.includes("src=[weekday:bot]")),
+      "schedule log must tag the assumed-weekday source as [weekday:bot]",
     );
 
     const doc = await mock.get(scheduledInjectionDocPath(phone)) as
