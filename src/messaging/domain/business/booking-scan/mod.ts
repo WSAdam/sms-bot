@@ -30,7 +30,10 @@ import { getFirestoreClient } from "@shared/firestore/wrapper.ts";
 import * as bland from "@messaging/domain/data/bland/mod.ts";
 import { scheduleInjection } from "@shared/services/injections/schedule.ts";
 import { injectionHistoryDocId } from "@shared/util/id.ts";
-import { normalizeAppointmentTime } from "@shared/util/time.ts";
+import {
+  easternDateString,
+  normalizeAppointmentTime,
+} from "@shared/util/time.ts";
 import type { ConversationMessage } from "@shared/types/conversation.ts";
 
 // Synthetic conversation callIds — written by cal.com / appointment-booked /
@@ -66,6 +69,106 @@ const MONTHS: Record<string, number> = {
   nov: 10,
   dec: 11,
 };
+
+// Nearest-upcoming-weekday recovery. When a booking LOCKS IN but the customer
+// only named a weekday (e.g. "Friday after 3pm") with no full calendar date,
+// assume the NEAREST UPCOMING occurrence of that weekday so the booking still
+// dials. A named weekday is an explicit day the customer chose — categorically
+// safer than the bare *time-only* guess removed after the 2026-05-25 incident
+// (which re-anchored "9am" to TODAY and dialed the wrong date). This only ever
+// runs on a locked-in booking with no parseable full date (see the scan below).
+// Collision-prone bare abbreviations are intentionally OMITTED — they're common
+// English words that would risk a wrong-day dial: "sun" ("the sun"), "sat"
+// ("I sat"), "mon" (fires inside "c'mon" — the apostrophe is a word boundary),
+// "wed" ("we wed"), "thu" (filler). Weekend/those weekdays still resolve via the
+// full name (and the safe multi-letter forms tues/weds/thurs/thur).
+const WEEKDAYS: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  tues: 2,
+  tue: 2,
+  wednesday: 3,
+  weds: 3,
+  thursday: 4,
+  thurs: 4,
+  thur: 4,
+  friday: 5,
+  fri: 5,
+  saturday: 6,
+};
+
+// When a weekday is named but NO time is stated, dial at this ET hour (noon — a
+// safe business-hours default). Any explicitly stated time always wins.
+const DEFAULT_RECOVERY_HOUR_ET = 12;
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// Add whole days to an ET calendar date (YYYY-MM-DD) and return the resulting ET
+// calendar date. Anchored at noon UTC so the ±day arithmetic never lands in the
+// 02:00 ET DST-transition hour, then formatted back in ET.
+function etDatePlusDays(etDate: string, days: number): string {
+  const noonUtcMs = new Date(`${etDate}T12:00:00Z`).getTime();
+  return easternDateString(new Date(noonUtcMs + days * 86_400_000));
+}
+
+// Resolve a bare weekday (+ optional time) in `text` to the nearest UPCOMING
+// occurrence, as a TZ-naive ET wall-clock ISO ("YYYY-MM-DDTHH:MM:00"). The
+// caller runs it through normalizeAppointmentTime() for a DST-correct UTC
+// instant. Returns null when no weekday token is present. Exported for tests.
+export function resolveNearestWeekday(text: string, now: Date): string | null {
+  const lc = (text ?? "").toLowerCase();
+  const all = lc.match(
+    /\b(sunday|monday|tuesday|tues|tue|wednesday|weds|thursday|thurs|thur|friday|fri|saturday)\b/g,
+  );
+  if (!all) return null;
+  // Ambiguous multi-day text ("Monday or Friday?", "not Monday, do Friday") must
+  // NOT guess — bail so it falls through to the no-time placeholder path (an
+  // operator claims it) rather than confidently dialing the wrong day.
+  const distinct = new Set(all.map((w) => WEEKDAYS[w]));
+  if (distinct.size > 1) return null;
+  const target = WEEKDAYS[all[0]];
+  if (target === undefined) return null;
+
+  // Time (optional): a stated am/pm time wins; else noon/midnight words; else
+  // the default hour.
+  let hour = DEFAULT_RECOVERY_HOUR_ET;
+  let minute = 0;
+  if (/\bnoon\b/.test(lc)) {
+    hour = 12;
+    minute = 0;
+  } else if (/\bmidnight\b/.test(lc)) {
+    hour = 0;
+    minute = 0;
+  } else {
+    const t = lc.match(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)/);
+    if (t) {
+      let h = parseInt(t[1], 10);
+      const min = t[2] ? parseInt(t[2], 10) : 0;
+      const pm = /p/.test(t[3]);
+      if (pm && h < 12) h += 12;
+      if (!pm && h === 12) h = 0;
+      if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
+        hour = h;
+        minute = min;
+      }
+    }
+  }
+
+  // Nearest occurrence of `target` weekday in ET, then roll forward if that
+  // instant is already in the past (target is today but the time has passed).
+  const todayEt = easternDateString(now);
+  const todayDow = new Date(`${todayEt}T12:00:00Z`).getUTCDay();
+  const addDays = (target - todayDow + 7) % 7;
+  const at = (offset: number) =>
+    `${etDatePlusDays(todayEt, offset)}T${pad2(hour)}:${pad2(minute)}:00`;
+  const naive = at(addDays);
+  const naiveMs = new Date(normalizeAppointmentTime(naive, undefined))
+    .getTime();
+  return naiveMs > now.getTime() ? naive : at(addDays + 7);
+}
 
 interface BlandMsg {
   sender?: string;
@@ -473,6 +576,28 @@ export async function scanConversationsForBookings(
       }
     }
 
+    // Nearest-weekday fallback: a locked-in booking with no full date parsed,
+    // but the customer named a weekday (e.g. "Friday after 3pm"). Assume the
+    // nearest upcoming occurrence so it DIALS instead of becoming a no-time
+    // placeholder. Scan backward from the signal, same as the date fallback, so
+    // the weekday closest to the "locked in" confirmation wins.
+    if (!eventTime) {
+      const nowRef = new Date();
+      for (let i = signalIdx; i >= 0; i--) {
+        const candidate = msgs[i];
+        if (!candidate) continue;
+        const wd = resolveNearestWeekday(candidate.message ?? "", nowRef);
+        if (wd) {
+          eventTime = normalizeAppointmentTime(wd, undefined);
+          const who = senderIsGuest(candidate.sender) ? "guest" : "bot";
+          eventTimeSource = `[weekday:${who}] ${
+            (candidate.message ?? "").slice(0, 80)
+          }`;
+          break;
+        }
+      }
+    }
+
     // 24h past-tolerance front-line filter. Anything older than this
     // doesn't represent a usefully-dialable appointment, even if the
     // sweep's 72h dedup would catch any duplicate. We drop these from
@@ -564,10 +689,13 @@ export async function scanConversationsForBookings(
           // every-minute cron sweep fires the dialer at appointment time.
           await scheduleInjection(phone10, eventTime, false);
           summary.applied++;
+          // Include eventTimeSource: an assumed-weekday recovery is tagged
+          // "[weekday:...]", so an ASSUMED time (vs a Bland/parsed exact time)
+          // is greppable in the logs for audit — it's dialed like any other.
           console.log(
-            `[booking-scan] ✅ ${phone10} scheduledinjection eventTime=${eventTime} signal=${proposal.signal} via=${
-              callId.slice(0, 8)
-            }…`,
+            `[booking-scan] ✅ ${phone10} scheduledinjection eventTime=${eventTime} signal=${proposal.signal} src=${
+              eventTimeSource ?? "?"
+            } via=${callId.slice(0, 8)}…`,
           );
         } else {
           // No parseable time OR time was in the past — record in history
